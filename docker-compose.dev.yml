@@ -1,0 +1,39 @@
+# /docker-compose.dev.yml — override para modo DESARROLLO
+#
+# Restaura hot-reload y bind mounts. Útil cuando estás modificando código
+# y necesitas ver cambios al instante (sin esperar rebuild).
+#
+# Uso:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+#
+# Para volver a prod: simplemente `docker compose up -d --build` (sin -f).
+#
+# NOTA: el modo dev es MÁS LENTO sobre ngrok porque Next.js no minifica
+# ni comprime el bundle. Úsalo solo para desarrollo local.
+
+services:
+  api:
+    build:
+      target: dev
+    environment:
+      NODE_ENV: development
+    volumes:
+      - ./api:/app
+      - /app/node_modules
+
+  web:
+    build:
+      target: dev
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:3001
+    environment:
+      NODE_ENV: development
+    volumes:
+      - ./web:/app
+      - /app/node_modules
+      - /app/.next
+
+  worker-python:
+    volumes:
+      - ./worker:/app
+      - ./storage/reports:/app/storage/reports

@@ -1,0 +1,745 @@
+// Archivo: /api/prisma/schema.prisma
+// Rediseño v2 — abril 2026
+// Cambios clave vs v1:
+//   - 4 roles nuevos (ADMIN, SUPERVISOR_VEHICLES/FUEL/MAINTENANCE) — se elimina OPERATOR
+//   - Classification (POLICIAL/ESTATAL/VIAL) + Sector catalog
+//   - VehicleNote append-log con edición y audit
+//   - VehicleBudget unificado (FUEL|MAINTENANCE) con rolloverIn + closure idempotente
+//   - Decimal para dinero
+//   - Workshop gemelo de ApprovedStation con campos fiscales completos
+//   - Odometer nullable + OdometerStatus (OK|NF)
+//   - FuelLoad con estado de revisión (para portal público)
+//   - Operator con employeeNumber + portal público sin auth
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// ENUMS
+// ============================================
+
+enum VehicleStatus {
+  OPERATIVE
+  BLOCKED
+}
+
+enum VehicleClassification {
+  POLICIAL
+  ESTATAL
+  VIAL
+}
+
+enum ReportStatus {
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+/// Tipos de documento vehicular — eliminé SCT_PERMIT, agregué INVOICE
+enum DocumentType {
+  INVOICE            // Factura
+  INSURANCE          // Póliza de seguro
+  VERIFICATION       // Verificación vehicular
+  CIRCULATION_CARD   // Tarjeta de circulación
+}
+
+enum TrafficLight {
+  GREEN
+  YELLOW
+  RED
+}
+
+enum AssignmentType {
+  FIXED
+  ROTATIVE
+}
+
+/// RBAC — 6 roles. Operador ya no tiene cuenta; usa portal público.
+/// EXECUTOR: responsable de vehículos asignados, levanta tickets de mantto.
+/// WORKSHOP: cuenta vinculada a un Workshop, cotiza y ejecuta reparaciones.
+enum UserRole {
+  ADMIN
+  SUPERVISOR_VEHICLES
+  SUPERVISOR_FUEL
+  SUPERVISOR_MAINTENANCE
+  EXECUTOR
+  WORKSHOP
+}
+
+enum NotificationType {
+  DOCUMENT_EXPIRING
+  DOCUMENT_EXPIRED
+  VEHICLE_BLOCKED
+  BUDGET_WARNING
+  BUDGET_EXCEEDED
+  MAINTENANCE_DUE
+  MAINTENANCE_OVERDUE
+  FUEL_UNAPPROVED_STATION
+  FUEL_LOAD_PENDING_REVIEW
+  REPORT_READY
+  MAINTENANCE_TICKET_CREATED
+  MAINTENANCE_QUOTE_REQUESTED
+  MAINTENANCE_QUOTE_SUBMITTED
+  MAINTENANCE_TICKET_REJECTED
+  MAINTENANCE_TICKET_APPROVED
+  MAINTENANCE_REPAIR_STARTED
+  MAINTENANCE_REPAIR_COMPLETED
+}
+
+/// Ciclo de vida del ticket de mantenimiento (flujo Admin / Ejecutor / Taller)
+enum MaintenanceTicketStatus {
+  PENDING_ADMIN_APPROVAL
+  REJECTED_BY_ADMIN
+  AWAITING_QUOTES
+  REJECTED_FINAL
+  APPROVED_FOR_REPAIR
+  IN_REPAIR
+  COMPLETED
+}
+
+/// Categoría de falla — orientativa, NO bloqueante (el ejecutor puede no saber)
+enum FailureCategory {
+  ENGINE
+  TRANSMISSION
+  BRAKES
+  ELECTRICAL
+  BODY_PAINT
+  TIRES_SUSPENSION
+  AC_CLIMATE
+  PREVENTIVE
+  OTHER
+}
+
+/// Presupuesto unificado: gasolina o mantenimiento, misma lógica
+enum BudgetKind {
+  FUEL
+  MAINTENANCE
+}
+
+/// Estado de lectura del odómetro
+enum OdometerStatus {
+  OK
+  NF   // No Funciona
+}
+
+/// Estado de revisión de una carga (útil para portal público)
+enum FuelLoadStatus {
+  APPROVED
+  PENDING_REVIEW
+  REJECTED
+}
+
+// ============================================
+// CATÁLOGOS
+// ============================================
+
+model VehicleType {
+  id                 Int       @id @default(autoincrement())
+  name               String    @unique
+  expectedKmPerLiter Float
+  isActive           Boolean   @default(true)
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  vehicles           Vehicle[]
+  serviceCatalog     ServiceCatalog[]
+
+  @@map("vehicle_types")
+}
+
+/// Sector operativo del vehículo. Catálogo abierto (admin lo poblará).
+model Sector {
+  id         Int       @id @default(autoincrement())
+  code       String    @unique
+  name       String
+  isActive   Boolean   @default(true)
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  vehicles   Vehicle[]
+
+  @@map("sectors")
+}
+
+// ============================================
+// USUARIOS + AUDIT
+// ============================================
+
+model User {
+  id            Int       @id @default(autoincrement())
+  email         String    @unique
+  passwordHash  String
+  fullName      String
+  role          UserRole  @default(SUPERVISOR_VEHICLES)
+  isActive      Boolean   @default(true)
+  /// Bloqueo temporal por intentos fallidos (set por authService)
+  lockedUntil   DateTime?
+  /// Último login exitoso
+  lastLoginAt   DateTime?
+
+  /// Solo válido (y obligatorio) cuando role=WORKSHOP — 1:1 con Workshop.
+  /// CHECK constraint en la migración enforza la consistencia.
+  workshopId    Int?      @unique
+  workshop      Workshop? @relation(fields: [workshopId], references: [id])
+
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  notifications        Notification[]
+  notesAuthored        VehicleNote[]        @relation("NoteAuthor")
+  notesEdited          VehicleNote[]        @relation("NoteEditor")
+  budgetsCreated       VehicleBudget[]      @relation("BudgetCreator")
+  budgetsUpdated       VehicleBudget[]      @relation("BudgetEditor")
+  auditLogs            AuditLog[]
+
+  // Mantenimiento por roles
+  assignedVehicles     Vehicle[]            @relation("VehicleExecutor")
+  ticketsRequested     MaintenanceTicket[]  @relation("TicketRequester")
+  ticketsRejected      MaintenanceTicket[]  @relation("TicketRejecter")
+  ticketsApprovedAdmin MaintenanceTicket[]  @relation("TicketAdminApprover")
+
+  @@map("users")
+}
+
+/// Registro inmutable de acciones críticas para auditoría
+/// (LFPDPPP / RGPD compliance — trazabilidad de quién hizo qué)
+model AuditLog {
+  id          Int       @id @default(autoincrement())
+  userId      Int?
+  user        User?     @relation(fields: [userId], references: [id])
+  /// CREATE | UPDATE | DELETE | LOGIN | LOGOUT | LOGIN_FAILED | IMPORT | WIPE | EXPORT
+  action      String
+  /// Vehicle | VehicleBudget | MonthlyBudget | User | FuelLoad | etc.
+  resource    String
+  resourceId  String?
+  /// Estado anterior (para UPDATE/DELETE) — JSON
+  before      Json?
+  /// Estado nuevo (para CREATE/UPDATE) — JSON
+  after       Json?
+  /// Información extra (ej. resultado de import, IP origen)
+  metadata    Json?
+  ipAddress   String?
+  userAgent   String?
+  requestId   String?
+  createdAt   DateTime  @default(now())
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([resource, resourceId])
+  @@index([action, createdAt(sort: Desc)])
+  @@index([createdAt(sort: Desc)])
+  @@map("audit_logs")
+}
+
+// ============================================
+// VEHÍCULOS
+// ============================================
+
+model Vehicle {
+  id              Int       @id @default(autoincrement())
+  /// Número de expediente único (para el inventario gubernamental)
+  expedientNumber String?   @unique
+  plate           String    @unique
+  /// Placa anterior (al cambiar de placa se preserva el histórico)
+  previousPlate   String?
+  economicNumber  String    @unique
+  vehicleTypeId   Int
+  vehicleType     VehicleType @relation(fields: [vehicleTypeId], references: [id])
+
+  /// Clasificación primaria operativa (Policial/Estatal/Vial)
+  classification  VehicleClassification @default(ESTATAL)
+  /// Clase del vehículo — texto libre (camioneta, ambulancia, motocicleta, etc.)
+  vehicleClass    String?
+  /// Uso del vehículo — texto libre
+  usage           String?
+  /// Sector (catálogo abierto)
+  sectorId        Int?
+  sector          Sector?   @relation(fields: [sectorId], references: [id])
+  /// Unidad ejecutiva — texto libre
+  executiveUnit   String?
+  /// Área — texto libre
+  area            String?
+
+  brand           String
+  model           String
+  year            Int
+  vin             String?   @unique
+  color           String?
+  /// Número de motor
+  engineNumber    String?
+  /// Número de cilindros
+  cylinders       Int?
+
+  currentOdometer Float     @default(0)
+  status          VehicleStatus @default(OPERATIVE)
+  blockReason     String?
+  /// Estado físico actual (texto libre por ahora)
+  physicalCondition String?
+
+  /// Año del último aseguramiento
+  lastInsuredYear   Int?
+  /// Año de la última tenencia pagada
+  lastTenenciaYear  Int?
+  /// Fecha del último resguardo
+  lastResguardoDate DateTime?
+  /// Fecha de certificación de factura
+  invoiceCertifiedAt DateTime?
+
+  isActive        Boolean   @default(true)
+
+  /// Ejecutor responsable (User con role=EXECUTOR). Nullable porque no todo
+  /// vehículo necesita uno (los rotativos siguen usando VehicleAssignment).
+  executorId      Int?
+  executor        User?     @relation("VehicleExecutor", fields: [executorId], references: [id])
+
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  documents          Document[]
+  assignments        VehicleAssignment[]
+  fuelLoads          FuelLoad[]
+  vehicleBudgets     VehicleBudget[]
+  maintenanceRecords MaintenanceRecord[]
+  maintenanceTickets MaintenanceTicket[]
+  notes              VehicleNote[]
+
+  @@index([vehicleTypeId])
+  @@index([sectorId])
+  @@index([status])
+  @@index([classification])
+  @@index([executorId])
+  @@map("vehicles")
+}
+
+/// Documentos con vigencia (factura, seguro, verificación, tarjeta circulación)
+model Document {
+  id         Int          @id @default(autoincrement())
+  vehicleId  Int
+  vehicle    Vehicle      @relation(fields: [vehicleId], references: [id])
+  type       DocumentType
+  issuedAt   DateTime
+  expiresAt  DateTime
+  fileUrl    String?
+  fileName   String?
+  notes      String?
+  createdAt  DateTime     @default(now())
+  updatedAt  DateTime     @updatedAt
+
+  @@index([vehicleId, type, expiresAt])
+  @@map("documents")
+}
+
+/// Bitácora editable de observaciones — audit completo
+model VehicleNote {
+  id         Int       @id @default(autoincrement())
+  vehicleId  Int
+  vehicle    Vehicle   @relation(fields: [vehicleId], references: [id])
+  content    String
+  createdBy  Int
+  author     User      @relation("NoteAuthor", fields: [createdBy], references: [id])
+  /// Última persona que editó (puede ser el mismo autor o un admin)
+  updatedBy  Int?
+  editor     User?     @relation("NoteEditor", fields: [updatedBy], references: [id])
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  /// Soft delete para preservar bitácora
+  deletedAt  DateTime?
+
+  @@index([vehicleId, createdAt(sort: Desc)])
+  @@map("vehicle_notes")
+}
+
+// ============================================
+// OPERADORES + ASIGNACIONES
+// ============================================
+
+model Operator {
+  id                Int       @id @default(autoincrement())
+  /// Número de empleado — clave de acceso al portal público
+  employeeNumber    String    @unique
+  fullName          String
+  licenseNumber     String    @unique
+  licenseType       String
+  licenseExpiresAt  DateTime
+  phone             String?
+  email             String?
+  isActive          Boolean   @default(true)
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  assignments       VehicleAssignment[]
+  fuelLoads         FuelLoad[]
+
+  @@map("operators")
+}
+
+model VehicleAssignment {
+  id          Int             @id @default(autoincrement())
+  vehicleId   Int
+  vehicle     Vehicle         @relation(fields: [vehicleId], references: [id])
+  operatorId  Int
+  operator    Operator        @relation(fields: [operatorId], references: [id])
+  type        AssignmentType  @default(ROTATIVE)
+  startDate   DateTime        @default(now())
+  endDate     DateTime?
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  @@index([vehicleId, endDate])
+  @@index([operatorId, endDate])
+  @@map("vehicle_assignments")
+}
+
+// ============================================
+// GASOLINERAS + TALLERES (mismo contrato fiscal)
+// ============================================
+
+model ApprovedStation {
+  id         Int       @id @default(autoincrement())
+  rfc        String    @unique
+  legalName  String
+  tradeName  String?
+  email      String
+  phone      String
+  address    String
+  isActive   Boolean   @default(true)
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  fuelLoads  FuelLoad[]
+
+  @@map("approved_stations")
+}
+
+model Workshop {
+  id         Int       @id @default(autoincrement())
+  rfc        String    @unique
+  legalName  String
+  tradeName  String?
+  email      String
+  phone      String
+  address    String
+  isActive   Boolean   @default(true)
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  maintenanceRecords MaintenanceRecord[]
+  /// 1:1 — el User con role=WORKSHOP que opera este taller
+  user               User?
+  ticketQuotes       TicketQuote[]
+
+  @@map("workshops")
+}
+
+// ============================================
+// COMBUSTIBLE
+// ============================================
+
+model FuelLoad {
+  id                   Int              @id @default(autoincrement())
+  vehicleId            Int
+  vehicle              Vehicle          @relation(fields: [vehicleId], references: [id])
+
+  /// Operador vinculado (si el employeeNumber coincidió con alguien existente)
+  operatorId           Int?
+  operator             Operator?        @relation(fields: [operatorId], references: [id])
+  /// Lo que tecleó el operador (texto libre, siempre se guarda)
+  operatorNameRaw      String?
+  operatorEmployeeRaw  String?
+
+  stationId            Int
+  station              ApprovedStation  @relation(fields: [stationId], references: [id])
+
+  liters               Float?
+  amount               Decimal          @db.Decimal(12, 2)
+
+  /// Odómetro nullable; si NF, debe ser null (enforced por CHECK)
+  odometer             Float?
+  odometerStatus       OdometerStatus   @default(OK)
+
+  /// km/l calculado vs carga anterior (null si es primera o si odometer=NF)
+  kmPerLiter           Float?
+
+  isApproved           Boolean          @default(true)  // ¿estación en catálogo?
+
+  /// Estado de revisión (portal público entra PENDING_REVIEW)
+  status               FuelLoadStatus   @default(APPROVED)
+
+  loadDate             DateTime         @default(now())
+  createdAt            DateTime         @default(now())
+  updatedAt            DateTime         @updatedAt
+
+  @@index([vehicleId, createdAt])
+  @@index([stationId])
+  @@index([operatorId, createdAt])
+  @@index([loadDate])
+  @@index([status])
+  @@map("fuel_loads")
+}
+
+// ============================================
+// PRESUPUESTOS (FUEL + MAINTENANCE unificados)
+// ============================================
+
+/// Pote mensual TOTAL — lo declara el admin antes de distribuir a unidades
+/// Permite tracking "de $500k asignaste $320k, te quedan $180k por repartir"
+model MonthlyBudget {
+  id           Int          @id @default(autoincrement())
+  kind         BudgetKind
+  year         Int
+  month        Int
+  totalAmount  Decimal      @db.Decimal(14, 2) @default(0)
+  notes        String?
+  createdBy    Int?
+  updatedBy    Int?
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  @@unique([kind, year, month])
+  @@map("monthly_budgets")
+}
+
+model VehicleBudget {
+  id           Int          @id @default(autoincrement())
+  vehicleId    Int
+  vehicle      Vehicle      @relation(fields: [vehicleId], references: [id])
+
+  /// FUEL o MAINTENANCE — independientes, cada uno su propio registro/mes
+  kind         BudgetKind
+  year         Int
+  month        Int
+
+  /// Monto asignado por el admin para este mes (no incluye rollover)
+  baseAmount   Decimal      @db.Decimal(12, 2) @default(0)
+  /// Remanente acumulado del mes anterior
+  rolloverIn   Decimal      @db.Decimal(12, 2) @default(0)
+  /// Monto gastado este mes (actualizado transaccionalmente en cada carga)
+  spentAmount  Decimal      @db.Decimal(12, 2) @default(0)
+
+  /// Cierre del mes (idempotente). True una vez procesado el rollover hacia el siguiente.
+  isClosed     Boolean      @default(false)
+  closedAt     DateTime?
+
+  /// Bloqueo automático al exceder presupuesto
+  isCutOff     Boolean      @default(false)
+
+  createdBy    Int?
+  creator      User?        @relation("BudgetCreator", fields: [createdBy], references: [id])
+  updatedBy    Int?
+  editor       User?        @relation("BudgetEditor", fields: [updatedBy], references: [id])
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  @@unique([vehicleId, kind, year, month])
+  @@index([year, month, kind])
+  @@index([vehicleId, kind])
+  @@map("vehicle_budgets")
+}
+
+// ============================================
+// MANTENIMIENTO
+// ============================================
+
+model ServiceCatalog {
+  id             Int         @id @default(autoincrement())
+  vehicleTypeId  Int
+  vehicleType    VehicleType @relation(fields: [vehicleTypeId], references: [id])
+  name           String
+  intervalKm     Float
+  description    String?
+  isActive       Boolean     @default(true)
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  maintenanceRecords MaintenanceRecord[]
+
+  @@index([vehicleTypeId])
+  @@map("service_catalog")
+}
+
+model MaintenanceRecord {
+  id             Int            @id @default(autoincrement())
+  vehicleId      Int
+  vehicle        Vehicle        @relation(fields: [vehicleId], references: [id])
+  serviceId      Int
+  service        ServiceCatalog @relation(fields: [serviceId], references: [id])
+
+  /// Taller certificado (opcional — permite texto libre legacy)
+  workshopId     Int?
+  workshopRef    Workshop?      @relation(fields: [workshopId], references: [id])
+  workshopRaw    String?
+
+  odometer       Float?
+  odometerStatus OdometerStatus @default(OK)
+  cost           Decimal        @db.Decimal(12, 2)
+  evidenceUrl    String?
+  serviceDate    DateTime       @default(now())
+  notes          String?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  /// Si este record fue generado al cerrar un MaintenanceTicket (workflow nuevo)
+  fromTicket     MaintenanceTicket?
+
+  @@index([vehicleId, serviceId])
+  @@index([serviceDate])
+  @@index([workshopId])
+  @@map("maintenance_records")
+}
+
+// ============================================
+// NOTIFICACIONES
+// ============================================
+
+model Notification {
+  id         Int              @id @default(autoincrement())
+  userId     Int
+  user       User             @relation(fields: [userId], references: [id])
+  type       NotificationType
+  title      String
+  message    String
+  read       Boolean          @default(false)
+  entityRef  String?
+  createdAt  DateTime         @default(now())
+
+  @@index([userId, read, createdAt])
+  @@map("notifications")
+}
+
+// ============================================
+// REPORTES
+// ============================================
+
+model ReportHistory {
+  id           Int          @id @default(autoincrement())
+  month        Int
+  year         Int
+  pdfPath      String?
+  excelPath    String?
+  pdfSize      Int?
+  excelSize    Int?
+  status       ReportStatus @default(PROCESSING)
+  requestedBy  String       @default("sistema")
+  errorMessage String?
+  startedAt    DateTime     @default(now())
+  completedAt  DateTime?
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  @@index([month, year])
+  @@index([status])
+  @@map("report_history")
+}
+
+// ============================================
+// TICKETS DE MANTENIMIENTO (flujo Admin / Ejecutor / Taller)
+// ============================================
+
+/// Solicitud de mantenimiento levantada por un Ejecutor.
+/// Flujo: PENDING_ADMIN_APPROVAL → AWAITING_QUOTES → APPROVED_FOR_REPAIR
+///        → IN_REPAIR → COMPLETED (crea MaintenanceRecord)
+/// Rechazos posibles en filtro inicial (REJECTED_BY_ADMIN) o final (REJECTED_FINAL).
+model MaintenanceTicket {
+  id                Int                      @id @default(autoincrement())
+  vehicleId         Int
+  vehicle           Vehicle                  @relation(fields: [vehicleId], references: [id])
+
+  /// User con role=EXECUTOR que levantó el ticket
+  requestedById     Int
+  requestedBy       User                     @relation("TicketRequester", fields: [requestedById], references: [id])
+
+  failureCategory   FailureCategory          @default(OTHER)
+  description       String
+  reportedOdometer  Float?
+  odometerStatus    OdometerStatus           @default(OK)
+
+  status            MaintenanceTicketStatus  @default(PENDING_ADMIN_APPROVAL)
+
+  /// Rechazo (en cualquier etapa). Consistencia enforzada por CHECK constraint.
+  rejectionReason   String?
+  rejectedAt        DateTime?
+  rejectedById      Int?
+  rejectedBy        User?                    @relation("TicketRejecter", fields: [rejectedById], references: [id])
+
+  /// Aprobación final (admin escribe el concepto definitivo y elige cotización)
+  finalConcept      String?
+  selectedQuoteId   Int?                     @unique
+  selectedQuote     TicketQuote?             @relation("WinningQuote", fields: [selectedQuoteId], references: [id])
+  approvedByAdminId Int?
+  approvedByAdmin   User?                    @relation("TicketAdminApprover", fields: [approvedByAdminId], references: [id])
+  approvedAt        DateTime?
+
+  /// Ejecución de la reparación (marcado por el taller ganador)
+  repairStartedAt   DateTime?
+  repairCompletedAt DateTime?
+
+  /// Cierre: link al MaintenanceRecord creado automáticamente al COMPLETED
+  completedRecordId Int?                     @unique
+  completedRecord   MaintenanceRecord?       @relation(fields: [completedRecordId], references: [id])
+
+  createdAt         DateTime                 @default(now())
+  updatedAt         DateTime                 @updatedAt
+
+  quotes            TicketQuote[]            @relation("TicketQuotes")
+  attachments       TicketAttachment[]
+
+  @@index([vehicleId, createdAt(sort: Desc)])
+  @@index([requestedById, status])
+  @@index([status, createdAt(sort: Desc)])
+  @@map("maintenance_tickets")
+}
+
+/// Cotización individual de un taller para un ticket.
+/// Se crean 3 al pasar a AWAITING_QUOTES (una por taller seleccionado), con
+/// submittedAt=null. El taller las actualiza al enviar amount+pdf, o las marca
+/// declined si no quiere/puede cotizar.
+model TicketQuote {
+  id              Int                @id @default(autoincrement())
+  ticketId        Int
+  ticket          MaintenanceTicket  @relation("TicketQuotes", fields: [ticketId], references: [id], onDelete: Cascade)
+  workshopId      Int
+  workshop        Workshop           @relation(fields: [workshopId], references: [id])
+
+  amount          Decimal?           @db.Decimal(12, 2)
+  pdfUrl          String?
+  pdfFileName     String?
+  diagnosisNotes  String?
+  submittedAt     DateTime?
+
+  /// Espejo de MaintenanceTicket.selectedQuoteId para queries rápidas
+  isWinner        Boolean            @default(false)
+
+  declinedAt      DateTime?
+  declineReason   String?
+
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+
+  /// Relación inversa 1:1 (un quote puede ser el ganador de un solo ticket)
+  winningOf       MaintenanceTicket? @relation("WinningQuote")
+
+  @@unique([ticketId, workshopId])
+  @@index([workshopId, submittedAt])
+  @@map("ticket_quotes")
+}
+
+/// Fotos u otros adjuntos que el ejecutor sube al crear el ticket.
+/// Límite app-side: 0-5 por ticket, JPG/PNG, máx 5MB c/u.
+model TicketAttachment {
+  id          Int                @id @default(autoincrement())
+  ticketId    Int
+  ticket      MaintenanceTicket  @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  fileUrl     String
+  fileName    String
+  mimeType    String?
+  sizeBytes   Int?
+  uploadedAt  DateTime           @default(now())
+
+  @@index([ticketId])
+  @@map("ticket_attachments")
+}

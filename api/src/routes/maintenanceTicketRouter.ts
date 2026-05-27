@@ -1,0 +1,294 @@
+// /api/src/routes/maintenanceTicketRouter.ts
+// Endpoints del flujo de tickets de mantenimiento.
+//
+// Montado en /api/maintenance-tickets (ver index.ts).
+// Auth: todos requieren JWT (authMiddleware aplicado en index.ts).
+// RBAC: por endpoint según el flujo Admin/Ejecutor/Taller.
+
+import { Router, Request, Response, NextFunction } from 'express';
+import multer from 'multer';
+import path from 'path';
+import { RoleGroups, requireRole } from '../middlewares/roleMiddleware';
+import * as ticketService from '../services/maintenanceTicketService';
+import { TicketError } from '../services/maintenanceTicketService';
+import {
+  createTicketSchema,
+  rejectTicketSchema,
+  assignWorkshopsSchema,
+  approveTicketSchema,
+  completeRepairSchema,
+  listTicketsQuerySchema,
+} from '../validators/maintenanceTicketValidator';
+
+const router = Router();
+
+// ═══════════════════════════════════════════════════════════════
+// Upload setup — fotos del ejecutor (5MB, JPG/PNG)
+// ═══════════════════════════════════════════════════════════════
+const photoStorage = multer.diskStorage({
+  destination: (_req, _file, cb) => {
+    cb(null, path.join(__dirname, '../../uploads/maintenance-tickets/photos'));
+  },
+  filename: (_req, file, cb) => {
+    cb(null, `${Date.now()}-${file.originalname}`);
+  },
+});
+
+const photoUpload = multer({
+  storage: photoStorage,
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const allowed = ['.jpg', '.jpeg', '.png'];
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (allowed.includes(ext)) return cb(null, true);
+    cb(new Error('Solo se permiten imágenes JPG o PNG'));
+  },
+});
+
+// ═══════════════════════════════════════════════════════════════
+// Helper: id parser + manejo uniforme de errores de dominio
+// ═══════════════════════════════════════════════════════════════
+function parseIdParam(req: Request, res: Response, param = 'id'): number | null {
+  const id = parseInt(req.params[param], 10);
+  if (isNaN(id) || id <= 0) {
+    res.status(400).json({ error: 'ID inválido' });
+    return null;
+  }
+  return id;
+}
+
+function handleTicketError(err: unknown, res: Response, next?: NextFunction) {
+  if (err instanceof TicketError) {
+    const statusMap: Record<TicketError['code'], number> = {
+      NOT_FOUND: 404,
+      FORBIDDEN: 403,
+      INVALID_STATE: 409,
+      BAD_REQUEST: 400,
+      BUDGET_EXCEEDED: 422,
+    };
+    return res.status(statusMap[err.code]).json({ error: err.message, code: err.code });
+  }
+  // Para errores inesperados, dejar que el errorHandler global los procese
+  if (next) return next(err);
+  return res.status(500).json({ error: 'Error interno' });
+}
+
+// ═══════════════════════════════════════════════════════════════
+// LECTURA — listar y ver detalle (RBAC aplicado en el service)
+// ═══════════════════════════════════════════════════════════════
+
+router.get(
+  '/',
+  requireRole([...RoleGroups.ANY_AUTH, 'WORKSHOP']),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const parsed = listTicketsQuerySchema.safeParse(req.query);
+      if (!parsed.success) {
+        return res.status(400).json({
+          error: 'Filtros inválidos',
+          details: parsed.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })),
+        });
+      }
+      const result = await ticketService.listTickets(
+        { userId: req.user!.userId, role: req.user!.role },
+        parsed.data,
+      );
+      res.json(result);
+    } catch (err) {
+      handleTicketError(err, res, next);
+    }
+  },
+);
+
+router.get(
+  '/:id',
+  requireRole([...RoleGroups.ANY_AUTH, 'WORKSHOP']),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const id = parseIdParam(req, res);
+      if (id === null) return;
+      const ticket = await ticketService.getTicketById(id, {
+        userId: req.user!.userId,
+        role: req.user!.role,
+      });
+      res.json(ticket);
+    } catch (err) {
+      handleTicketError(err, res, next);
+    }
+  },
+);
+
+// ═══════════════════════════════════════════════════════════════
+// EJECUTOR — crear ticket + subir fotos
+// ═══════════════════════════════════════════════════════════════
+
+router.post(
+  '/',
+  requireRole(RoleGroups.TICKET_CREATORS),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const parsed = createTicketSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({
+          error: 'Datos inválidos',
+          details: parsed.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })),
+        });
+      }
+      const ticket = await ticketService.createTicket(req.user!.userId, parsed.data);
+      res.status(201).json(ticket);
+    } catch (err) {
+      handleTicketError(err, res, next);
+    }
+  },
+);
+
+router.post(
+  '/:id/attachments',
+  requireRole(RoleGroups.TICKET_CREATORS),
+  photoUpload.single('photo'),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const id = parseIdParam(req, res);
+      if (id === null) return;
+      if (!req.file) return res.status(400).json({ error: 'Falta el archivo en campo "photo"' });
+
+      const attachment = await ticketService.addAttachment(id, req.user!.userId, {
+        url: `/uploads/maintenance-tickets/photos/${req.file.filename}`,
+        name: req.file.originalname,
+        mimeType: req.file.mimetype,
+        sizeBytes: req.file.size,
+      });
+      res.status(201).json(attachment);
+    } catch (err) {
+      handleTicketError(err, res, next);
+    }
+  },
+);
+
+// ═══════════════════════════════════════════════════════════════
+// ADMIN — rechazar / asignar talleres / aprobar
+// ═══════════════════════════════════════════════════════════════
+
+router.post(
+  '/:id/reject',
+  requireRole(RoleGroups.TICKET_ADMINS),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const id = parseIdParam(req, res);
+      if (id === null) return;
+      const parsed = rejectTicketSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({
+          error: 'Datos inválidos',
+          details: parsed.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })),
+        });
+      }
+      const ticket = await ticketService.rejectTicket(id, req.user!.userId, parsed.data.rejectionReason);
+      res.json(ticket);
+    } catch (err) {
+      handleTicketError(err, res, next);
+    }
+  },
+);
+
+router.post(
+  '/:id/assign-workshops',
+  requireRole(RoleGroups.TICKET_ADMINS),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const id = parseIdParam(req, res);
+      if (id === null) return;
+      const parsed = assignWorkshopsSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({
+          error: 'Datos inválidos',
+          details: parsed.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })),
+        });
+      }
+      const ticket = await ticketService.assignWorkshops(id, req.user!.userId, parsed.data);
+      res.json(ticket);
+    } catch (err) {
+      handleTicketError(err, res, next);
+    }
+  },
+);
+
+router.post(
+  '/:id/approve',
+  requireRole(RoleGroups.TICKET_ADMINS),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const id = parseIdParam(req, res);
+      if (id === null) return;
+      const parsed = approveTicketSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({
+          error: 'Datos inválidos',
+          details: parsed.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })),
+        });
+      }
+      const ticket = await ticketService.approveTicket(id, req.user!.userId, parsed.data);
+      res.json(ticket);
+    } catch (err) {
+      handleTicketError(err, res, next);
+    }
+  },
+);
+
+router.get(
+  '/:id/budget-context',
+  requireRole(RoleGroups.TICKET_ADMINS),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const id = parseIdParam(req, res);
+      if (id === null) return;
+      const ctx = await ticketService.getBudgetContext(id);
+      res.json(ctx);
+    } catch (err) {
+      handleTicketError(err, res, next);
+    }
+  },
+);
+
+// ═══════════════════════════════════════════════════════════════
+// TALLER GANADOR — iniciar / completar reparación
+// ═══════════════════════════════════════════════════════════════
+
+router.post(
+  '/:id/start-repair',
+  requireRole(RoleGroups.WORKSHOP_ONLY),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const id = parseIdParam(req, res);
+      if (id === null) return;
+      const ticket = await ticketService.startRepair(id, req.user!.userId);
+      res.json(ticket);
+    } catch (err) {
+      handleTicketError(err, res, next);
+    }
+  },
+);
+
+router.post(
+  '/:id/complete-repair',
+  requireRole(RoleGroups.WORKSHOP_ONLY),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const id = parseIdParam(req, res);
+      if (id === null) return;
+      const parsed = completeRepairSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({
+          error: 'Datos inválidos',
+          details: parsed.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })),
+        });
+      }
+      const ticket = await ticketService.completeRepair(id, req.user!.userId, parsed.data);
+      res.json(ticket);
+    } catch (err) {
+      handleTicketError(err, res, next);
+    }
+  },
+);
+
+export default router;

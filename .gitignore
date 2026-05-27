@@ -1,0 +1,43 @@
+# Dependencias
+node_modules/
+
+# Variables de entorno (contraseñas, secretos)
+.env
+
+# Next.js build
+.next/
+
+# TypeScript build
+dist/
+
+# Prisma
+prisma/*.db
+
+# Docker volumes
+postgres_data/
+redis_data/
+
+# Archivos de prueba residuales de Fase 0
+api/test-*.ts
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Python (worker) — bytecode compilado
+__pycache__/
+*.pyc
+
+# Archivos subidos por usuarios (runtime, no versionar)
+api/uploads/*
+!api/uploads/.gitkeep
+
+# Reportes generados por el worker (runtime, no versionar)
+storage/reports/*
+!storage/reports/.gitkeep
+
+# Logs
+*.log
+
+# Transcripciones crudas de sesiones (pesadas + contienen tokens)
+docs/sesiones/*.jsonl

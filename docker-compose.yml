@@ -1,0 +1,137 @@
+# /docker-compose.yml — modo PRODUCCIÓN por defecto
+#
+# Optimizado para pruebas de usabilidad con ngrok:
+#   - Next.js servido como build minificado (no `next dev`)
+#   - Compresión gzip habilitada en el API
+#   - Cache headers en assets estáticos
+#   - Imagen del web reducida via output: standalone (~200MB vs 1.5GB)
+#   - SIN bind mounts de código (los containers usan el build, no tu disco)
+#
+# Para activar modo DEV (hot-reload), usa el override:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+#
+# Para arrancar prod:
+#   docker compose up -d --build
+
+services:
+  # === BASE DE DATOS ===
+  postgres:
+    image: postgres:16
+    container_name: flotillas_postgres
+    restart: unless-stopped
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # === CACHÉ Y BROKER DE COLAS ===
+  redis:
+    image: redis:7-alpine
+    container_name: flotillas_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # === BACKEND API (Node.js + Express + TypeScript — modo prod) ===
+  api:
+    build:
+      context: ./api
+      target: prod
+      dockerfile: Dockerfile
+    container_name: flotillas_api
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: ${REDIS_URL}
+      JWT_SECRET: ${JWT_SECRET}
+      # Mantenemos NODE_ENV de tu .env (típicamente "development") para que
+      # las validaciones estrictas de env.ts (JWT >= 64ch, Turnstile, sin
+      # localhost en CORS, bcrypt >= 12) no exploten en este entorno de
+      # pruebas con ngrok. El build sigue siendo el minificado (node dist/).
+      NODE_ENV: ${NODE_ENV:-development}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS}
+      SENTRY_DSN: ${SENTRY_DSN}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:3001/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  # === FRONTEND WEB (Next.js — modo prod standalone) ===
+  web:
+    build:
+      context: ./web
+      target: prod
+      dockerfile: Dockerfile
+      args:
+        # Permite que el túnel ngrok use rutas relativas (proxy via Next a la API)
+        NEXT_PUBLIC_API_URL: ""
+        # CRÍTICO: el rewrites de Next.js embebe esta URL en build time.
+        # Dentro de Docker, "localhost" del web NO es el api — hay que apuntar
+        # al hostname del servicio en la red de compose.
+        API_PROXY_TARGET: http://api:3001
+    container_name: flotillas_web
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      API_PROXY_TARGET: http://api:3001
+      NEXT_PUBLIC_SENTRY_DSN: ${NEXT_PUBLIC_SENTRY_DSN}
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:3000"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  # === WORKER PYTHON (Reportería) ===
+  worker-python:
+    build:
+      context: ./worker
+      dockerfile: Dockerfile
+    container_name: flotillas_worker
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379
+      PYTHONUNBUFFERED: 1
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./storage/reports:/app/storage/reports
+
+# === VOLÚMENES PERSISTENTES ===
+volumes:
+  postgres_data:
+  redis_data:

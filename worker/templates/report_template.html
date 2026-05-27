@@ -1,0 +1,473 @@
+<!-- Archivo: /flotillas/worker/templates/report_template.html -->
+<!-- ARCHIVO NUEVO — Plantilla HTML para reporte mensual PDF -->
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <style>
+        /* === CONFIGURACIÓN DE PÁGINA === */
+        @page {
+            size: letter;
+            margin: 2cm 2.5cm;
+            @bottom-center {
+                content: "Plataforma de Gestión de Flotillas — Página " counter(page) " de " counter(pages);
+                font-size: 8pt;
+                color: #94a3b8;
+            }
+        }
+
+        /* === TIPOGRAFÍA BASE === */
+        body {
+            font-family: 'Liberation Sans', 'DejaVu Sans', Arial, sans-serif;
+            font-size: 10pt;
+            color: #1e293b;
+            line-height: 1.5;
+        }
+
+        /* === PORTADA === */
+        .cover {
+            text-align: center;
+            padding-top: 120px;
+            page-break-after: always;
+        }
+
+        .cover h1 {
+            font-size: 28pt;
+            color: #0f172a;
+            margin-bottom: 5px;
+        }
+
+        .cover h2 {
+            font-size: 18pt;
+            color: #3b82f6;
+            font-weight: normal;
+            margin-top: 0;
+        }
+
+        .cover .meta {
+            margin-top: 60px;
+            font-size: 11pt;
+            color: #64748b;
+        }
+
+        .cover .meta p {
+            margin: 5px 0;
+        }
+
+        /* === TÍTULOS DE SECCIÓN === */
+        h2.section-title {
+            font-size: 16pt;
+            color: #0f172a;
+            border-bottom: 3px solid #3b82f6;
+            padding-bottom: 6px;
+            margin-top: 30px;
+            margin-bottom: 15px;
+        }
+
+        h3.subsection-title {
+            font-size: 12pt;
+            color: #334155;
+            margin-top: 20px;
+            margin-bottom: 10px;
+        }
+
+        /* === TARJETAS DE MÉTRICAS === */
+        .metrics-grid {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+
+        .metric-card {
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 12px 16px;
+            width: 30%;
+            box-sizing: border-box;
+        }
+
+        .metric-card .label {
+            font-size: 8pt;
+            color: #64748b;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .metric-card .value {
+            font-size: 20pt;
+            font-weight: bold;
+            color: #0f172a;
+            margin: 4px 0;
+        }
+
+        .metric-card .detail {
+            font-size: 8pt;
+            color: #94a3b8;
+        }
+
+        .metric-card.green { border-left: 4px solid #22c55e; }
+        .metric-card.red { border-left: 4px solid #ef4444; }
+        .metric-card.yellow { border-left: 4px solid #f59e0b; }
+        .metric-card.blue { border-left: 4px solid #3b82f6; }
+
+        /* === TABLAS === */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 20px;
+            font-size: 9pt;
+        }
+
+        thead th {
+            background-color: #f1f5f9;
+            color: #334155;
+            font-weight: 600;
+            text-align: left;
+            padding: 8px 10px;
+            border-bottom: 2px solid #cbd5e1;
+        }
+
+        tbody td {
+            padding: 6px 10px;
+            border-bottom: 1px solid #e2e8f0;
+        }
+
+        tbody tr:nth-child(even) {
+            background-color: #f8fafc;
+        }
+
+        /* === BADGES === */
+        .badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 8pt;
+            font-weight: 600;
+        }
+
+        .badge-green { background: #dcfce7; color: #166534; }
+        .badge-red { background: #fee2e2; color: #991b1b; }
+        .badge-yellow { background: #fef9c3; color: #854d0e; }
+        .badge-blue { background: #dbeafe; color: #1e40af; }
+
+        /* === UTILIDADES === */
+        .text-right { text-align: right; }
+        .text-center { text-align: center; }
+        .page-break { page-break-before: always; }
+        .no-data { color: #94a3b8; font-style: italic; text-align: center; padding: 20px; }
+    </style>
+</head>
+<body>
+
+    <!-- ==================== PORTADA ==================== -->
+    <div class="cover">
+        <h1>Reporte Mensual de Flotilla</h1>
+        <h2>{{ month_name }} {{ year }}</h2>
+        <div class="meta">
+            <p>Generado: {{ generated_at }}</p>
+            <p>Solicitado por: {{ requested_by }}</p>
+            <p>Periodo: 01/{{ month_str }}/{{ year }} — {{ last_day }}/{{ month_str }}/{{ year }}</p>
+        </div>
+    </div>
+
+    <!-- ==================== RESUMEN EJECUTIVO ==================== -->
+    <h2 class="section-title">1. Resumen Ejecutivo</h2>
+
+    <div class="metrics-grid">
+        <div class="metric-card green">
+            <div class="label">Unidades Operativas</div>
+            <div class="value">{{ summary.operative_vehicles }}</div>
+            <div class="detail">de {{ summary.total_vehicles }} totales</div>
+        </div>
+        <div class="metric-card red">
+            <div class="label">Unidades Bloqueadas</div>
+            <div class="value">{{ summary.blocked_vehicles }}</div>
+            <div class="detail">por incumplimiento</div>
+        </div>
+        <div class="metric-card blue">
+            <div class="label">Cargas del Mes</div>
+            <div class="value">{{ summary.total_loads }}</div>
+            <div class="detail">{{ summary.total_liters | round(0) }} litros</div>
+        </div>
+        <div class="metric-card blue">
+            <div class="label">Gasto del Mes</div>
+            <div class="value">${{ summary.total_spent | round(2) }}</div>
+            <div class="detail">presupuesto: ${{ summary.budget_total | round(2) }}</div>
+        </div>
+        <div class="metric-card yellow">
+            <div class="label">Rendimiento Promedio</div>
+            <div class="value">{{ summary.avg_kml | round(2) }}</div>
+            <div class="detail">km/l promedio de la flotilla</div>
+        </div>
+        <div class="metric-card red">
+            <div class="label">Documentos Vencidos</div>
+            <div class="value">{{ summary.expired_docs }}</div>
+            <div class="detail">{{ summary.expiring_docs }} por vencer</div>
+        </div>
+    </div>
+
+    <!-- ==================== COMBUSTIBLE POR TIPO ==================== -->
+    <h2 class="section-title">2. Combustible por Tipo de Vehículo</h2>
+
+    {% if fuel_by_type | length > 0 %}
+    <table>
+        <thead>
+            <tr>
+                <th>Tipo de Vehículo</th>
+                <th class="text-right">Cargas</th>
+                <th class="text-right">Litros</th>
+                <th class="text-right">Gasto</th>
+                <th class="text-right">km/l Promedio</th>
+                <th class="text-right">km/l Esperado</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in fuel_by_type %}
+            <tr>
+                <td>{{ row.vehicle_type }}</td>
+                <td class="text-right">{{ row.total_loads }}</td>
+                <td class="text-right">{{ row.total_liters | round(1) }}</td>
+                <td class="text-right">${{ row.total_spent | round(2) }}</td>
+                <td class="text-right">{{ row.avg_kml | round(2) }}</td>
+                <td class="text-right">{{ row.expected_kml | round(2) }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="no-data">No se registraron cargas de combustible en este periodo.</p>
+    {% endif %}
+
+    <!-- ==================== TOP 10 CONSUMIDORES ==================== -->
+    <h2 class="section-title">3. Top 10 Vehículos por Gasto</h2>
+
+    {% if top_consumers | length > 0 %}
+    <table>
+        <thead>
+            <tr>
+                <th>#Eco</th>
+                <th>Placa</th>
+                <th>Tipo</th>
+                <th class="text-right">Cargas</th>
+                <th class="text-right">Litros</th>
+                <th class="text-right">Gasto</th>
+                <th class="text-right">km/l</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in top_consumers %}
+            <tr>
+                <td>{{ row.economic_number }}</td>
+                <td>{{ row.plate }}</td>
+                <td>{{ row.vehicle_type }}</td>
+                <td class="text-right">{{ row.total_loads }}</td>
+                <td class="text-right">{{ row.total_liters | round(1) }}</td>
+                <td class="text-right">${{ row.total_spent | round(2) }}</td>
+                <td class="text-right">{{ row.avg_kml | round(2) }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="no-data">No hay datos disponibles.</p>
+    {% endif %}
+
+    <!-- ==================== RENDIMIENTO ==================== -->
+    <div class="page-break"></div>
+    <h2 class="section-title">4. Ranking de Rendimiento km/l</h2>
+
+    <h3 class="subsection-title">Mejores 10 unidades</h3>
+    {% if best_kml | length > 0 %}
+    <table>
+        <thead>
+            <tr>
+                <th>#</th>
+                <th>#Eco</th>
+                <th>Placa</th>
+                <th>Tipo</th>
+                <th class="text-right">km/l Real</th>
+                <th class="text-right">km/l Esperado</th>
+                <th class="text-right">Desviación</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in best_kml %}
+            <tr>
+                <td>{{ loop.index }}</td>
+                <td>{{ row.economic_number }}</td>
+                <td>{{ row.plate }}</td>
+                <td>{{ row.vehicle_type }}</td>
+                <td class="text-right">{{ row.avg_kml | round(2) }}</td>
+                <td class="text-right">{{ row.expected_kml | round(2) }}</td>
+                <td class="text-right">
+                    <span class="badge badge-green">+{{ row.deviation | round(1) }}%</span>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% endif %}
+
+    <h3 class="subsection-title">Peores 10 unidades</h3>
+    {% if worst_kml | length > 0 %}
+    <table>
+        <thead>
+            <tr>
+                <th>#</th>
+                <th>#Eco</th>
+                <th>Placa</th>
+                <th>Tipo</th>
+                <th class="text-right">km/l Real</th>
+                <th class="text-right">km/l Esperado</th>
+                <th class="text-right">Desviación</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in worst_kml %}
+            <tr>
+                <td>{{ loop.index }}</td>
+                <td>{{ row.economic_number }}</td>
+                <td>{{ row.plate }}</td>
+                <td>{{ row.vehicle_type }}</td>
+                <td class="text-right">{{ row.avg_kml | round(2) }}</td>
+                <td class="text-right">{{ row.expected_kml | round(2) }}</td>
+                <td class="text-right">
+                    <span class="badge badge-red">{{ row.deviation | round(1) }}%</span>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% endif %}
+
+    <!-- ==================== DOCUMENTOS ==================== -->
+    <div class="page-break"></div>
+    <h2 class="section-title">5. Estado de Documentos</h2>
+
+    <div class="metrics-grid">
+        <div class="metric-card green">
+            <div class="label">Vigentes</div>
+            <div class="value">{{ docs_summary.valid }}</div>
+        </div>
+        <div class="metric-card yellow">
+            <div class="label">Por Vencer (30 días)</div>
+            <div class="value">{{ docs_summary.expiring }}</div>
+        </div>
+        <div class="metric-card red">
+            <div class="label">Vencidos</div>
+            <div class="value">{{ docs_summary.expired }}</div>
+        </div>
+    </div>
+
+    {% if expired_docs_list | length > 0 %}
+    <h3 class="subsection-title">Documentos Vencidos</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>#Eco</th>
+                <th>Placa</th>
+                <th>Tipo Documento</th>
+                <th>Venció</th>
+                <th>Días vencido</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in expired_docs_list %}
+            <tr>
+                <td>{{ row.economic_number }}</td>
+                <td>{{ row.plate }}</td>
+                <td>{{ row.doc_type }}</td>
+                <td>{{ row.expires_at }}</td>
+                <td class="text-right">
+                    <span class="badge badge-red">{{ row.days_overdue }} días</span>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% endif %}
+
+    <!-- ==================== MANTENIMIENTOS ==================== -->
+    <h2 class="section-title">6. Mantenimientos</h2>
+
+    <h3 class="subsection-title">Realizados en el mes</h3>
+    {% if maintenance_done | length > 0 %}
+    <table>
+        <thead>
+            <tr>
+                <th>#Eco</th>
+                <th>Placa</th>
+                <th>Servicio</th>
+                <th>Fecha</th>
+                <th>Odómetro</th>
+                <th class="text-right">Costo</th>
+                <th>Proveedor</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in maintenance_done %}
+            <tr>
+                <td>{{ row.economic_number }}</td>
+                <td>{{ row.plate }}</td>
+                <td>{{ row.service_name }}</td>
+                <td>{{ row.performed_at }}</td>
+                <td class="text-right">{{ row.odometer_km }}</td>
+                <td class="text-right">${{ row.cost | round(2) }}</td>
+                <td>{{ row.provider }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="no-data">No se realizaron mantenimientos en este periodo.</p>
+    {% endif %}
+
+    <h3 class="subsection-title">Mantenimientos pendientes/vencidos</h3>
+    {% if maintenance_pending | length > 0 %}
+    <table>
+        <thead>
+            <tr>
+                <th>#Eco</th>
+                <th>Placa</th>
+                <th>Servicio</th>
+                <th>Km Actual</th>
+                <th>Km Próximo</th>
+                <th>Estado</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in maintenance_pending %}
+            <tr>
+                <td>{{ row.economic_number }}</td>
+                <td>{{ row.plate }}</td>
+                <td>{{ row.service_name }}</td>
+                <td class="text-right">{{ row.current_km }}</td>
+                <td class="text-right">{{ row.next_service_km }}</td>
+                <td>
+                    {% if row.status == 'OVERDUE' %}
+                    <span class="badge badge-red">Vencido</span>
+                    {% else %}
+                    <span class="badge badge-yellow">Próximo</span>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="no-data">No hay mantenimientos pendientes.</p>
+    {% endif %}
+
+    <!-- ==================== PIE DE REPORTE ==================== -->
+    <div class="page-break"></div>
+    <div style="text-align: center; color: #94a3b8; margin-top: 200px;">
+        <p>— Fin del Reporte —</p>
+        <p style="font-size: 8pt;">
+            Generado automáticamente por la Plataforma de Gestión de Flotillas<br>
+            {{ generated_at }}
+        </p>
+    </div>
+
+</body>
+</html>
