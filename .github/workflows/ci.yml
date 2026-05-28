@@ -13,6 +13,14 @@ jobs:
     defaults:
       run:
         working-directory: api
+    # Variables dummy a nivel de job: env.ts (que se importa por tsc/build)
+    # aborta el proceso si DATABASE_URL/JWT_SECRET no existen o son débiles.
+    # En CI no nos conectamos a nada, solo necesitamos que el módulo cargue.
+    env:
+      DATABASE_URL: postgresql://user:pass@localhost:5432/dummy
+      REDIS_URL: redis://localhost:6379
+      JWT_SECRET: ci-dummy-secret-de-mas-de-32-caracteres-para-zod-validation
+      NODE_ENV: test
     steps:
       - uses: actions/checkout@v4
 

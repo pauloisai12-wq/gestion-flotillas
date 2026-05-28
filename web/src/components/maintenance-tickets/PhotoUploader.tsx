@@ -36,7 +36,9 @@ export function PhotoUploader(props: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const upload = props.mode === 'upload' ? useUploadAttachment() : null;
+  // rules-of-hooks: el hook se llama SIEMPRE; lo usamos solo en modo 'upload'.
+  const uploadHook = useUploadAttachment();
+  const upload = props.mode === 'upload' ? uploadHook : null;
 
   const currentFiles = props.mode === 'collect' ? props.files : [];
   const totalCount =

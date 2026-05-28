@@ -64,8 +64,9 @@ export default function ReportsPage() {
             setShowDialog(false);
             alert('Reporte encolado. Se notificará al completarse.');
           },
-          onError: (error: any) => {
-            alert('Error: ' + (error?.response?.data?.error || error.message));
+          onError: (error: unknown) => {
+            const e = error as { response?: { data?: { error?: string } }; message?: string };
+            alert('Error: ' + (e.response?.data?.error || e.message || 'desconocido'));
           },
         }
       );

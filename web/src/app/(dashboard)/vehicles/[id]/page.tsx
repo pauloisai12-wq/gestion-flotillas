@@ -192,7 +192,12 @@ export default function VehicleDetailPage({ params }: { params: Promise<{ id: st
         <h2 className="text-lg font-semibold mb-3">Resguardantes (asignaciones)</h2>
         {vehicle.assignments && vehicle.assignments.length > 0 ? (
           <div className="space-y-2">
-            {vehicle.assignments.map((a: any) => (
+            {vehicle.assignments.map((a: {
+              id: number;
+              operator?: { fullName?: string; licenseNumber?: string };
+              startDate: string;
+              endDate?: string | null;
+            }) => (
               <div key={a.id} className="flex items-center justify-between text-sm border-b pb-2">
                 <div>
                   <p className="font-medium">{a.operator?.fullName}</p>

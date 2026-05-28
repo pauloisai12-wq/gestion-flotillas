@@ -152,9 +152,8 @@ export function BudgetTable({ kind, title, description, icon: Icon }: BudgetTabl
       : amount;
 
     try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       await distributeMut.mutateAsync({
-        distributions: targetVehicles.map((v: any) => ({ vehicleId: v.id, baseAmount: perVehicle })),
+        distributions: targetVehicles.map((v: { id: number }) => ({ vehicleId: v.id, baseAmount: perVehicle })),
       });
     } catch (err) {
       setMassError((err as Error).message);

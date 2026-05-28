@@ -2,12 +2,12 @@
 // Propósito: Utilidad para exportar datos de tablas a archivo CSV
 // NUEVO archivo
 
-interface CsvColumn {
+interface CsvColumn<T = unknown> {
   header: string;
-  accessor: (row: any) => string | number;
+  accessor: (row: T) => string | number;
 }
 
-export function exportToCsv(filename: string, columns: CsvColumn[], data: any[]) {
+export function exportToCsv<T = unknown>(filename: string, columns: CsvColumn<T>[], data: T[]) {
   // Encabezados
   const headers = columns.map(function (col) { return col.header; }).join(',');
 

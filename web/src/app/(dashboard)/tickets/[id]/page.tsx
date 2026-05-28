@@ -410,6 +410,12 @@ function WorkshopActions({
   // Encontrar la quote de ESTE taller
   const myQuote = (ticket.quotes ?? []).find((q) => q.workshopId === workshopId);
 
+  // rules-of-hooks: useVehicle se llama SIEMPRE antes de cualquier early
+  // return; pasar null evita que dispare la query cuando no se necesita.
+  const needsVehicleType =
+    !!myQuote && ticket.selectedQuoteId === myQuote.id && ticket.status === 'IN_REPAIR';
+  const { data: vehicle } = useVehicle(needsVehicleType ? ticket.vehicleId : null);
+
   if (!myQuote) {
     return (
       <div className="border border-dashed border-border rounded-md p-4 text-xs text-muted-foreground text-center">
@@ -417,11 +423,6 @@ function WorkshopActions({
       </div>
     );
   }
-
-  // Necesitamos vehicleTypeId para el dropdown de servicios al completar.
-  // Solo lo pedimos cuando el taller está en posición de completar.
-  const needsVehicleType = ticket.selectedQuoteId === myQuote.id && ticket.status === 'IN_REPAIR';
-  const { data: vehicle } = useVehicle(needsVehicleType ? ticket.vehicleId : null);
 
   // ── Estado AWAITING_QUOTES: el taller cotiza o declina ──
   if (ticket.status === 'AWAITING_QUOTES') {
