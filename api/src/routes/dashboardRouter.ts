@@ -5,8 +5,13 @@
 import { Router, Request, Response } from 'express';
 import * as dashboardService from '../services/dashboardService';
 import { DashboardFilters } from '../services/dashboardService';
+import { requireRole, RoleGroups } from '../middlewares/roleMiddleware';
 
 const router = Router();
+
+// Todos los endpoints del dashboard requieren rol con acceso global a la flota.
+// Excluye EXECUTOR (acotado a sus vehículos) y WORKSHOP (taller externo).
+const requireDashboardAccess = requireRole(RoleGroups.VEHICLE_READERS);
 
 function extractFilters(req: Request): DashboardFilters {
   return {
@@ -17,7 +22,7 @@ function extractFilters(req: Request): DashboardFilters {
   };
 }
 
-router.get('/summary', async function (req: Request, res: Response) {
+router.get('/summary', requireDashboardAccess, async function (req: Request, res: Response) {
   try {
     const summary = await dashboardService.getDashboardSummary(extractFilters(req));
     res.json(summary);
@@ -26,7 +31,7 @@ router.get('/summary', async function (req: Request, res: Response) {
   }
 });
 
-router.get('/fuel-trend', async function (req: Request, res: Response) {
+router.get('/fuel-trend', requireDashboardAccess, async function (req: Request, res: Response) {
   try {
     const trend = await dashboardService.getFuelMonthlyTrend(extractFilters(req));
     res.json(trend);
@@ -35,7 +40,7 @@ router.get('/fuel-trend', async function (req: Request, res: Response) {
   }
 });
 
-router.get('/vehicle-ranking/top', async function (req: Request, res: Response) {
+router.get('/vehicle-ranking/top', requireDashboardAccess, async function (req: Request, res: Response) {
   try {
     const limit = Number(req.query.limit) || 10;
     const ranking = await dashboardService.getVehicleRankingTop(limit, extractFilters(req));
@@ -45,7 +50,7 @@ router.get('/vehicle-ranking/top', async function (req: Request, res: Response) 
   }
 });
 
-router.get('/vehicle-ranking/bottom', async function (req: Request, res: Response) {
+router.get('/vehicle-ranking/bottom', requireDashboardAccess, async function (req: Request, res: Response) {
   try {
     const limit = Number(req.query.limit) || 10;
     const ranking = await dashboardService.getVehicleRankingBottom(limit, extractFilters(req));
@@ -55,7 +60,7 @@ router.get('/vehicle-ranking/bottom', async function (req: Request, res: Respons
   }
 });
 
-router.get('/operator-ranking', async function (req: Request, res: Response) {
+router.get('/operator-ranking', requireDashboardAccess, async function (req: Request, res: Response) {
   try {
     const limit = Number(req.query.limit) || 10;
     const ranking = await dashboardService.getOperatorRanking(limit, extractFilters(req));
@@ -65,7 +70,7 @@ router.get('/operator-ranking', async function (req: Request, res: Response) {
   }
 });
 
-router.get('/budget-progress', async function (req: Request, res: Response) {
+router.get('/budget-progress', requireDashboardAccess, async function (req: Request, res: Response) {
   try {
     const progress = await dashboardService.getBudgetProgress(extractFilters(req));
     res.json(progress);
