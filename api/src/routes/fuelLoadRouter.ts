@@ -6,12 +6,15 @@ import { fuelLoadSchema } from '../validators/fuelLoadValidator';
 import * as fuelLoadService from '../services/fuelLoadService';
 import { requireRole, RoleGroups } from '../middlewares/roleMiddleware';
 import { checkVehicleOperable } from '../middlewares/vehicleGuard';
+import { ah } from '../lib/asyncHandler';
 import { FuelLoadStatus } from '@prisma/client';
 
 const router = Router();
 
-router.get('/', requireRole(RoleGroups.FUEL_MANAGERS), async (req: Request, res: Response) => {
-  try {
+router.get(
+  '/',
+  requireRole(RoleGroups.FUEL_MANAGERS),
+  ah(async (req: Request, res: Response) => {
     const result = await fuelLoadService.getAllFuelLoads({
       page: req.query.page ? parseInt(req.query.page as string) : 1,
       limit: req.query.limit ? parseInt(req.query.limit as string) : 20,
@@ -23,28 +26,26 @@ router.get('/', requireRole(RoleGroups.FUEL_MANAGERS), async (req: Request, res:
       dateTo: req.query.dateTo as string | undefined,
     });
     res.json(result);
-  } catch (error) {
-    res.status(500).json({ error: (error as Error).message });
-  }
-});
+  }),
+);
 
-router.get('/vehicle/:vehicleId', requireRole(RoleGroups.VEHICLE_READERS), async (req, res) => {
-  try {
+router.get(
+  '/vehicle/:vehicleId',
+  requireRole(RoleGroups.VEHICLE_READERS),
+  ah(async (req, res) => {
     const vehicleId = parseInt(req.params.vehicleId);
     if (isNaN(vehicleId)) return res.status(400).json({ error: 'ID inválido' });
     const loads = await fuelLoadService.getFuelLoadsByVehicle(vehicleId);
     const avg = await fuelLoadService.getVehicleMovingAverage(vehicleId);
     res.json({ loads, movingAverage: avg });
-  } catch (error) {
-    res.status(500).json({ error: (error as Error).message });
-  }
-});
+  }),
+);
 
 router.post(
   '/',
   requireRole(RoleGroups.FUEL_MANAGERS),
   checkVehicleOperable,
-  async (req: Request, res: Response) => {
+  ah(async (req: Request, res: Response) => {
     const parsed = fuelLoadSchema.safeParse(req.body);
     if (!parsed.success) {
       return res.status(400).json({
@@ -52,13 +53,9 @@ router.post(
         details: parsed.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })),
       });
     }
-    try {
-      const load = await fuelLoadService.createFuelLoad(parsed.data);
-      res.status(201).json(load);
-    } catch (error) {
-      res.status(400).json({ error: (error as Error).message });
-    }
-  },
+    const load = await fuelLoadService.createFuelLoad(parsed.data);
+    res.status(201).json(load);
+  }),
 );
 
 export default router;

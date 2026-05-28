@@ -27,6 +27,15 @@ export const NotFound = (resource = 'Recurso') => new AppError(404, `${resource}
 export const Conflict = (msg: string) => new AppError(409, msg, 'CONFLICT');
 export const TooManyRequests = (msg = 'Demasiados intentos') => new AppError(429, msg, 'RATE_LIMITED');
 
+/** Narrowing tipado para errores conocidos de Prisma — evita castear a any. */
+export function isPrismaKnownError(
+  e: unknown,
+  code?: string,
+): e is Prisma.PrismaClientKnownRequestError {
+  if (!(e instanceof Prisma.PrismaClientKnownRequestError)) return false;
+  return code ? e.code === code : true;
+}
+
 export function errorHandler(err: Error, req: Request, res: Response, _next: NextFunction): void {
   const requestId = res.getHeader('x-request-id') as string | undefined;
 
