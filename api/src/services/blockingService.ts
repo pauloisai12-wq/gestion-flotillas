@@ -108,40 +108,97 @@ export async function checkVehicleCompliance(vehicleId: number) { // <-- CORRECC
 }
 
 /**
- * Revisa TODOS los vehículos del sistema.
+ * Revisa TODOS los vehículos del sistema en lote.
  * Esta función la llama el job diario a las 00:01.
+ *
+ * Implementación en 3 queries (independiente del nº de vehículos), en vez del
+ * antiguo loop N+1 que disparaba 3-4 queries por vehículo.
  */
 export async function runDailyComplianceCheck() {
   console.log('Iniciando revision diaria de compliance...');
+  const now = new Date();
 
-  const vehicles = await prisma.vehicle.findMany({
-    select: { id: true },
-  });
+  // 1) Una query agregada: vehículo + estado actual + si tiene algún doc vencido.
+  const rows = await prisma.$queryRaw<
+    Array<{ id: number; status: VehicleStatus; has_expired: boolean }>
+  >`
+    SELECT v.id, v.status, EXISTS (
+      SELECT 1 FROM documents d
+      WHERE d."vehicleId" = v.id AND d."expiresAt" < ${now}
+    ) AS has_expired
+    FROM vehicles v
+    WHERE v."isActive" = true
+  `;
 
-  let blocked = 0;
-  let unblocked = 0;
-  let unchanged = 0;
+  const toBlock: number[] = [];
+  const toUnblock: number[] = [];
+  for (const r of rows) {
+    if (r.has_expired && r.status !== VehicleStatus.BLOCKED) toBlock.push(r.id);
+    else if (!r.has_expired && r.status === VehicleStatus.BLOCKED) toUnblock.push(r.id);
+  }
 
-  for (const vehicle of vehicles) {
-    const result = await checkVehicleCompliance(vehicle.id);
+  // 2) Aplicar bloqueos y desbloqueos en transacción.
+  if (toBlock.length > 0 || toUnblock.length > 0) {
+    await prisma.$transaction([
+      ...(toBlock.length > 0
+        ? [
+            prisma.vehicle.updateMany({
+              where: { id: { in: toBlock } },
+              data: { status: VehicleStatus.BLOCKED, blockReason: 'Documento(s) vencido(s)' },
+            }),
+          ]
+        : []),
+      ...(toUnblock.length > 0
+        ? [
+            prisma.vehicle.updateMany({
+              where: { id: { in: toUnblock } },
+              data: { status: VehicleStatus.OPERATIVE, blockReason: null },
+            }),
+          ]
+        : []),
+    ]);
+  }
 
-    if (result.changed) {
-      if (result.newStatus === VehicleStatus.BLOCKED) {
-        blocked++;
-      } else {
-        unblocked++;
-      }
-    } else {
-      unchanged++;
-    }
+  // 3) Notificar solo los cambios reales (suele ser 0-5 por día, no N).
+  for (const vehicleId of toBlock) {
+    await notifyByRole({
+      role: 'SUPERVISOR_VEHICLES',
+      type: 'VEHICLE_BLOCKED',
+      title: 'Vehiculo bloqueado',
+      message: `Vehiculo ${vehicleId} bloqueado por documento(s) vencido(s).`,
+      entityRef: `vehicle:${vehicleId}`,
+    });
+    await notifyByRole({
+      role: 'ADMIN',
+      type: 'VEHICLE_BLOCKED',
+      title: 'Vehiculo bloqueado',
+      message: `Vehiculo ${vehicleId} bloqueado por documento(s) vencido(s).`,
+      entityRef: `vehicle:${vehicleId}`,
+    });
+  }
+  for (const vehicleId of toUnblock) {
+    await notifyByRole({
+      role: 'SUPERVISOR_VEHICLES',
+      type: 'VEHICLE_UNBLOCKED' as any, // TODO: añadir VEHICLE_UNBLOCKED al enum NotificationType
+      title: 'Vehiculo desbloqueado',
+      message: `Vehiculo ${vehicleId} desbloqueado. Todos los documentos vigentes.`,
+      entityRef: `vehicle:${vehicleId}`,
+    });
+    await notifyByRole({
+      role: 'ADMIN',
+      type: 'VEHICLE_UNBLOCKED' as any,
+      title: 'Vehiculo desbloqueado',
+      message: `Vehiculo ${vehicleId} desbloqueado. Todos los documentos vigentes.`,
+      entityRef: `vehicle:${vehicleId}`,
+    });
   }
 
   const summary = {
-    total: vehicles.length,
-    blocked,
-    unblocked,
-    unchanged,
-    timestamp: new Date().toISOString(),
+    total: rows.length,
+    blocked: toBlock.length,
+    unblocked: toUnblock.length,
+    unchanged: rows.length - toBlock.length - toUnblock.length,
+    timestamp: now.toISOString(),
   };
 
   console.log('Resultado de compliance:', JSON.stringify(summary));
