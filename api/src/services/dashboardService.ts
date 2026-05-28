@@ -92,16 +92,16 @@ export async function getFuelMonthlyTrend(filters: DashboardFilters = {}) {
     return result.map(formatTrendRow);
   }
 
-  // Con filtros: consulta directa
-  const conditions: string[] = ["fl.\"loadDate\" >= NOW() - INTERVAL '12 months'"];
-  if (filters.vehicleTypeId) conditions.push('v."vehicleTypeId" = ' + filters.vehicleTypeId);
-  if (filters.operatorId) conditions.push('fl."operatorId" = ' + filters.operatorId);
-  if (filters.dateFrom) conditions.push("fl.\"loadDate\" >= '" + filters.dateFrom + "'");
-  if (filters.dateTo) conditions.push("fl.\"loadDate\" <= '" + filters.dateTo + "'");
+  // Con filtros: consulta parametrizada (segura contra inyección SQL)
+  const conds: Prisma.Sql[] = [Prisma.sql`fl."loadDate" >= NOW() - INTERVAL '12 months'`];
+  if (filters.vehicleTypeId) conds.push(Prisma.sql`v."vehicleTypeId" = ${Number(filters.vehicleTypeId)}`);
+  if (filters.operatorId)    conds.push(Prisma.sql`fl."operatorId" = ${Number(filters.operatorId)}`);
+  if (filters.dateFrom)      conds.push(Prisma.sql`fl."loadDate" >= ${new Date(filters.dateFrom)}`);
+  if (filters.dateTo)        conds.push(Prisma.sql`fl."loadDate" <= ${new Date(filters.dateTo)}`);
 
-  const where = conditions.join(' AND ');
+  const where = Prisma.join(conds, ' AND ');
 
-  const result = await prisma.$queryRawUnsafe<any[]>(`
+  const result = await prisma.$queryRaw<any[]>`
     SELECT
       to_char(date_trunc('month', fl."loadDate"), 'YYYY-MM') AS month_label,
       SUM(fl.amount) AS total_spent,
@@ -113,7 +113,7 @@ export async function getFuelMonthlyTrend(filters: DashboardFilters = {}) {
     WHERE ${where}
     GROUP BY date_trunc('month', fl."loadDate")
     ORDER BY date_trunc('month', fl."loadDate") ASC
-  `);
+  `;
   return result.map(formatTrendRow);
 }
 
@@ -148,16 +148,16 @@ export async function getOperatorRanking(limit: number = 10, filters: DashboardF
     return result.map(formatOperatorRow);
   }
 
-  const conditions: string[] = ['fl."kmPerLiter" IS NOT NULL'];
-  if (filters.vehicleTypeId) conditions.push('v."vehicleTypeId" = ' + filters.vehicleTypeId);
-  if (filters.operatorId) conditions.push('o.id = ' + filters.operatorId);
-  if (filters.dateFrom) conditions.push("fl.\"loadDate\" >= '" + filters.dateFrom + "'");
-  if (filters.dateTo) conditions.push("fl.\"loadDate\" <= '" + filters.dateTo + "'");
-  if (!filters.dateFrom && !filters.dateTo) conditions.push("fl.\"loadDate\" >= date_trunc('month', NOW())");
+  const conds: Prisma.Sql[] = [Prisma.sql`fl."kmPerLiter" IS NOT NULL`];
+  if (filters.vehicleTypeId) conds.push(Prisma.sql`v."vehicleTypeId" = ${Number(filters.vehicleTypeId)}`);
+  if (filters.operatorId)    conds.push(Prisma.sql`o.id = ${Number(filters.operatorId)}`);
+  if (filters.dateFrom)      conds.push(Prisma.sql`fl."loadDate" >= ${new Date(filters.dateFrom)}`);
+  if (filters.dateTo)        conds.push(Prisma.sql`fl."loadDate" <= ${new Date(filters.dateTo)}`);
+  if (!filters.dateFrom && !filters.dateTo) conds.push(Prisma.sql`fl."loadDate" >= date_trunc('month', NOW())`);
 
-  const where = conditions.join(' AND ');
+  const where = Prisma.join(conds, ' AND ');
 
-  const result = await prisma.$queryRawUnsafe<any[]>(`
+  const result = await prisma.$queryRaw<any[]>`
     SELECT o.id AS operator_id, o."fullName" AS operator_name,
       AVG(fl."kmPerLiter") AS avg_kml, COUNT(fl.id) AS load_count,
       SUM(fl.amount) AS total_spent, SUM(fl.liters) AS total_liters
@@ -166,8 +166,8 @@ export async function getOperatorRanking(limit: number = 10, filters: DashboardF
     JOIN vehicles v ON v.id = fl."vehicleId"
     WHERE ${where}
     GROUP BY o.id, o."fullName"
-    ORDER BY avg_kml DESC LIMIT ${limit}
-  `);
+    ORDER BY avg_kml DESC LIMIT ${Number(limit)}
+  `;
   return result.map(formatOperatorRow);
 }
 
@@ -180,15 +180,15 @@ export async function getBudgetProgress(filters: DashboardFilters = {}) {
     return result.map(formatBudgetRow);
   }
 
-  const conditions: string[] = [
-    "fb.month = EXTRACT(MONTH FROM NOW())::int",
-    "fb.year = EXTRACT(YEAR FROM NOW())::int",
+  const conds: Prisma.Sql[] = [
+    Prisma.sql`fb.month = EXTRACT(MONTH FROM NOW())::int`,
+    Prisma.sql`fb.year = EXTRACT(YEAR FROM NOW())::int`,
   ];
-  if (filters.vehicleTypeId) conditions.push('v."vehicleTypeId" = ' + filters.vehicleTypeId);
+  if (filters.vehicleTypeId) conds.push(Prisma.sql`v."vehicleTypeId" = ${Number(filters.vehicleTypeId)}`);
 
-  const where = conditions.join(' AND ');
+  const where = Prisma.join(conds, ' AND ');
 
-  const result = await prisma.$queryRawUnsafe<any[]>(`
+  const result = await prisma.$queryRaw<any[]>`
     SELECT vb.id AS vehicle_budget_id, vb."vehicleId" AS vehicle_id,
       v.plate, v."economicNumber" AS eco,
       vb."assignedAmount" AS assigned, vb."spentAmount" AS spent,
@@ -199,7 +199,7 @@ export async function getBudgetProgress(filters: DashboardFilters = {}) {
     JOIN fuel_budgets fb ON fb.id = vb."budgetId"
     WHERE ${where}
     ORDER BY pct_used DESC
-  `);
+  `;
   return result.map(formatBudgetRow);
 }
 
@@ -249,17 +249,19 @@ function formatBudgetRow(row: any) {
   };
 }
 
-async function queryVehicleRanking(limit: number, direction: string, filters: DashboardFilters) {
-  const conditions: string[] = ['fl."kmPerLiter" IS NOT NULL'];
-  if (filters.vehicleTypeId) conditions.push('v."vehicleTypeId" = ' + filters.vehicleTypeId);
-  if (filters.operatorId) conditions.push('fl."operatorId" = ' + filters.operatorId);
-  if (filters.dateFrom) conditions.push("fl.\"loadDate\" >= '" + filters.dateFrom + "'");
-  if (filters.dateTo) conditions.push("fl.\"loadDate\" <= '" + filters.dateTo + "'");
-  if (!filters.dateFrom && !filters.dateTo) conditions.push("fl.\"loadDate\" >= date_trunc('month', NOW())");
+async function queryVehicleRanking(limit: number, direction: 'ASC' | 'DESC', filters: DashboardFilters) {
+  const conds: Prisma.Sql[] = [Prisma.sql`fl."kmPerLiter" IS NOT NULL`];
+  if (filters.vehicleTypeId) conds.push(Prisma.sql`v."vehicleTypeId" = ${Number(filters.vehicleTypeId)}`);
+  if (filters.operatorId)    conds.push(Prisma.sql`fl."operatorId" = ${Number(filters.operatorId)}`);
+  if (filters.dateFrom)      conds.push(Prisma.sql`fl."loadDate" >= ${new Date(filters.dateFrom)}`);
+  if (filters.dateTo)        conds.push(Prisma.sql`fl."loadDate" <= ${new Date(filters.dateTo)}`);
+  if (!filters.dateFrom && !filters.dateTo) conds.push(Prisma.sql`fl."loadDate" >= date_trunc('month', NOW())`);
 
-  const where = conditions.join(' AND ');
+  const where = Prisma.join(conds, ' AND ');
+  // direction es identificador SQL (no valor), no es parametrizable: validamos con whitelist
+  const order = direction === 'ASC' ? Prisma.sql`ASC` : Prisma.sql`DESC`;
 
-  const result = await prisma.$queryRawUnsafe<any[]>(`
+  const result = await prisma.$queryRaw<any[]>`
     SELECT v.id AS vehicle_id, v.plate, v."economicNumber" AS eco,
       vt.name AS vehicle_type, vt."expectedKmPerLiter" AS expected_kml,
       AVG(fl."kmPerLiter") AS avg_kml, COUNT(fl.id) AS load_count,
@@ -269,7 +271,7 @@ async function queryVehicleRanking(limit: number, direction: string, filters: Da
     JOIN fuel_loads fl ON fl."vehicleId" = v.id
     WHERE ${where}
     GROUP BY v.id, v.plate, v."economicNumber", vt.name, vt."expectedKmPerLiter"
-    ORDER BY avg_kml ${direction} LIMIT ${limit}
-  `);
+    ORDER BY avg_kml ${order} LIMIT ${Number(limit)}
+  `;
   return result.map(formatRankingRow);
 }
