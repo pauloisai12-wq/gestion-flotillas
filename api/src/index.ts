@@ -89,7 +89,11 @@ app.use(
       // Permitir requests sin origin (curl, mobile apps)
       if (!origin) return cb(null, true);
       if (env.CORS_ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
-      if (NGROK_ORIGIN_REGEX.test(origin)) return cb(null, true);
+      // Subdominios de ngrok: SOLO fuera de producción (en prod los túneles
+      // son públicos y permitirlos abriría CSRF al API).
+      if (env.NODE_ENV !== 'production' && NGROK_ORIGIN_REGEX.test(origin)) {
+        return cb(null, true);
+      }
       logger.warn({ origin }, 'CORS bloqueado');
       return cb(new Error('Origen no permitido por CORS'));
     },
