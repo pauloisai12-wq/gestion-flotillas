@@ -18,11 +18,9 @@ import {
   Wallet,
   ChevronLeft,
   ChevronRight,
-  FileText,
   Building2,
   Landmark,
   ClipboardList,
-  Receipt,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -161,7 +159,11 @@ export default function Sidebar() {
   const [collapsed, setCollapsed] = useState(false);
 
   useEffect(() => {
+    // Hidratación desde localStorage: solo accesible en cliente, así que
+    // SSR renderiza con default y el effect ajusta tras hidratar. Este
+    // patrón es el caso típico que la regla set-state-in-effect ignora.
     const v = localStorage.getItem(STORAGE_KEY);
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (v === '1') setCollapsed(true);
   }, []);
 

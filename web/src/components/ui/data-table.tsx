@@ -72,6 +72,9 @@ export default function DataTable<T>({
   const useClientSort = !onSortingChange;
   const effectiveSorting = useClientSort ? internalSorting : sorting;
 
+  // useReactTable retorna funciones no memoizables (limitación documentada
+  // de TanStack Table). El compilador de React saltea esta sección.
+  // eslint-disable-next-line react-hooks/incompatible-library
   const table = useReactTable({
     data,
     columns,

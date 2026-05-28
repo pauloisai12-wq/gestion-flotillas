@@ -90,7 +90,6 @@ export default function TicketDetailPage({ params }: { params: Promise<{ id: str
             context={budgetCtx}
             selectedQuoteId={effectiveSelected}
             onSelect={setSelectedQuote}
-            apiBase={API_BASE}
           />
         </section>
       )}
@@ -433,7 +432,7 @@ function WorkshopActions({
             <MinusCircle className="size-4 text-muted-foreground" /> Declinaste cotizar
           </div>
           {myQuote.declineReason && (
-            <p className="text-xs text-muted-foreground italic">"{myQuote.declineReason}"</p>
+            <p className="text-xs text-muted-foreground italic">&ldquo;{myQuote.declineReason}&rdquo;</p>
           )}
         </div>
       );

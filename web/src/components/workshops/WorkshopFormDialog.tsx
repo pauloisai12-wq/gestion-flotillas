@@ -27,6 +27,9 @@ export default function WorkshopFormDialog({
   const [address, setAddress] = useState('');
   const [error, setError] = useState('');
 
+  // Poblar al editar — sincroniza el form con el prop `workshop`. Resets
+  // legítimos en respuesta al cambio de prop.
+  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     if (workshop) {
       setRfc(workshop.rfc); setLegalName(workshop.legalName); setTradeName(workshop.tradeName ?? '');
@@ -36,6 +39,7 @@ export default function WorkshopFormDialog({
     }
     setError('');
   }, [workshop, open]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();

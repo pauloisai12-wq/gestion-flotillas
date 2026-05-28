@@ -27,20 +27,18 @@ interface Props {
   context: BudgetContext;
   selectedQuoteId: number | null;
   onSelect: (quoteId: number) => void;
-  apiBase?: string;
 }
 
 function fmtCurrency(n: number): string {
   return n.toLocaleString('es-MX', { style: 'currency', currency: 'MXN' });
 }
 
-export function BudgetVsQuotesCard({ context, selectedQuoteId, onSelect, apiBase }: Props) {
+export function BudgetVsQuotesCard({ context, selectedQuoteId, onSelect }: Props) {
   const { budget, quotes } = context;
 
   // ── Calcular el meter del presupuesto ──
   const totalPool = budget ? budget.baseAmount + budget.rolloverIn : 0;
   const spentPct = totalPool > 0 && budget ? (budget.spentAmount / totalPool) * 100 : 0;
-  const availablePct = Math.max(0, 100 - spentPct);
 
   return (
     <div className="border border-border rounded-lg overflow-hidden bg-card">
@@ -126,7 +124,6 @@ export function BudgetVsQuotesCard({ context, selectedQuoteId, onSelect, apiBase
             const isSelected = selectedQuoteId === q.id;
             const isSubmitted = q.status === 'SUBMITTED' && q.amount != null;
             const isDeclined = q.status === 'DECLINED';
-            const isPending = q.status === 'PENDING';
             const fitsBudget = q.fits === true;
 
             // Estados de selección

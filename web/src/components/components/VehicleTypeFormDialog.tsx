@@ -2,7 +2,7 @@
 // REEMPLAZA: Versión compatible con React 19 (sin setState en useEffect)
 'use client';
 
-import { useRef, useActionState } from 'react';
+import { useRef } from 'react';
 import {
   Dialog,
   DialogContent,

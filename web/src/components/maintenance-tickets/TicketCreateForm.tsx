@@ -121,7 +121,7 @@ export function TicketCreateForm({ initialVehicleId }: { initialVehicleId?: numb
       <div>
         <label className="block text-sm font-medium mb-1.5">¿Qué tipo de problema?</label>
         <p className="text-xs text-muted-foreground mb-2">
-          Selecciona la categoría más cercana. Si no estás seguro, deja "Otro".
+          Selecciona la categoría más cercana. Si no estás seguro, deja &ldquo;Otro&rdquo;.
         </p>
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
           {(Object.keys(CATEGORY_LABELS) as FailureCategory[]).map((cat) => (
@@ -145,7 +145,7 @@ export function TicketCreateForm({ initialVehicleId }: { initialVehicleId?: numb
       <div>
         <label className="block text-sm font-medium mb-1.5">Descripción del problema</label>
         <p className="text-xs text-muted-foreground mb-2">
-          Cuenta con tus palabras qué pasa. Sé específico (ej: "chillan los frenos al frenar a baja velocidad").
+          Cuenta con tus palabras qué pasa. Sé específico (ej: &ldquo;chillan los frenos al frenar a baja velocidad&rdquo;).
         </p>
         <textarea
           value={description}

@@ -33,7 +33,10 @@ export default function StationFormDialog({ open, onClose, station }: Props) {
   const [address, setAddress] = useState('');
   const [error, setError] = useState('');
 
-  // Poblar al editar
+  // Poblar al editar — sincroniza el form con el prop `station` que cambia
+  // al abrir el diálogo en modo edición. El bloque entero hace resets
+  // legítimos en respuesta al cambio de prop.
+  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     if (station) {
       setRfc(station.rfc ?? '');
@@ -48,6 +51,7 @@ export default function StationFormDialog({ open, onClose, station }: Props) {
     }
     setError('');
   }, [station, open]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();

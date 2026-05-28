@@ -32,6 +32,7 @@ export function PhotosGallery({
           className="aspect-square rounded-md overflow-hidden border border-border bg-muted hover:border-primary transition-colors group"
           title={att.fileName}
         >
+          {/* eslint-disable-next-line @next/next/no-img-element -- thumbnails de uploads dinámicos sin dimensiones conocidas */}
           <img
             src={url(att.fileUrl)}
             alt={att.fileName}

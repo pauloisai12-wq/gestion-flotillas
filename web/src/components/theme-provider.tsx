@@ -37,6 +37,9 @@ export function ThemeProvider({
   const [theme, setThemeState] = useState<Theme>(defaultTheme);
   const [resolvedTheme, setResolvedTheme] = useState<"light" | "dark">("light");
 
+  // Hidratación de tema desde localStorage: solo accesible en cliente; SSR
+  // renderiza con default y el effect lo ajusta una vez tras hidratar.
+  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     const stored = localStorage.getItem(STORAGE_KEY) as Theme | null;
     const initial = stored ?? defaultTheme;
@@ -45,6 +48,7 @@ export function ThemeProvider({
     setResolvedTheme(resolved);
     applyTheme(resolved);
   }, [defaultTheme]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   useEffect(() => {
     if (theme !== "system") return;

@@ -17,7 +17,7 @@ import { Button } from '@/components/ui/button';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import DocsStatusChart from '@/components/charts/DocsStatusChart';
-import { Truck, ShieldAlert, FileText, AlertTriangle, CheckCircle2, Search } from 'lucide-react';
+import { Truck, ShieldAlert, FileText, CheckCircle2, Search } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import Link from 'next/link';
 

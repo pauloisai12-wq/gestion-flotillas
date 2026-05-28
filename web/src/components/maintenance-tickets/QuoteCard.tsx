@@ -75,7 +75,7 @@ export function QuoteCard({
             <MinusCircle className="size-3.5" /> Declinó
           </div>
           {quote.declineReason && (
-            <p className="text-xs italic">"{quote.declineReason}"</p>
+            <p className="text-xs italic">&ldquo;{quote.declineReason}&rdquo;</p>
           )}
         </div>
       )}

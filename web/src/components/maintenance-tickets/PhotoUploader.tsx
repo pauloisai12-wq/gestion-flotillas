@@ -8,7 +8,7 @@
 'use client';
 
 import { useRef, useState } from 'react';
-import { Upload, X, ImagePlus, Loader2, AlertCircle } from 'lucide-react';
+import { X, ImagePlus, Loader2, AlertCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useUploadAttachment } from '@/hooks/useMaintenanceTickets';
 
@@ -152,6 +152,9 @@ export function PhotoUploader(props: Props) {
               key={`${f.name}-${i}`}
               className="relative aspect-square rounded-md overflow-hidden border border-border bg-muted group"
             >
+              {/* Preview con createObjectURL local — next/image necesita src
+                  servible y dimensiones conocidas, no aplica para File objects. */}
+              {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src={URL.createObjectURL(f)}
                 alt={f.name}
