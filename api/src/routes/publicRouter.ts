@@ -47,7 +47,17 @@ async function consumeCsrfToken(token: string, ip: string): Promise<boolean> {
 // Verificación de Cloudflare Turnstile (opcional)
 // ─────────────────────────────────────────────
 async function verifyTurnstile(token: string, ip: string): Promise<boolean> {
-  if (!env.TURNSTILE_SECRET) return true; // en dev sin captcha pasa
+  if (!env.TURNSTILE_SECRET) {
+    // Sin secret solo se bypasea en development local. En staging o
+    // production el portal es público en internet: si falta el secret
+    // (por config olvidada), fallamos cerrado en vez de abrir la puerta.
+    if (env.NODE_ENV === 'development') return true;
+    logger.error(
+      { nodeEnv: env.NODE_ENV },
+      'Turnstile sin TURNSTILE_SECRET fuera de development: rechazando submit',
+    );
+    return false;
+  }
   try {
     const res = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
       method: 'POST',
