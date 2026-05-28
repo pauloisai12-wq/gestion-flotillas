@@ -6,6 +6,7 @@ import { Router, Request, Response } from 'express';
 import * as dashboardService from '../services/dashboardService';
 import { DashboardFilters } from '../services/dashboardService';
 import { requireRole, RoleGroups } from '../middlewares/roleMiddleware';
+import { ah } from '../lib/asyncHandler';
 
 const router = Router();
 
@@ -22,61 +23,61 @@ function extractFilters(req: Request): DashboardFilters {
   };
 }
 
-router.get('/summary', requireDashboardAccess, async function (req: Request, res: Response) {
-  try {
+router.get(
+  '/summary',
+  requireDashboardAccess,
+  ah(async (req: Request, res: Response) => {
     const summary = await dashboardService.getDashboardSummary(extractFilters(req));
     res.json(summary);
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
-  }
-});
+  }),
+);
 
-router.get('/fuel-trend', requireDashboardAccess, async function (req: Request, res: Response) {
-  try {
+router.get(
+  '/fuel-trend',
+  requireDashboardAccess,
+  ah(async (req: Request, res: Response) => {
     const trend = await dashboardService.getFuelMonthlyTrend(extractFilters(req));
     res.json(trend);
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
-  }
-});
+  }),
+);
 
-router.get('/vehicle-ranking/top', requireDashboardAccess, async function (req: Request, res: Response) {
-  try {
+router.get(
+  '/vehicle-ranking/top',
+  requireDashboardAccess,
+  ah(async (req: Request, res: Response) => {
     const limit = Number(req.query.limit) || 10;
     const ranking = await dashboardService.getVehicleRankingTop(limit, extractFilters(req));
     res.json(ranking);
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
-  }
-});
+  }),
+);
 
-router.get('/vehicle-ranking/bottom', requireDashboardAccess, async function (req: Request, res: Response) {
-  try {
+router.get(
+  '/vehicle-ranking/bottom',
+  requireDashboardAccess,
+  ah(async (req: Request, res: Response) => {
     const limit = Number(req.query.limit) || 10;
     const ranking = await dashboardService.getVehicleRankingBottom(limit, extractFilters(req));
     res.json(ranking);
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
-  }
-});
+  }),
+);
 
-router.get('/operator-ranking', requireDashboardAccess, async function (req: Request, res: Response) {
-  try {
+router.get(
+  '/operator-ranking',
+  requireDashboardAccess,
+  ah(async (req: Request, res: Response) => {
     const limit = Number(req.query.limit) || 10;
     const ranking = await dashboardService.getOperatorRanking(limit, extractFilters(req));
     res.json(ranking);
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
-  }
-});
+  }),
+);
 
-router.get('/budget-progress', requireDashboardAccess, async function (req: Request, res: Response) {
-  try {
+router.get(
+  '/budget-progress',
+  requireDashboardAccess,
+  ah(async (req: Request, res: Response) => {
     const progress = await dashboardService.getBudgetProgress(extractFilters(req));
     res.json(progress);
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
-  }
-});
+  }),
+);
 
 export default router;
