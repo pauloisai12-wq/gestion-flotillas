@@ -105,40 +105,80 @@ export async function getUpcomingServices(vehicleId: number): Promise<UpcomingSe
 }
 
 /**
- * Revisa TODOS los vehículos y retorna los servicios que están en WARNING o OVERDUE.
+ * Revisa TODOS los vehículos y retorna los servicios en WARNING u OVERDUE.
  * Útil para el dashboard y para el job de alertas.
+ *
+ * Implementación en una sola query (LATERAL JOIN para el último
+ * mantenimiento por par vehículo×servicio), en vez del antiguo N×M de
+ * llamar getUpcomingServices() por cada vehículo.
  */
 export async function getAllPendingServices() {
-  const vehicles = await prisma.vehicle.findMany({
-    where: { isActive: true },
-    select: {
-      id: true,
-      plate: true,
-      economicNumber: true,
-      currentOdometer: true,
-      vehicleTypeId: true,
-    },
-  });
+  type Row = {
+    vehicle_id: number;
+    plate: string;
+    economic_number: string;
+    current_odometer: number;
+    service_id: number;
+    service_name: string;
+    interval_km: number;
+    last_km: number | null;
+    last_date: Date | null;
+  };
 
-  const allPending: Array<UpcomingService & { vehicleId: number; plate: string; economicNumber: string }> = [];
+  const rows = await prisma.$queryRaw<Row[]>`
+    SELECT
+      v.id AS vehicle_id,
+      v.plate,
+      v."economicNumber" AS economic_number,
+      v."currentOdometer" AS current_odometer,
+      sc.id AS service_id,
+      sc.name AS service_name,
+      sc."intervalKm" AS interval_km,
+      mr.odometer AS last_km,
+      mr."serviceDate" AS last_date
+    FROM vehicles v
+    JOIN service_catalog sc ON sc."vehicleTypeId" = v."vehicleTypeId"
+    LEFT JOIN LATERAL (
+      SELECT odometer, "serviceDate"
+      FROM maintenance_records
+      WHERE "vehicleId" = v.id AND "serviceId" = sc.id
+      ORDER BY "serviceDate" DESC
+      LIMIT 1
+    ) mr ON true
+    WHERE v."isActive" = true
+  `;
 
-  for (const vehicle of vehicles) {
-    const services = await getUpcomingServices(vehicle.id);
+  const allPending: Array<
+    UpcomingService & { vehicleId: number; plate: string; economicNumber: string }
+  > = [];
 
-    for (const s of services) {
-      if (s.status === 'WARNING' || s.status === 'OVERDUE') {
-        allPending.push({
-          ...s,
-          vehicleId: vehicle.id,
-          plate: vehicle.plate,
-          economicNumber: vehicle.economicNumber,
-        });
-      }
-    }
+  for (const row of rows) {
+    const lastKm = row.last_km ?? 0;
+    const kmSinceLast = row.current_odometer - lastKm;
+    const progressPercent = Math.round((kmSinceLast / row.interval_km) * 100);
+    if (progressPercent < 80) continue; // descartamos los OK aquí mismo
+
+    const nextServiceKm = lastKm + row.interval_km;
+    const remainingKm = nextServiceKm - row.current_odometer;
+    const status: 'WARNING' | 'OVERDUE' = progressPercent >= 100 ? 'OVERDUE' : 'WARNING';
+
+    allPending.push({
+      vehicleId: row.vehicle_id,
+      plate: row.plate,
+      economicNumber: row.economic_number,
+      serviceId: row.service_id,
+      name: row.service_name,
+      intervalKm: row.interval_km,
+      lastMaintenanceKm: row.last_km,
+      lastMaintenanceDate: row.last_date ? row.last_date.toISOString() : null,
+      nextServiceKm,
+      currentOdometer: row.current_odometer,
+      progressPercent,
+      status,
+      remainingKm,
+    });
   }
 
-  // Ordenar por urgencia global
   allPending.sort((a, b) => a.remainingKm - b.remainingKm);
-
   return allPending;
 }
