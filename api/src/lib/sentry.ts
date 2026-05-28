@@ -8,16 +8,18 @@
 
 import * as Sentry from '@sentry/node';
 import { nodeProfilingIntegration } from '@sentry/profiling-node';
+import { env } from '../config/env';
 
-const dsn = process.env.SENTRY_DSN;
+// env.ts ya validó el formato del DSN. Si está vacío, Sentry no se activa.
+const dsn = env.SENTRY_DSN;
 
 if (dsn) {
   Sentry.init({
     dsn,
-    environment: process.env.NODE_ENV ?? 'development',
+    environment: env.NODE_ENV,
     integrations: [nodeProfilingIntegration()],
-    // Captura del 10% de transacciones (ajustable por carga real)
-    tracesSampleRate: process.env.NODE_ENV === 'production' ? 0.1 : 1.0,
+    // Captura del 10% de transacciones en prod, todas en dev/test.
+    tracesSampleRate: env.NODE_ENV === 'production' ? 0.1 : 1.0,
     profilesSampleRate: 0.1,
     // No mandes secretos al servicio externo
     beforeSend(event) {
@@ -29,7 +31,7 @@ if (dsn) {
     },
   });
   // eslint-disable-next-line no-console
-  console.log('[Sentry] Inicializado para entorno:', process.env.NODE_ENV);
+  console.log('[Sentry] Inicializado para entorno:', env.NODE_ENV);
 }
 
 export { Sentry };

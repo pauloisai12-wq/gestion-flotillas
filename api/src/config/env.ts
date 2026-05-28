@@ -37,6 +37,16 @@ const envSchema = z.object({
   RATE_LIMIT_PUBLIC_WINDOW_SEC: z.coerce.number().int().min(10).default(60),
 
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
+
+  // Sentry (opcional). Si está vacío, la integración no se inicializa.
+  // Si se provee, debe tener formato de DSN (https://...@...sentry.io/...).
+  SENTRY_DSN: z
+    .string()
+    .optional()
+    .refine(
+      (v) => !v || /^https?:\/\/[^@]+@[^/]+\/\d+$/.test(v),
+      'SENTRY_DSN no tiene un formato válido (esperado: https://<key>@<host>/<projectId>)',
+    ),
 });
 
 const parsed = envSchema.safeParse(process.env);
