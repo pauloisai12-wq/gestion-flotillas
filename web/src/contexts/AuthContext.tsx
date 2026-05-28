@@ -5,7 +5,6 @@
 
 import { createContext, useContext, useCallback, ReactNode, useSyncExternalStore } from 'react';
 import { useRouter } from 'next/navigation';
-import Cookies from 'js-cookie';
 import api from '@/lib/api';
 
 export type UserRole =
@@ -30,7 +29,7 @@ interface AuthContextType {
   user: User | null;
   loading: boolean;
   login: (email: string, password: string) => Promise<void>;
-  logout: () => void;
+  logout: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -53,30 +52,25 @@ function subscribe(listener: () => void) {
   };
 }
 
-// Verificar token al cargar (una sola vez)
+// Verificar sesión al cargar (una sola vez). La cookie es httpOnly, no
+// podemos detectarla desde JS — preguntamos al backend con /auth/me y
+// decidimos por la respuesta.
 let initialized = false;
 function initAuth() {
   if (initialized) return;
   initialized = true;
 
-  const token = Cookies.get('token');
-  if (token) {
-    api.get('/auth/me')
-      .then((res) => {
-        externalUser = res.data.data;
-      })
-      .catch(() => {
-        Cookies.remove('token');
-        externalUser = null;
-      })
-      .finally(() => {
-        externalLoading = false;
-        emitChange();
-      });
-  } else {
-    externalLoading = false;
-    emitChange();
-  }
+  api.get('/auth/me')
+    .then((res) => {
+      externalUser = res.data.data;
+    })
+    .catch(() => {
+      externalUser = null;
+    })
+    .finally(() => {
+      externalLoading = false;
+      emitChange();
+    });
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -87,16 +81,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const router = useRouter();
 
   const login = useCallback(async (email: string, password: string) => {
+    // El backend emite Set-Cookie httpOnly con el token. El cliente solo
+    // consume el user de la respuesta — el token no se almacena en JS.
     const res = await api.post('/auth/login', { email, password });
-    const { token, user: userData } = res.data.data;
-    Cookies.set('token', token, { expires: 1 / 3 });
-    externalUser = userData;
+    externalUser = res.data.data.user;
     emitChange();
     router.push('/dashboard');
   }, [router]);
 
-  const logout = useCallback(() => {
-    Cookies.remove('token');
+  const logout = useCallback(async () => {
+    // El backend borra la cookie httpOnly; aquí solo limpiamos el estado.
+    try {
+      await api.post('/auth/logout');
+    } catch {
+      /* aun si falla, salimos del cliente */
+    }
     externalUser = null;
     emitChange();
     router.push('/login');
