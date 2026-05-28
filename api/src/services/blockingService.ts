@@ -80,9 +80,7 @@ export async function checkVehicleCompliance(vehicleId: number) { // <-- CORRECC
     } else {
       await notifyByRole({
         role: 'SUPERVISOR_VEHICLES',
-        // CORRECCIÓN: 'as any' apaga el error de TypeScript temporalmente.
-        // IMPORTANTE: Asegúrate de agregar VEHICLE_UNBLOCKED a tu Enum de Prisma / Typescript.
-        type: 'VEHICLE_UNBLOCKED' as any, 
+        type: 'VEHICLE_UNBLOCKED',
         title: 'Vehiculo desbloqueado',
         message: `Vehiculo ${vehicleId} desbloqueado. Todos los documentos vigentes.`,
         entityRef: `vehicle:${vehicleId}`,
@@ -90,7 +88,7 @@ export async function checkVehicleCompliance(vehicleId: number) { // <-- CORRECC
 
       await notifyByRole({
         role: 'ADMIN',
-        type: 'VEHICLE_UNBLOCKED' as any, // <-- CORRECCIÓN
+        type: 'VEHICLE_UNBLOCKED',
         title: 'Vehiculo desbloqueado',
         message: `Vehiculo ${vehicleId} desbloqueado. Todos los documentos vigentes.`,
         entityRef: `vehicle:${vehicleId}`,
@@ -179,14 +177,14 @@ export async function runDailyComplianceCheck() {
   for (const vehicleId of toUnblock) {
     await notifyByRole({
       role: 'SUPERVISOR_VEHICLES',
-      type: 'VEHICLE_UNBLOCKED' as any, // TODO: añadir VEHICLE_UNBLOCKED al enum NotificationType
+      type: 'VEHICLE_UNBLOCKED',
       title: 'Vehiculo desbloqueado',
       message: `Vehiculo ${vehicleId} desbloqueado. Todos los documentos vigentes.`,
       entityRef: `vehicle:${vehicleId}`,
     });
     await notifyByRole({
       role: 'ADMIN',
-      type: 'VEHICLE_UNBLOCKED' as any,
+      type: 'VEHICLE_UNBLOCKED',
       title: 'Vehiculo desbloqueado',
       message: `Vehiculo ${vehicleId} desbloqueado. Todos los documentos vigentes.`,
       entityRef: `vehicle:${vehicleId}`,
