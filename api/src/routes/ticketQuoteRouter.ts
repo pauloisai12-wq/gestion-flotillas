@@ -6,6 +6,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import multer from 'multer';
 import path from 'path';
+import crypto from 'crypto';
 import { RoleGroups, requireRole } from '../middlewares/roleMiddleware';
 import * as ticketService from '../services/maintenanceTicketService';
 import { TicketError } from '../services/maintenanceTicketService';
@@ -22,13 +23,14 @@ const pdfStorage = multer.diskStorage({
     cb(null, path.join(__dirname, '../../uploads/maintenance-tickets/quotes'));
   },
   filename: (_req, file, cb) => {
-    cb(null, `${Date.now()}-${file.originalname}`);
+    // Renombrado seguro con UUID; el filtro de abajo ya garantiza extensión .pdf.
+    cb(null, `${crypto.randomUUID()}.pdf`);
   },
 });
 
 const pdfUpload = multer({
   storage: pdfStorage,
-  limits: { fileSize: 10 * 1024 * 1024 },
+  limits: { fileSize: 10 * 1024 * 1024, files: 1 },
   fileFilter: (_req, file, cb) => {
     if (path.extname(file.originalname).toLowerCase() === '.pdf') return cb(null, true);
     cb(new Error('La cotización debe ser un archivo PDF'));

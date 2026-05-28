@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import multer from 'multer';
 import path from 'path';
+import crypto from 'crypto';
 import { documentSchema } from '../validators/documentValidator';
 import * as documentService from '../services/documentService';
 import { roleMiddleware } from '../middlewares/roleMiddleware';
@@ -10,14 +11,16 @@ const storage = multer.diskStorage({
     cb(null, path.join(__dirname, '../../uploads/documents'));
   },
   filename: (_req, file, cb) => {
-    const uniqueName = `${Date.now()}-${file.originalname}`;
-    cb(null, uniqueName);
+    // Renombrado seguro: UUID + extensión normalizada (ya validada por fileFilter).
+    // El nombre original del cliente nunca toca el filesystem.
+    const ext = path.extname(file.originalname).toLowerCase();
+    cb(null, `${crypto.randomUUID()}${ext}`);
   },
 });
 
 const upload = multer({
   storage,
-  limits: { fileSize: 10 * 1024 * 1024 },
+  limits: { fileSize: 10 * 1024 * 1024, files: 1 },
   fileFilter: (_req, file, cb) => {
     const allowed = ['.pdf', '.jpg', '.jpeg', '.png', '.webp'];
     const ext = path.extname(file.originalname).toLowerCase();

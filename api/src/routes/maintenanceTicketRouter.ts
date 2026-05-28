@@ -8,6 +8,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import multer from 'multer';
 import path from 'path';
+import crypto from 'crypto';
 import { RoleGroups, requireRole } from '../middlewares/roleMiddleware';
 import * as ticketService from '../services/maintenanceTicketService';
 import { TicketError } from '../services/maintenanceTicketService';
@@ -30,13 +31,15 @@ const photoStorage = multer.diskStorage({
     cb(null, path.join(__dirname, '../../uploads/maintenance-tickets/photos'));
   },
   filename: (_req, file, cb) => {
-    cb(null, `${Date.now()}-${file.originalname}`);
+    // Renombrado seguro con UUID; la extensión la valida fileFilter abajo.
+    const ext = path.extname(file.originalname).toLowerCase();
+    cb(null, `${crypto.randomUUID()}${ext}`);
   },
 });
 
 const photoUpload = multer({
   storage: photoStorage,
-  limits: { fileSize: 5 * 1024 * 1024 },
+  limits: { fileSize: 5 * 1024 * 1024, files: 10 },
   fileFilter: (_req, file, cb) => {
     const allowed = ['.jpg', '.jpeg', '.png'];
     const ext = path.extname(file.originalname).toLowerCase();
