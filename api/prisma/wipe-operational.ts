@@ -4,11 +4,13 @@
 import 'dotenv/config';
 import { PrismaClient } from '@prisma/client';
 
-const prisma = new PrismaClient({
-  datasources: {
-    db: { url: 'postgresql://flotillas_user:flotillas_pass_2026@localhost:5433/flotillas_db' },
-  },
-});
+// Guardia contra ejecución accidental en producción
+if (process.env.NODE_ENV === 'production') {
+  console.error('❌ wipe-operational.ts NO se puede ejecutar con NODE_ENV=production');
+  process.exit(1);
+}
+
+const prisma = new PrismaClient(); // DATABASE_URL del .env
 
 async function main() {
   console.log('🧹 Wipe operacional iniciando...');

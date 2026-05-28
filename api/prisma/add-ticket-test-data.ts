@@ -11,11 +11,7 @@ import 'dotenv/config';
 import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcrypt';
 
-const prisma = new PrismaClient({
-  datasources: {
-    db: { url: 'postgresql://flotillas_user:flotillas_pass_2026@localhost:5433/flotillas_db' },
-  },
-});
+const prisma = new PrismaClient(); // DATABASE_URL del .env
 
 const ROUNDS = Number(process.env.BCRYPT_ROUNDS) || 10;
 
