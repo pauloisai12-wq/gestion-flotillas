@@ -1,4 +1,4 @@
-import { Router, Request, Response } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import multer from 'multer';
 import path from 'path';
 import crypto from 'crypto';
@@ -34,33 +34,33 @@ const upload = multer({
 
 const router = Router();
 
-router.get('/vehicles/:vehicleId/documents', async (req: Request, res: Response) => {
+router.get('/vehicles/:vehicleId/documents', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const vehicleId = parseInt(req.params.vehicleId);
     if (isNaN(vehicleId)) return res.status(400).json({ error: 'ID inválido' });
     const docs = await documentService.getDocumentsByVehicle(vehicleId);
     res.json(docs);
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
-  }
+  } catch (error) {
+    next(error);
+    }
 });
 
-router.get('/documents/:id', async (req: Request, res: Response) => {
+router.get('/documents/:id', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: 'ID inválido' });
     const doc = await documentService.getDocumentById(id);
     res.json(doc);
-  } catch (error: any) {
-    res.status(404).json({ error: error.message });
-  }
+  } catch (error) {
+    next(error);
+    }
 });
 
 router.post(
   '/documents',
   roleMiddleware(['ADMIN', 'SUPERVISOR_VEHICLES']),
   upload.single('file'),
-  async (req: Request, res: Response) => {
+  async (req: Request, res: Response, next: NextFunction) => {
     try {
       const body = {
         vehicleId: parseInt(req.body.vehicleId),
@@ -87,9 +87,9 @@ router.post(
 
       const doc = await documentService.createDocument(parsed.data, file);
       res.status(201).json(doc);
-    } catch (error: any) {
-      res.status(400).json({ error: error.message });
-    }
+    } catch (error) {
+      next(error);
+      }
   }
 );
 
@@ -97,7 +97,7 @@ router.put(
   '/documents/:id',
   roleMiddleware(['ADMIN', 'SUPERVISOR_VEHICLES']),
   upload.single('file'),
-  async (req: Request, res: Response) => {
+  async (req: Request, res: Response, next: NextFunction) => {
     try {
       const id = parseInt(req.params.id);
       if (isNaN(id)) return res.status(400).json({ error: 'ID inválido' });
@@ -127,24 +127,24 @@ router.put(
 
       const doc = await documentService.updateDocument(id, parsed.data, file);
       res.json(doc);
-    } catch (error: any) {
-      res.status(400).json({ error: error.message });
-    }
+    } catch (error) {
+      next(error);
+      }
   }
 );
 
 router.delete(
   '/documents/:id',
   roleMiddleware(['ADMIN', 'SUPERVISOR_VEHICLES']),
-  async (req: Request, res: Response) => {
+  async (req: Request, res: Response, next: NextFunction) => {
     try {
       const id = parseInt(req.params.id);
       if (isNaN(id)) return res.status(400).json({ error: 'ID inválido' });
       await documentService.deleteDocument(id);
       res.json({ message: 'Documento eliminado correctamente' });
-    } catch (error: any) {
-      res.status(400).json({ error: error.message });
-    }
+    } catch (error) {
+      next(error);
+      }
   }
 );
 

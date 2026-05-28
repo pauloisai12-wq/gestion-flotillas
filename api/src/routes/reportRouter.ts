@@ -1,7 +1,7 @@
 // Archivo: /flotillas/api/src/routes/reportRouter.ts
 // ARCHIVO NUEVO — Endpoints de reportes
 
-import { Router, Request, Response } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import { roleMiddleware } from '../middlewares/roleMiddleware';
 import { generateReportSchema } from '../validators/reportValidator';
 import {
@@ -18,7 +18,7 @@ const reportRouter = Router();
 reportRouter.post(
   '/generate',
   roleMiddleware(['ADMIN']),
-  async (req: Request, res: Response) => {
+  async (req: Request, res: Response, next: NextFunction) => {
     try {
       const parsed = generateReportSchema.safeParse(req.body);
       if (!parsed.success) {
@@ -34,9 +34,9 @@ reportRouter.post(
 
       const result = await requestReportGeneration(month, year, requestedBy);
       res.status(202).json({ data: result });
-    } catch (error: any) {
-      res.status(409).json({ error: error.message });
-    }
+    } catch (error) {
+      next(error);
+      }
   }
 );
 
@@ -44,16 +44,16 @@ reportRouter.post(
 reportRouter.get(
   '/',
   roleMiddleware(['ADMIN']),
-  async (req: Request, res: Response) => {
+  async (req: Request, res: Response, next: NextFunction) => {
     try {
       const page = parseInt(req.query.page as string) || 1;
       const limit = parseInt(req.query.limit as string) || 20;
 
       const result = await getReportHistory(page, limit);
       res.json(result);
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
-    }
+    } catch (error) {
+      next(error);
+      }
   }
 );
 
@@ -61,7 +61,7 @@ reportRouter.get(
 reportRouter.get(
   '/:id',
   roleMiddleware(['ADMIN']),
-  async (req: Request, res: Response) => {
+  async (req: Request, res: Response, next: NextFunction) => {
     try {
       const id = parseInt(req.params.id);
       const report = await getReportById(id);
@@ -72,9 +72,9 @@ reportRouter.get(
       }
 
       res.json({ data: report });
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
-    }
+    } catch (error) {
+      next(error);
+      }
   }
 );
 
@@ -82,7 +82,7 @@ reportRouter.get(
 reportRouter.get(
   '/:id/download/:type',
   roleMiddleware(['ADMIN']),
-  async (req: Request, res: Response) => {
+  async (req: Request, res: Response, next: NextFunction) => {
     try {
       const id = parseInt(req.params.id);
       const fileType = req.params.type; // 'pdf' o 'excel'
@@ -135,9 +135,9 @@ reportRouter.get(
       }
 
       res.download(safePath, fileName);
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
-    }
+    } catch (error) {
+      next(error);
+      }
   }
 );
 

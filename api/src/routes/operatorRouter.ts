@@ -1,13 +1,13 @@
 // Archivo: /flotillas/api/src/routes/operatorRouter.ts
 // NUEVO: Endpoints REST para operadores
-import { Router, Request, Response } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import { operatorSchema } from '../validators/operatorValidator';
 import * as operatorService from '../services/operatorService';
 import { roleMiddleware } from '../middlewares/roleMiddleware';
 
 const router = Router();
 
-router.get('/', async (req: Request, res: Response) => {
+router.get('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const query = {
       page: req.query.page ? parseInt(req.query.page as string) : 1,
@@ -16,23 +16,23 @@ router.get('/', async (req: Request, res: Response) => {
     };
     const result = await operatorService.getAllOperators(query);
     res.json(result);
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
-  }
+  } catch (error) {
+    next(error);
+    }
 });
 
-router.get('/:id', async (req: Request, res: Response) => {
+router.get('/:id', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: 'ID inválido' });
     const operator = await operatorService.getOperatorById(id);
     res.json(operator);
-  } catch (error: any) {
-    res.status(404).json({ error: error.message });
-  }
+  } catch (error) {
+    next(error);
+    }
 });
 
-router.post('/', roleMiddleware(['ADMIN', 'SUPERVISOR_VEHICLES']), async (req: Request, res: Response) => {
+router.post('/', roleMiddleware(['ADMIN', 'SUPERVISOR_VEHICLES']), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const parsed = operatorSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -43,12 +43,12 @@ router.post('/', roleMiddleware(['ADMIN', 'SUPERVISOR_VEHICLES']), async (req: R
     }
     const operator = await operatorService.createOperator(parsed.data);
     res.status(201).json(operator);
-  } catch (error: any) {
-    res.status(400).json({ error: error.message });
-  }
+  } catch (error) {
+    next(error);
+    }
 });
 
-router.put('/:id', roleMiddleware(['ADMIN', 'SUPERVISOR_VEHICLES']), async (req: Request, res: Response) => {
+router.put('/:id', roleMiddleware(['ADMIN', 'SUPERVISOR_VEHICLES']), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: 'ID inválido' });
@@ -62,20 +62,20 @@ router.put('/:id', roleMiddleware(['ADMIN', 'SUPERVISOR_VEHICLES']), async (req:
     }
     const operator = await operatorService.updateOperator(id, parsed.data);
     res.json(operator);
-  } catch (error: any) {
-    res.status(400).json({ error: error.message });
-  }
+  } catch (error) {
+    next(error);
+    }
 });
 
-router.delete('/:id', roleMiddleware(['ADMIN']), async (req: Request, res: Response) => {
+router.delete('/:id', roleMiddleware(['ADMIN']), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: 'ID inválido' });
     await operatorService.deleteOperator(id);
     res.json({ message: 'Operador eliminado correctamente' });
-  } catch (error: any) {
-    res.status(400).json({ error: error.message });
-  }
+  } catch (error) {
+    next(error);
+    }
 });
 
 export default router;
