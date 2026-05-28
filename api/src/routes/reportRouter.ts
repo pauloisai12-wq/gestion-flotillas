@@ -119,24 +119,22 @@ reportRouter.get(
         return;
       }
 
-      // Los archivos están en el volumen Docker del worker
-      // Necesitamos acceder al volumen compartido
-      const volumePath = path.resolve(__dirname, '..', '..', '..', 'storage', 'reports');
-      const localFileName = path.basename(filePath);
-      const fullPath = path.join(volumePath, localFileName);
+      // Confinar la descarga al directorio del volumen compartido
+      // (defensa contra path traversal si filePath en BD viniera contaminado)
+      const baseDir = path.resolve(__dirname, '..', '..', '..', 'storage', 'reports');
+      const safePath = path.resolve(baseDir, path.basename(filePath));
 
-      // Verificar si el archivo existe en el volumen
-      if (!fs.existsSync(fullPath)) {
-        // Si no está en el volumen, intentar la ruta directa
-        if (!fs.existsSync(filePath)) {
-          res.status(404).json({ error: 'Archivo no encontrado en disco' });
-          return;
-        }
-        res.download(filePath, fileName);
+      if (!safePath.startsWith(baseDir + path.sep)) {
+        res.status(403).json({ error: 'Ruta no permitida' });
         return;
       }
 
-      res.download(fullPath, fileName);
+      if (!fs.existsSync(safePath)) {
+        res.status(404).json({ error: 'Archivo no encontrado en disco' });
+        return;
+      }
+
+      res.download(safePath, fileName);
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
