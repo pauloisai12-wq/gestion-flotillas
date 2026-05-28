@@ -233,7 +233,7 @@ router.get('/monthly-pool', requireRole(RoleGroups.ANY_AUTH), async (req: Reques
 });
 
 /** PUT /monthly-pool — declarar/actualizar el pote total del mes */
-router.put('/monthly-pool', async (req: Request, res: Response) => {
+router.put('/monthly-pool', requireRole(RoleGroups.BUDGET_MANAGERS), async (req: Request, res: Response) => {
   const schema = {
     kind: req.body.kind,
     year: Number(req.body.year),
