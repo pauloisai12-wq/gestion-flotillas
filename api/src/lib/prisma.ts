@@ -4,6 +4,7 @@
 import { PrismaClient } from '@prisma/client';
 import type { ITXClientDenyList } from '@prisma/client/runtime/library';
 import { getAuditContext } from './auditContext';
+import { env } from '../config/env';
 
 const AUDITED_MODELS = new Set([
   'Vehicle',
@@ -20,7 +21,16 @@ const AUDITED_MODELS = new Set([
 
 const AUDITED_OPS = new Set(['create', 'update', 'delete', 'upsert']);
 
-const basePrisma = new PrismaClient();
+// Log explícito por entorno: en producción silencioso (los errores caen al
+// errorHandler global); en dev mostramos warn+error para detectar problemas
+// de modelado sin saturar la consola con cada query.
+//
+// El tamaño del connection pool se controla por query string en DATABASE_URL,
+// p. ej. ?connection_limit=20. Default de Prisma = num_cpus * 2 + 1, que en
+// el contenedor puede quedar corto si hay BullMQ + healthchecks + jobs.
+const basePrisma = new PrismaClient({
+  log: env.NODE_ENV === 'production' ? ['error'] : ['warn', 'error'],
+});
 
 const prisma = basePrisma.$extends({
   name: 'audit-log',
