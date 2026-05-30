@@ -138,12 +138,22 @@ Redis se levanta sin `--requirepass`, `REDIS_URL` no lleva credenciales, y aunqu
 | C-3 Redis sin password | ✅ aplicado | `api/src/config/queue.ts` · `worker/main.py` · `docker-compose.yml` · `.env.example` · `.env.staging.example` |
 | C-4 xlsx vulnerable | ✅ aplicado | `api/package.json`→0.20.3 (CDN) · `web/package.json` (eliminado) · ambos `package-lock.json` regenerados |
 
-### ⚠️ Acción manual requerida antes del próximo `docker compose up`
-C-3 hace **obligatoria** la variable `REDIS_PASSWORD`. En tu `.env` real (no versionado) debes:
-1. Añadir `REDIS_PASSWORD=<contraseña fuerte>`.
-2. Actualizar `REDIS_URL` para incluirla: `REDIS_URL=redis://:<contraseña fuerte>@redis:6379`.
+### Casi-críticos remediados (2026-05-29)
 
-Si no se define, el compose **falla rápido** con `REDIS_PASSWORD es obligatorio` (comportamiento intencional). El volumen `redis_data` existente no tiene password; un Redis nuevo con `--requirepass` lo exigirá a todos los clientes (API vía ioredis y worker ya quedaron preparados).
+| ID | Estado | Archivos |
+|----|--------|----------|
+| A-1 `downloadReport` (descargas rotas) | ✅ aplicado | `web/src/hooks/useReports.ts` (cliente axios + `responseType:'blob'`, sin header manual) |
+| A-15 `trust proxy` | ✅ aplicado | `api/src/config/env.ts` (`TRUST_PROXY`) · `api/src/index.ts` (`app.set('trust proxy')`) · `api/src/middlewares/rateLimit.ts` (comentario) · `.env(.staging).example` |
+| A-5b `NODE_ENV` sin fallback | ✅ aplicado | `docker-compose.yml:69` (`${NODE_ENV:?…}` + aviso) |
+
+Verificado: `npm run build` (tsc) exit 0 y `npx tsc --noEmit` (web) exit 0.
+
+### ⚠️ Acción manual requerida antes del próximo `docker compose up`
+Dos variables son ahora **obligatorias** en tu `.env` real (no versionado); si faltan, el compose **falla rápido** a propósito:
+1. **`REDIS_PASSWORD`** (C-3): añade `REDIS_PASSWORD=<contraseña fuerte>` y actualiza `REDIS_URL=redis://:<contraseña fuerte>@redis:6379`. El volumen `redis_data` existente no tiene password; un Redis nuevo con `--requirepass` lo exigirá a todos los clientes (API vía ioredis y worker ya quedaron preparados).
+2. **`NODE_ENV`** (A-5b): declara explícitamente `NODE_ENV=development` (local/ngrok privado) o `NODE_ENV=production` (staging/expuesto). Ya no hay fallback silencioso a `development`.
+
+Opcional pero recomendado: **`TRUST_PROXY`** (A-15) — `false` en local; en staging detrás de Caddy+Next usa el nº de saltos (`2`, verificando que Next reenvíe `X-Forwarded-For`).
 
 ### Notas
 - **C-2b (`/uploads` con `authMiddleware`):** funciona porque el frontend accede a `/uploads` vía proxy mismo-origen de Next (`NEXT_PUBLIC_API_URL=""` en el build). Si en el futuro se sirve el web con un `NEXT_PUBLIC_API_URL` absoluto cross-origin, el render directo de `<img>` a `/uploads` se rompería (la cookie `lax` no viaja cross-site) y habría que migrar a endpoints autenticados con streaming.

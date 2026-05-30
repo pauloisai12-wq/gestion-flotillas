@@ -27,6 +27,14 @@ const envSchema = z.object({
     .default('http://localhost:3000')
     .transform((v) => v.split(',').map((s) => s.trim()).filter(Boolean)),
 
+  // Confianza en proxies para recuperar la IP real del cliente (X-Forwarded-For).
+  // Detrás de Caddy/Next, sin esto req.ip colapsa a la IP interna del proxy y
+  // rate-limit / CSRF-por-IP / remoteip de Turnstile dejan de discriminar.
+  // Valores: 'false' (sin proxy), un nº de saltos confiables ('1','2',…), una
+  // lista de IPs/subredes separadas por coma, o 'true' (NO recomendado: permite
+  // spoofing de X-Forwarded-For).
+  TRUST_PROXY: z.string().default('false'),
+
   // Captcha del portal público (opcional en dev, obligatorio en prod)
   TURNSTILE_SECRET: z.string().optional(),
 

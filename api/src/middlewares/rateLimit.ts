@@ -47,7 +47,12 @@ export function rateLimit(opts: RateLimitOptions) {
   };
 }
 
-/** Obtiene la IP real del cliente (respeta X-Forwarded-For si trust proxy está activado) */
+/**
+ * Obtiene la IP del cliente. req.ip respeta X-Forwarded-For SOLO si TRUST_PROXY
+ * está configurado (ver env.ts + app.set('trust proxy') en index.ts). Detrás de
+ * Caddy/Next debe estar configurado, o todas las peticiones comparten la IP
+ * interna del proxy y el rate-limit por IP deja de aislar a cada cliente.
+ */
 export function getClientIp(req: Request): string {
   return (req.ip || req.socket.remoteAddress || 'unknown').toString();
 }

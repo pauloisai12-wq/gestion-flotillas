@@ -48,6 +48,18 @@ import { healthHandler } from './lib/health';
 const app = express();
 
 // ═══════════════════════════════════════════════════
+// 0. Trust proxy — detrás de Caddy/Next, req.ip debe reflejar la IP real del
+//    cliente (X-Forwarded-For) o rate-limit, CSRF-por-IP y el remoteip de
+//    Turnstile colapsan a la IP interna del proxy. Configurable por TRUST_PROXY
+//    (nº de saltos); nunca 'true' por defecto (permitiría spoofing de XFF).
+// ═══════════════════════════════════════════════════
+const trustProxy = env.TRUST_PROXY.trim();
+if (trustProxy === 'true') app.set('trust proxy', true);
+else if (trustProxy === 'false' || trustProxy === '') app.set('trust proxy', false);
+else if (/^\d+$/.test(trustProxy)) app.set('trust proxy', Number(trustProxy));
+else app.set('trust proxy', trustProxy.split(',').map((s) => s.trim()));
+
+// ═══════════════════════════════════════════════════
 // 1. Headers de seguridad (Helmet)
 // ═══════════════════════════════════════════════════
 app.use(
