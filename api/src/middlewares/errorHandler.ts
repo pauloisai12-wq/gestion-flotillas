@@ -98,10 +98,13 @@ export function errorHandler(err: Error, req: Request, res: Response, _next: Nex
         });
         return;
       default:
+        // No exponer el código crudo de Prisma (P2034/P2024/…) al cliente en
+        // producción: revela motor/clase de fallo interno. Solo en dev.
         res.status(500).json({
           error: 'Error de base de datos',
-          code: err.code,
+          code: 'DB_ERROR',
           requestId,
+          ...(env.NODE_ENV !== 'production' ? { prismaCode: err.code } : {}),
         });
         return;
     }

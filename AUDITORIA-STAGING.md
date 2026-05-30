@@ -158,3 +158,32 @@ Opcional pero recomendado: **`TRUST_PROXY`** (A-15) — `false` en local; en sta
 ### Notas
 - **C-2b (`/uploads` con `authMiddleware`):** funciona porque el frontend accede a `/uploads` vía proxy mismo-origen de Next (`NEXT_PUBLIC_API_URL=""` en el build). Si en el futuro se sirve el web con un `NEXT_PUBLIC_API_URL` absoluto cross-origin, el render directo de `<img>` a `/uploads` se rompería (la cookie `lax` no viaja cross-site) y habría que migrar a endpoints autenticados con streaming.
 - **C-4:** los `node_modules` locales aún tienen la versión vieja (solo se regeneró el lockfile con `--package-lock-only`); el `docker compose build` instalará `xlsx@0.20.3` vía `npm ci`. Para desarrollo local fuera de Docker, correr `npm install` en `api/`.
+
+### Advertencias remediadas (2026-05-29)
+
+Todas las 🟠 ADVERTENCIA aplicadas, salvo dos documentadas como N/A. Verificado: `tsc` API + `tsc --noEmit` web + `py_compile` worker (todos exit 0).
+
+| ID | Estado |
+|----|--------|
+| A-1 descargas rotas · A-15 trust proxy · A-5b NODE_ENV | ✅ (commit anterior) |
+| A-2 GET vehículos sin rol · A-3 GET operadores sin rol | ✅ roleMiddleware + scoping EXECUTOR |
+| A-16 /api/docs sin auth en prod | ✅ gate por NODE_ENV |
+| A-13 handlers async sin asyncHandler (budget + notes) | ✅ envueltos en `ah()` |
+| A-18 rate limiter no atómico + fail-open | ✅ Lua atómico + fail-closed en login |
+| A-19 `assignedAmount` → 500 en budget filtrado | ✅ query reescrita sobre vehicle_budgets |
+| A-12 rollover N+1 writes + timeout tx | ✅ `updateMany` + timeout 60s |
+| A-11 N+1 en getUpcomingServices | ✅ LEFT JOIN LATERAL |
+| A-20 `model` no mapeado en import | ✅ alias submodelo/version/linea |
+| A-5 CSRF panel | ✅ cookie `sameSite=strict` |
+| A-6 `.gitignore` · A-7 test key Turnstile · A-8 placeholders env · A-9 seed guard | ✅ |
+| A-21 cabeceras de seguridad del HTML | ✅ nosniff/X-Frame-Options/Referrer/HSTS (CSP diferida) |
+| **A-4** gating server-side de páginas | ⏩ **N/A — ya existía** como `web/src/proxy.ts` (Next 16 renombró `middleware`→`proxy`). El hallazgo fue falso negativo. |
+| **A-17** `/verify` enumeración/PII | ⏩ **Diferido** — mitigado por A-15; unificar mensajes requiere decisión de producto (el operador necesita ver el motivo de bloqueo). |
+
+### Mejoras aplicadas (selección de bajo riesgo)
+
+✅ `refreshViewsJob` validación de identificador · `errorHandler` no expone `err.code` de Prisma en prod · `authService` timing constante (hash dummy) + algoritmo HS256 fijado · `fuelLoadRouter` `Promise.all` · `queue` tipado `Job` · `vehicleGuard` sin `console.log` debug + logger · `docker-compose` Postgres/Redis a `127.0.0.1` · `worker/db.py` redacta la contraseña · `useReports` polling condicional (solo con reportes `PROCESSING`).
+
+### Mejoras diferidas (refactors grandes / cosméticos, sin valor de seguridad y con riesgo de regresión sin tests)
+
+⏸️ Split de `vehicleImportService.importVehiclesFromBuffer` (~190 líneas) y de `WorkshopActions` (tickets/[id]) · renombrar `parseInt`/`parseString` locales (shadowing) · tipar `BudgetTable`/`DocsStatusChart`/`$queryRaw` (eliminar `any`) · `vehicleService` documents `take:1` (riesgo de alterar el conteo en UI) · intervalos de polling de dashboards · `VehicleRankingChart` `enabled` por vista · `optimizePackageImports` · constantes de umbrales de presupuesto · índice `[vehicleId, loadDate]` en `FuelLoad` (requiere migración) · CSP estricta del HTML con nonce (requiere wiring + prueba en navegador). Recomendadas como limpieza posterior, no bloqueantes para staging.

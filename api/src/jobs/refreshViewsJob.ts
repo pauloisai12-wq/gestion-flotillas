@@ -20,17 +20,22 @@ export async function refreshMaterializedViews(): Promise<void> {
   console.log('[RefreshViews] Iniciando refresco de vistas materializadas...');
 
   // Refresco en paralelo: cada vista corre en su propia conexión del pool.
-  // Los nombres son constantes hardcodeadas (no input de usuario), por lo que
-  // la interpolación en $executeRawUnsafe es segura aquí.
+  // Los nombres son constantes hardcodeadas, pero validamos contra un patrón de
+  // identificador seguro antes de interpolar en $executeRawUnsafe: defensa por si
+  // alguna vez `views` llegara a poblarse desde config/BD (jamás debe).
+  const SAFE_IDENTIFIER = /^[a-z_][a-z0-9_]*$/;
   await Promise.all(
-    views.map((view) =>
-      prisma
+    views.map((view) => {
+      if (!SAFE_IDENTIFIER.test(view)) {
+        return Promise.reject(new Error(`Nombre de vista no permitido: ${view}`));
+      }
+      return prisma
         .$executeRawUnsafe(`REFRESH MATERIALIZED VIEW CONCURRENTLY "${view}"`)
         .then(() => console.log(`[RefreshViews] ✅ ${view} refrescada`))
         .catch((error) =>
           console.error(`[RefreshViews] ❌ Error refrescando ${view}:`, error),
-        ),
-    ),
+        );
+    }),
   );
 
   console.log('[RefreshViews] Refresco completado.');

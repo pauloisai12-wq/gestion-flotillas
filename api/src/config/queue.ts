@@ -2,7 +2,7 @@
 // Configuración central de BullMQ — conexión a Redis
 // Todos los jobs y workers del sistema usan esta configuración
 
-import { Queue, Worker, type ConnectionOptions } from 'bullmq';
+import { Queue, Worker, type ConnectionOptions, type Job } from 'bullmq';
 import { env } from './env';
 import { logger } from '../lib/logger';
 
@@ -48,8 +48,7 @@ export function createQueue(name: string): Queue {
  */
 export function createWorker(
   name: string,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  processor: (job: any) => Promise<void>
+  processor: (job: Job) => Promise<void>
 ): Worker {
   const worker = new Worker(name, processor, { connection: redisConnection });
 

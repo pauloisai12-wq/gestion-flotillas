@@ -35,8 +35,10 @@ router.get(
   ah(async (req, res) => {
     const vehicleId = parseInt(req.params.vehicleId);
     if (isNaN(vehicleId)) return res.status(400).json({ error: 'ID inválido' });
-    const loads = await fuelLoadService.getFuelLoadsByVehicle(vehicleId);
-    const avg = await fuelLoadService.getVehicleMovingAverage(vehicleId);
+    const [loads, avg] = await Promise.all([
+      fuelLoadService.getFuelLoadsByVehicle(vehicleId),
+      fuelLoadService.getVehicleMovingAverage(vehicleId),
+    ]);
     res.json({ loads, movingAverage: avg });
   }),
 );

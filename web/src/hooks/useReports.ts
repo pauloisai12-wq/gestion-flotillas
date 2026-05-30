@@ -39,7 +39,10 @@ export function useReports(page: number = 1) {
       const res = await api.get('/reports?page=' + page + '&limit=20');
       return res.data;
     },
-    refetchInterval: 10000, // Refrescar cada 10s para ver cuando termina un reporte
+    // Solo sondear (cada 10s) mientras haya un reporte generándose; los reportes
+    // se generan el día 1 del mes, así que el resto del tiempo no hay polling.
+    refetchInterval: (query) =>
+      query.state.data?.data.some((r) => r.status === 'PROCESSING') ? 10000 : false,
   });
 }
 

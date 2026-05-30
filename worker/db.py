@@ -120,8 +120,19 @@ def query_single_value(sql, params=None):
 
 
 # --- Prueba de conexión ---
+def _redact_url(url: str) -> str:
+    """Oculta la contraseña de una URL de conexión antes de imprimirla."""
+    if "://" in url and "@" in url:
+        scheme, rest = url.split("://", 1)
+        if "@" in rest:
+            creds, host = rest.split("@", 1)
+            user = creds.split(":", 1)[0]
+            return f"{scheme}://{user}:***@{host}"
+    return url
+
+
 if __name__ == "__main__":
-    print(f"Conectando a: {DATABASE_URL}")
+    print(f"Conectando a: {_redact_url(DATABASE_URL)}")
     try:
         with _checkout() as conn:
             cursor = conn.cursor()
