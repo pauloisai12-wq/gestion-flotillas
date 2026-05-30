@@ -40,6 +40,8 @@ authRouter.post(
     windowSec: env.RATE_LIMIT_LOGIN_WINDOW_SEC,
     keyBuilder: (req) => `login:${getClientIp(req)}:${(req.body?.email || '').toLowerCase()}`,
     message: 'Demasiados intentos de inicio de sesión. Espera un minuto.',
+    // Si Redis cae, NO desactivar la protección anti brute-force del login.
+    failClosed: true,
   }),
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {

@@ -125,14 +125,19 @@ export async function closeMonthAndRollover(input: CloseMonthInput) {
           },
         });
 
-        await tx.vehicleBudget.update({
-          where: { id: b.id },
-          data: { isClosed: true, closedAt: new Date() },
-        });
-
         rolledCount++;
       }
-    });
+
+      // Marcar todos los presupuestos del mes como cerrados en UNA sola escritura
+      // (en vez de un update por iteración): acorta el tiempo que la transacción
+      // queda abierta y reduce a la mitad las mutaciones.
+      if (openBudgets.length > 0) {
+        await tx.vehicleBudget.updateMany({
+          where: { id: { in: openBudgets.map((bb) => bb.id) } },
+          data: { isClosed: true, closedAt: new Date() },
+        });
+      }
+    }, { timeout: 60_000, maxWait: 10_000 });
 
     result.push({ kind: k, closed: openBudgets.length, rolledOver: rolledCount, remainderTotal: totalRemainder });
   }

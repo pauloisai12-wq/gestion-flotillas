@@ -159,7 +159,11 @@ app.use(
 // 4. Healthcheck + documentación OpenAPI (sin auth)
 // ═══════════════════════════════════════════════════
 app.get('/api/health', healthHandler);
-app.use('/api', docsRouter);  // expone /api/docs y /api/docs.json
+// Documentación OpenAPI: solo fuera de producción. En prod (ngrok/internet) no
+// publicamos el mapa completo de endpoints/schemas (reconocimiento de ataque).
+if (env.NODE_ENV !== 'production') {
+  app.use('/api', docsRouter); // expone /api/docs y /api/docs.json
+}
 
 // ═══════════════════════════════════════════════════
 // 5. RUTAS PÚBLICAS

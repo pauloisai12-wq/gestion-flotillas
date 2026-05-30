@@ -5,6 +5,7 @@
 import { Router, Request, Response } from 'express';
 import { PrismaClient, BudgetKind, Prisma } from '@prisma/client';
 import { requireRole, RoleGroups, Roles } from '../middlewares/roleMiddleware';
+import { ah } from '../lib/asyncHandler';
 import {
   assignBudgetSchema,
   distributeBudgetSchema,
@@ -17,7 +18,7 @@ const prisma = new PrismaClient();
 const router = Router();
 
 /** GET / — lista presupuestos con filtros (kind, year, month, vehicleId) */
-router.get('/', requireRole(RoleGroups.ANY_AUTH), async (req: Request, res: Response) => {
+router.get('/', requireRole(RoleGroups.ANY_AUTH), ah(async (req: Request, res: Response) => {
   const parsed = listBudgetsQuerySchema.safeParse(req.query);
   if (!parsed.success) {
     return res.status(400).json({ error: 'Query inválida', issues: parsed.error.issues });
@@ -60,10 +61,11 @@ router.get('/', requireRole(RoleGroups.ANY_AUTH), async (req: Request, res: Resp
   }));
 
   res.json({ data: serialized });
-});
+}));
 
-/** POST /assign — asignar baseAmount a UN vehículo en un periodo */
-router.post('/assign', async (req: Request, res: Response) => {
+/** POST /assign — asignar baseAmount a UN vehículo en un periodo.
+ *  requireRole(BUDGET_MANAGERS) como primera barrera; el check por kind afina luego. */
+router.post('/assign', requireRole(RoleGroups.BUDGET_MANAGERS), ah(async (req: Request, res: Response) => {
   const parsed = assignBudgetSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: 'Datos inválidos', issues: parsed.error.issues });
@@ -113,10 +115,10 @@ router.post('/assign', async (req: Request, res: Response) => {
       spentAmount: Number(budget.spentAmount),
     },
   });
-});
+}));
 
 /** POST /distribute — asignación masiva (valida contra pote) */
-router.post('/distribute', async (req: Request, res: Response) => {
+router.post('/distribute', requireRole(RoleGroups.BUDGET_MANAGERS), ah(async (req: Request, res: Response) => {
   const parsed = distributeBudgetSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: 'Datos inválidos', issues: parsed.error.issues });
@@ -168,24 +170,24 @@ router.post('/distribute', async (req: Request, res: Response) => {
   );
 
   res.json({ data: { count: results.length } });
-});
+}));
 
 /** POST /close-month — cerrar mes + rollover idempotente (admin) */
-router.post('/close-month', requireRole(RoleGroups.ADMIN_ONLY), async (req: Request, res: Response) => {
+router.post('/close-month', requireRole(RoleGroups.ADMIN_ONLY), ah(async (req: Request, res: Response) => {
   const parsed = closeMonthSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: 'Datos inválidos', issues: parsed.error.issues });
   }
   const result = await closeMonthAndRollover(parsed.data);
   res.json({ data: result });
-});
+}));
 
 // ─────────────────────────────────────────────
 // POTE MENSUAL TOTAL (MonthlyBudget)
 // ─────────────────────────────────────────────
 
 /** GET /monthly-pool — pote declarado + suma asignada + resumen */
-router.get('/monthly-pool', requireRole(RoleGroups.ANY_AUTH), async (req: Request, res: Response) => {
+router.get('/monthly-pool', requireRole(RoleGroups.ANY_AUTH), ah(async (req: Request, res: Response) => {
   const kind = (req.query.kind as BudgetKind) || 'FUEL';
   const year = Number(req.query.year) || new Date().getFullYear();
   const month = Number(req.query.month) || new Date().getMonth() + 1;
@@ -230,10 +232,10 @@ router.get('/monthly-pool', requireRole(RoleGroups.ANY_AUTH), async (req: Reques
       hasPool: !!pool,
     },
   });
-});
+}));
 
 /** PUT /monthly-pool — declarar/actualizar el pote total del mes */
-router.put('/monthly-pool', requireRole(RoleGroups.BUDGET_MANAGERS), async (req: Request, res: Response) => {
+router.put('/monthly-pool', requireRole(RoleGroups.BUDGET_MANAGERS), ah(async (req: Request, res: Response) => {
   const schema = {
     kind: req.body.kind,
     year: Number(req.body.year),
@@ -270,6 +272,6 @@ router.put('/monthly-pool', requireRole(RoleGroups.BUDGET_MANAGERS), async (req:
   });
 
   res.json({ data: { ...pool, totalAmount: Number(pool.totalAmount) } });
-});
+}));
 
 export default router;

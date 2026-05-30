@@ -45,6 +45,12 @@ const FIELD_MAP: Record<string, string> = {
   'mod': 'year',
   'modelo': 'year',
   'ano': 'year',
+  // En inventarios MX "MODELO" suele ser el AÑO (de ahí el mapeo de arriba). El
+  // nombre/submodelo del vehículo (Vehicle.model) viene en columnas aparte; sin
+  // estos alias el campo quedaba siempre en 'SIN DATO'.
+  'submodelo': 'model',
+  'version': 'model',
+  'linea': 'model',
   'motor': 'engineNumber',
   'nomotor': 'engineNumber',
   'serie': 'vin',
