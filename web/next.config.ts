@@ -31,7 +31,22 @@ const nextConfig: NextConfig = {
   // Cache largo y agresivo en assets estáticos optimizados por Next.
   // Next ya hashea estos archivos, así que son seguros de cachear "for ever".
   async headers() {
+    // Cabeceras de seguridad para el HTML que sirve Next (Helmet solo cubre la
+    // API en :3001, no las páginas en :3000). Cubre clickjacking, sniffing,
+    // referrer y HSTS. NOTA: una CSP estricta del HTML se deja para un follow-up
+    // con nonce — un script-src 'self' sin nonce rompe la hidratación de Next.
+    const securityHeaders = [
+      { key: "X-Content-Type-Options", value: "nosniff" },
+      { key: "X-Frame-Options", value: "DENY" },
+      { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+      { key: "Strict-Transport-Security", value: "max-age=31536000; includeSubDomains" },
+    ];
     return [
+      {
+        // Seguridad: aplica a todas las rutas (HTML y assets).
+        source: "/:path*",
+        headers: securityHeaders,
+      },
       {
         // Assets de Next.js (JS, CSS, fonts, imágenes optimizadas)
         source: "/_next/static/:path*",

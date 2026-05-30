@@ -2,7 +2,12 @@
 node_modules/
 
 # Variables de entorno (contraseñas, secretos)
+# Cubre .env, .env.staging, .env.production, .env.local, etc.
+# Solo se versionan las plantillas *.example.
 .env
+.env.*
+!.env.example
+!.env.staging.example
 
 # Next.js build
 .next/

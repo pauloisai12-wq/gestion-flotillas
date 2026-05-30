@@ -83,6 +83,24 @@ if (parsed.data.NODE_ENV === 'production') {
   if (parsed.data.BCRYPT_ROUNDS < 12) {
     errors.push('BCRYPT_ROUNDS debe ser >= 12 en producción');
   }
+  // Rechazar valores placeholder de las plantillas .env(.staging).example: un
+  // JWT_SECRET placeholder mide >64 chars y pasaría la validación de longitud,
+  // pero es público (está en el repo) → forjado de tokens.
+  const PLACEHOLDER_RE = /CAMBIA_ESTO|genera_con_openssl|tu_password|tu_usuario|tu_base_de_datos/i;
+  if (PLACEHOLDER_RE.test(parsed.data.JWT_SECRET)) {
+    errors.push('JWT_SECRET es un valor placeholder de .example; genera uno real con: openssl rand -base64 64');
+  }
+  if (PLACEHOLDER_RE.test(parsed.data.DATABASE_URL)) {
+    errors.push('DATABASE_URL contiene credenciales placeholder; reemplázalas por las reales');
+  }
+  if (PLACEHOLDER_RE.test(parsed.data.REDIS_URL)) {
+    errors.push('REDIS_URL contiene una contraseña placeholder; reemplázala por la real');
+  }
+  // Rechazar las "test keys" always-pass de Cloudflare Turnstile (1x/2x/3x0000…):
+  // pasan la validación de presencia pero dejan el captcha decorativo.
+  if (parsed.data.TURNSTILE_SECRET && /^[123]x0000/.test(parsed.data.TURNSTILE_SECRET)) {
+    errors.push('TURNSTILE_SECRET es una test key always-pass de Cloudflare; usa el secret real en producción');
+  }
   if (errors.length > 0) {
     console.error('❌ Producción rechazada por configuración insegura:\n');
     for (const e of errors) console.error(`  • ${e}`);

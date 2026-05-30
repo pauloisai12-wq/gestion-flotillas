@@ -18,12 +18,14 @@ const loginSchema = z.object({
 /**
  * Opciones de la cookie de sesión.
  * httpOnly: la cookie NO es accesible desde JavaScript (defensa contra XSS).
- * sameSite=lax: bloquea cross-site en requests "peligrosos" (POST cross-origin).
+ * sameSite=strict: la cookie NO viaja en NINGUNA petición iniciada por otro
+ *   sitio (cierra CSRF, incl. formularios multipart auto-enviados). El panel y
+ *   la API comparten origen vía el proxy de Next, así que no rompe el flujo.
  * secure: solo se envía sobre HTTPS en producción. En dev (HTTP) se permite.
  */
 const sessionCookieOpts: CookieOptions = {
   httpOnly: true,
-  sameSite: 'lax',
+  sameSite: 'strict',
   secure: env.NODE_ENV === 'production',
   path: '/',
   maxAge: 8 * 60 * 60 * 1000, // 8h, alineado con JWT_EXPIRES_IN por defecto

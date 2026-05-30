@@ -17,6 +17,11 @@ import bcrypt from 'bcrypt';
 const prisma = new PrismaClient(); // DATABASE_URL del .env
 
 async function main() {
+  // El seed crea cuentas con contraseñas demo y reactiva usuarios: jamás debe
+  // correr contra producción. Usa `prisma migrate deploy` para desplegar.
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('Seed deshabilitado en producción (crea cuentas demo). Usa migraciones, no el seed.');
+  }
   console.log('🌱 Seed v2 iniciando...');
 
   // ============================================
@@ -372,11 +377,13 @@ async function main() {
   // 10. USUARIOS — 4 roles nuevos
   // ============================================
   console.log('👤 Usuarios (upsert idempotente)...');
-  const saltRounds = 10;
-  const adminPass = await bcrypt.hash('admin123', saltRounds);
-  const superPass = await bcrypt.hash('super123', saltRounds);
-  const executorPass = await bcrypt.hash('ejecutor123', saltRounds);
-  const workshopPass = await bcrypt.hash('taller123', saltRounds);
+  // Coste bcrypt desde env (mismo mínimo que producción); contraseñas demo
+  // sobreescribibles por env para no hardcodear literales.
+  const saltRounds = Number(process.env.BCRYPT_ROUNDS) || 12;
+  const adminPass = await bcrypt.hash(process.env.SEED_ADMIN_PASSWORD ?? 'admin123', saltRounds);
+  const superPass = await bcrypt.hash(process.env.SEED_SUPER_PASSWORD ?? 'super123', saltRounds);
+  const executorPass = await bcrypt.hash(process.env.SEED_EXECUTOR_PASSWORD ?? 'ejecutor123', saltRounds);
+  const workshopPass = await bcrypt.hash(process.env.SEED_WORKSHOP_PASSWORD ?? 'taller123', saltRounds);
 
   const admin = await prisma.user.upsert({
     where: { email: 'admin@flotillas.com' },
