@@ -6,14 +6,23 @@ import { Queue, Worker, type ConnectionOptions } from 'bullmq';
 import { env } from './env';
 import { logger } from '../lib/logger';
 
-// Parseamos REDIS_URL (única fuente de verdad — validada en env.ts) para BullMQ
-// Soporta: redis://host:port, redis://host (puerto default 6379)
-function parseRedisUrl(url: string): { host: string; port: number } {
+// Parseamos REDIS_URL (única fuente de verdad — validada en env.ts) para BullMQ.
+// Soporta: redis://[:password@]host[:port] (puerto default 6379).
+// IMPORTANTE: se extraen también username/password — si Redis corre con
+// --requirepass y no se propagaran aquí, BullMQ no podría autenticarse.
+function parseRedisUrl(url: string): {
+  host: string;
+  port: number;
+  username?: string;
+  password?: string;
+} {
   try {
     const parsed = new URL(url);
     return {
       host: parsed.hostname || 'localhost',
       port: parsed.port ? Number(parsed.port) : 6379,
+      username: parsed.username ? decodeURIComponent(parsed.username) : undefined,
+      password: parsed.password ? decodeURIComponent(parsed.password) : undefined,
     };
   } catch {
     logger.warn({ url }, 'REDIS_URL inválida, usando defaults');

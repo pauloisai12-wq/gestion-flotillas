@@ -127,10 +127,15 @@ app.use(
 app.use(express.json({ limit: '2mb' }));
 app.use(httpLoggerMiddleware);
 
-// Headers de cache largos para /uploads — los archivos son inmutables
-// (cada upload genera un nombre único, nunca se sobrescriben).
+// Archivos subidos (documentos vehiculares, evidencia, cotizaciones). Contienen
+// PII sensible (pólizas, tarjetas de circulación, facturas), por lo que se
+// exigen credenciales: authMiddleware ANTES de express.static. El frontend
+// accede vía proxy mismo-origen de Next (rewrite /uploads → API), por lo que la
+// cookie httpOnly viaja y el render de <img> sigue funcionando.
+// Headers de cache largos: cada upload genera un nombre UUID único, inmutable.
 app.use(
   '/uploads',
+  authMiddleware,
   express.static(path.join(__dirname, '../uploads'), {
     maxAge: '30d',
     immutable: true,

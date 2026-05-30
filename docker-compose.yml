@@ -38,12 +38,17 @@ services:
     image: redis:7-alpine
     container_name: flotillas_redis
     restart: unless-stopped
+    # SEGURIDAD: Redis exige contraseña (--requirepass). Sin esto, cualquier
+    # proceso en la red Docker podría leer/escribir/inyectar jobs en las colas
+    # BullMQ (incluida la cola 'reports' que ejecuta el worker Python).
+    # REDIS_PASSWORD es OBLIGATORIO: el arranque falla si no está en .env.
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:?REDIS_PASSWORD es obligatorio - definelo en .env}"]
     ports:
       - "6379:6379"
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "--no-auth-warning", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -121,7 +126,7 @@ services:
     restart: unless-stopped
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-      REDIS_URL: redis://redis:6379
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
       PYTHONUNBUFFERED: 1
     depends_on:
       postgres:

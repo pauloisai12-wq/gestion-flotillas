@@ -7,6 +7,7 @@ import json
 import os
 import sys
 from datetime import datetime
+from urllib.parse import urlparse
 
 from bullmq import Worker
 
@@ -18,9 +19,13 @@ from generate_excel import generate_excel
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379")
 QUEUE_NAME = "reports"
 
-redis_parts = REDIS_URL.replace("redis://", "").split(":")
-REDIS_HOST = redis_parts[0]
-REDIS_PORT = int(redis_parts[1]) if len(redis_parts) > 1 else 6379
+# Parseo robusto de la URL (soporta redis://[:password@]host[:port]).
+# El split manual anterior ignoraba la contraseña; si Redis corre con
+# --requirepass el worker debe autenticarse o no podrá consumir la cola.
+_redis = urlparse(REDIS_URL)
+REDIS_HOST = _redis.hostname or "localhost"
+REDIS_PORT = _redis.port or 6379
+REDIS_PASSWORD = _redis.password or None
 
 
 def save_report_history(month, year, requested_by, pdf_path, excel_path,
@@ -248,14 +253,15 @@ async def main():
     print(f"  Inicio: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"{'='*60}\n")
 
+    connection = {"host": REDIS_HOST, "port": REDIS_PORT}
+    if REDIS_PASSWORD:
+        connection["password"] = REDIS_PASSWORD
+
     worker = Worker(
         QUEUE_NAME,
         process_report,
         {
-            "connection": {
-                "host": REDIS_HOST,
-                "port": REDIS_PORT
-            },
+            "connection": connection,
             "concurrency": 1
         }
     )

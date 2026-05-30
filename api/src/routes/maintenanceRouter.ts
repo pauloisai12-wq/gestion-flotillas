@@ -4,28 +4,36 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import multer from 'multer';
 import path from 'path';
+import crypto from 'crypto';
 import { roleMiddleware } from '../middlewares/roleMiddleware';
 import { maintenanceSchema } from '../validators/maintenanceValidator';
 import * as maintenanceRecordService from '../services/maintenanceRecordService';
 import { getUpcomingServices, getAllPendingServices } from '../services/maintenanceService';
 
-// Configuración de multer para evidencia fotográfica
+// Configuración de multer para evidencia fotográfica.
+// SEGURIDAD: el nombre original del cliente NUNCA toca el filesystem (evita
+// path traversal y extensiones maliciosas). Renombrado a UUID + extensión
+// normalizada, ya validada por fileFilter (mismo patrón que documentRouter).
+const ALLOWED_EXT = ['.jpg', '.jpeg', '.png', '.webp', '.pdf'];
+
 const storage = multer.diskStorage({
-  destination: function(req, file, cb) {
+  destination: function(_req, _file, cb) {
     cb(null, path.join(__dirname, '../../uploads/maintenance'));
   },
-  filename: function(req, file, cb) {
-    const uniqueName = Date.now() + '-' + file.originalname;
-    cb(null, uniqueName);
+  filename: function(_req, file, cb) {
+    const ext = path.extname(file.originalname).toLowerCase();
+    cb(null, `${crypto.randomUUID()}${ext}`);
   },
 });
 
 const upload = multer({
   storage,
   limits: { fileSize: 10 * 1024 * 1024 }, // 10MB máximo
-  fileFilter: function(req, file, cb) {
-    const allowed = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'];
-    if (allowed.includes(file.mimetype)) {
+  fileFilter: function(_req, file, cb) {
+    // Validar por EXTENSIÓN del originalname (no por mimetype, que es
+    // controlable por el cliente): así la extensión guardada queda en allowlist.
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (ALLOWED_EXT.includes(ext)) {
       cb(null, true);
     } else {
       cb(new Error('Tipo de archivo no permitido. Solo JPG, PNG, WEBP o PDF.'));

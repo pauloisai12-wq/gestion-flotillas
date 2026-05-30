@@ -4,7 +4,7 @@ import path from 'path';
 import crypto from 'crypto';
 import { documentSchema } from '../validators/documentValidator';
 import * as documentService from '../services/documentService';
-import { roleMiddleware } from '../middlewares/roleMiddleware';
+import { roleMiddleware, RoleGroups } from '../middlewares/roleMiddleware';
 
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => {
@@ -34,7 +34,7 @@ const upload = multer({
 
 const router = Router();
 
-router.get('/vehicles/:vehicleId/documents', async (req: Request, res: Response, next: NextFunction) => {
+router.get('/vehicles/:vehicleId/documents', roleMiddleware(RoleGroups.VEHICLE_READERS), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const vehicleId = parseInt(req.params.vehicleId);
     if (isNaN(vehicleId)) return res.status(400).json({ error: 'ID inválido' });
@@ -45,7 +45,7 @@ router.get('/vehicles/:vehicleId/documents', async (req: Request, res: Response,
     }
 });
 
-router.get('/documents/:id', async (req: Request, res: Response, next: NextFunction) => {
+router.get('/documents/:id', roleMiddleware(RoleGroups.VEHICLE_READERS), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: 'ID inválido' });
