@@ -2,6 +2,7 @@
 // NUEVO: Operaciones CRUD de documentos vehiculares con semáforo
 import prisma from '../lib/prisma';
 import { DocumentInput } from '../validators/documentValidator';
+import { NotFound, Conflict } from '../middlewares/errorHandler';
 
 /**
  * Calcula el estado del semáforo basado en la fecha de vencimiento.
@@ -51,7 +52,7 @@ export async function getDocumentsByVehicle(vehicleId: number) {
  */
 export async function getDocumentById(id: number) {
   const doc = await prisma.document.findUnique({ where: { id } });
-  if (!doc) throw new Error('Documento no encontrado');
+  if (!doc) throw NotFound('Documento');
   return {
     ...doc,
     trafficLight: calculateTrafficLight(doc.expiresAt),
@@ -69,7 +70,7 @@ export async function createDocument(
 ) {
   // Verificar que el vehículo existe
   const vehicle = await prisma.vehicle.findUnique({ where: { id: data.vehicleId } });
-  if (!vehicle) throw new Error('Vehículo no encontrado');
+  if (!vehicle) throw NotFound('Vehículo');
 
   // Verificar que no exista un documento del mismo tipo ya vigente
   const existing = await prisma.document.findFirst({
@@ -81,7 +82,7 @@ export async function createDocument(
   });
 
   if (existing) {
-    throw new Error(
+    throw Conflict(
       `Ya existe un documento de tipo "${docTypeLabel(data.type)}" vigente para este vehículo. ` +
       `Vence el ${existing.expiresAt.toLocaleDateString('es-MX')}. ` +
       `Puede editarlo o esperar a que venza.`

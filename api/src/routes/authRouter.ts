@@ -5,7 +5,6 @@ import { z } from 'zod/v4';
 import { login, getUserById } from '../services/authService';
 import { authMiddleware } from '../middlewares/authMiddleware';
 import { rateLimit, getClientIp } from '../middlewares/rateLimit';
-import { Unauthorized } from '../middlewares/errorHandler';
 import { env } from '../config/env';
 
 const authRouter = Router();
@@ -54,10 +53,8 @@ authRouter.post(
       res.cookie('token', result.token, sessionCookieOpts);
       res.json({ status: 'ok', message: 'Login exitoso', data: result });
     } catch (error) {
-      // Mensaje genérico para no filtrar si el email existe
-      if ((error as Error).message?.includes('inválid') || (error as Error).message?.includes('desactivado')) {
-        return next(Unauthorized('Credenciales inválidas'));
-      }
+      // authService lanza AppError (Unauthorized) con el mensaje seguro;
+      // el errorHandler global lo traduce al status/JSON correcto.
       next(error);
     }
   },

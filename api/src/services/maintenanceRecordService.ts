@@ -4,6 +4,7 @@
 
 import prisma from '../lib/prisma';
 import { MaintenanceInput } from '../validators/maintenanceValidator';
+import { NotFound, BadRequest } from '../middlewares/errorHandler';
 
 /**
  * Obtener todos los registros de mantenimiento con filtros opcionales.
@@ -70,17 +71,17 @@ export async function create(data: MaintenanceInput, evidenceUrl?: string) {
   const vehicle = await prisma.vehicle.findUnique({
     where: { id: data.vehicleId },
   });
-  if (!vehicle) throw new Error('Vehículo no encontrado');
+  if (!vehicle) throw NotFound('Vehículo');
 
   // Verificar que el servicio existe
   const service = await prisma.serviceCatalog.findUnique({
     where: { id: data.serviceId },
   });
-  if (!service) throw new Error('Servicio no encontrado');
+  if (!service) throw NotFound('Servicio');
 
   // Verificar que el servicio corresponde al tipo de vehículo
   if (service.vehicleTypeId !== vehicle.vehicleTypeId) {
-    throw new Error(
+    throw BadRequest(
       'El servicio "' + service.name +
       '" no corresponde al tipo de vehículo de esta unidad'
     );
@@ -128,7 +129,7 @@ export async function create(data: MaintenanceInput, evidenceUrl?: string) {
  */
 export async function update(id: number, data: MaintenanceInput, evidenceUrl?: string) {
   const existing = await prisma.maintenanceRecord.findUnique({ where: { id } });
-  if (!existing) throw new Error('Registro no encontrado');
+  if (!existing) throw NotFound('Registro');
 
   return prisma.maintenanceRecord.update({
     where: { id },
@@ -155,7 +156,7 @@ export async function update(id: number, data: MaintenanceInput, evidenceUrl?: s
  */
 export async function remove(id: number) {
   const existing = await prisma.maintenanceRecord.findUnique({ where: { id } });
-  if (!existing) throw new Error('Registro no encontrado');
+  if (!existing) throw NotFound('Registro');
 
   return prisma.maintenanceRecord.delete({ where: { id } });
 }

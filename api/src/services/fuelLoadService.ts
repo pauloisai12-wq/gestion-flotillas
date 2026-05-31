@@ -6,6 +6,7 @@ import prisma from '../lib/prisma';
 import { FuelLoadInput, PublicFuelLoadInput } from '../validators/fuelLoadValidator';
 import { checkAndReserveFuelBudget } from './budgetService';
 import { FuelLoadStatus, OdometerStatus, Prisma } from '@prisma/client';
+import { NotFound, BadRequest, AppError } from '../middlewares/errorHandler';
 
 interface FuelLoadQuery {
   page?: number;
@@ -77,10 +78,10 @@ export async function createFuelLoad(data: FuelLoadInput) {
     where: { id: data.vehicleId },
     include: { vehicleType: true },
   });
-  if (!vehicle) throw new Error('Vehículo no encontrado');
+  if (!vehicle) throw NotFound('Vehículo');
 
   const station = await prisma.approvedStation.findUnique({ where: { id: data.stationId } });
-  if (!station) throw new Error('Gasolinera no encontrada');
+  if (!station) throw new AppError(404, 'Gasolinera no encontrada', 'NOT_FOUND');
 
   // Match de operador por employeeNumber (si existe)
   const operatorMatch = await prisma.operator.findUnique({
@@ -91,7 +92,7 @@ export async function createFuelLoad(data: FuelLoadInput) {
   if (data.odometerStatus === 'OK') {
     const od = data.odometer as number;
     if (od < vehicle.currentOdometer) {
-      throw new Error(`El odómetro (${od} km) no puede ser menor al actual (${vehicle.currentOdometer} km)`);
+      throw BadRequest(`El odómetro (${od} km) no puede ser menor al actual (${vehicle.currentOdometer} km)`);
     }
   }
 
@@ -114,7 +115,12 @@ export async function createFuelLoad(data: FuelLoadInput) {
     // 1. Reservar presupuesto (lock + update)
     const reserve = await checkAndReserveFuelBudget(tx, data.vehicleId, data.amount);
     if (!reserve.allowed) {
-      throw new Error(`Excede presupuesto disponible: $${reserve.available?.toFixed(2)}`);
+      throw new AppError(
+        402,
+        `Excede presupuesto disponible: $${reserve.available?.toFixed(2)}`,
+        'BUDGET_EXCEEDED',
+        { available: reserve.available ?? 0 },
+      );
     }
 
     // 2. Insertar carga
@@ -158,12 +164,12 @@ export async function createPublicFuelLoad(data: PublicFuelLoadInput) {
     where: { economicNumber: data.vehicleEconomicNumber },
     include: { vehicleType: true },
   });
-  if (!vehicle) throw new Error('Número económico no encontrado');
-  if (!vehicle.isActive) throw new Error('Vehículo dado de baja');
-  if (vehicle.status === 'BLOCKED') throw new Error(`Vehículo bloqueado: ${vehicle.blockReason ?? 'documentos vencidos'}`);
+  if (!vehicle) throw NotFound('Número económico');
+  if (!vehicle.isActive) throw BadRequest('Vehículo dado de baja');
+  if (vehicle.status === 'BLOCKED') throw BadRequest(`Vehículo bloqueado: ${vehicle.blockReason ?? 'documentos vencidos'}`);
 
   const station = await prisma.approvedStation.findUnique({ where: { id: data.stationId } });
-  if (!station) throw new Error('Gasolinera no encontrada');
+  if (!station) throw new AppError(404, 'Gasolinera no encontrada', 'NOT_FOUND');
 
   // Match de operador
   const operatorMatch = await prisma.operator.findUnique({
@@ -174,7 +180,7 @@ export async function createPublicFuelLoad(data: PublicFuelLoadInput) {
   if (data.odometerStatus === 'OK') {
     const od = data.odometer as number;
     if (od < vehicle.currentOdometer) {
-      throw new Error(`Odómetro menor al actual del vehículo (${vehicle.currentOdometer} km)`);
+      throw BadRequest(`Odómetro menor al actual del vehículo (${vehicle.currentOdometer} km)`);
     }
   }
 

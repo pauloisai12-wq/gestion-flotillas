@@ -5,6 +5,7 @@ import prisma, { type Tx } from '../lib/prisma';
 import { BudgetKind, Prisma } from '@prisma/client';
 import { CloseMonthInput } from '../validators/budgetValidator';
 import { notifyByRole } from './notificationService';
+import { AppError } from '../middlewares/errorHandler';
 
 /** Retorna { year, month } del mes anterior al dado */
 function prevMonth(year: number, month: number) {
@@ -163,7 +164,7 @@ export async function recordBudgetSpending(vehicleId: number, amount: number) {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   return prisma.$transaction(async (tx) => {
     const res = await checkAndReserveFuelBudget(tx, vehicleId, amount);
-    if (res.reason === 'EXCEDE') throw new Error(`Excede presupuesto disponible: $${res.available}`);
+    if (res.reason === 'EXCEDE') throw new AppError(402, `Excede presupuesto disponible: $${res.available}`, 'BUDGET_EXCEEDED');
 
     // Notificaciones
     if (res.percentage && res.percentage >= 80 && res.percentage < 100) {

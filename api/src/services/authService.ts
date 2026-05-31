@@ -5,6 +5,7 @@ import bcrypt from 'bcrypt';
 import jwt, { type SignOptions } from 'jsonwebtoken';
 import { env } from '../config/env';
 import prisma from '../lib/prisma';
+import { Unauthorized } from '../middlewares/errorHandler';
 
 // Interfaz del payload que se guarda dentro del token JWT
 export interface JwtPayload {
@@ -42,11 +43,11 @@ export async function login(email: string, password: string): Promise<LoginRespo
   const passwordValid = await bcrypt.compare(password, user?.passwordHash ?? DUMMY_HASH);
 
   if (!user || !passwordValid) {
-    throw new Error('Credenciales inválidas');
+    throw Unauthorized('Credenciales inválidas');
   }
 
   if (!user.isActive) {
-    throw new Error('Usuario desactivado. Contacte al administrador.');
+    throw Unauthorized('Usuario desactivado. Contacte al administrador.');
   }
 
   const payload: JwtPayload = {
@@ -102,7 +103,7 @@ export async function getUserById(userId: number) {
   });
 
   if (!user || !user.isActive) {
-    throw new Error('Usuario no encontrado');
+    throw Unauthorized('Usuario no encontrado');
   }
 
   return user;

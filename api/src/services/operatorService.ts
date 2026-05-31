@@ -2,6 +2,7 @@
 // NUEVO: Operaciones CRUD de operadores
 import prisma from '../lib/prisma';
 import { OperatorInput } from '../validators/operatorValidator';
+import { NotFound, Conflict } from '../middlewares/errorHandler';
 
 interface OperatorQuery {
   page?: number;
@@ -62,7 +63,7 @@ export async function getOperatorById(id: number) {
     },
   });
 
-  if (!operator) throw new Error('Operador no encontrado');
+  if (!operator) throw NotFound('Operador');
   return operator;
 }
 
@@ -71,7 +72,7 @@ export async function createOperator(data: OperatorInput) {
     where: { licenseNumber: data.licenseNumber },
   });
   if (existing) {
-    throw new Error(`Ya existe un operador con la licencia "${data.licenseNumber}"`);
+    throw Conflict(`Ya existe un operador con la licencia "${data.licenseNumber}"`);
   }
 
   return prisma.operator.create({
@@ -95,7 +96,7 @@ export async function updateOperator(id: number, data: OperatorInput) {
     where: { licenseNumber: data.licenseNumber, NOT: { id } },
   });
   if (existing) {
-    throw new Error(`Ya existe otro operador con la licencia "${data.licenseNumber}"`);
+    throw Conflict(`Ya existe otro operador con la licencia "${data.licenseNumber}"`);
   }
 
   return prisma.operator.update({
@@ -116,7 +117,7 @@ export async function deleteOperator(id: number) {
   const operator = await getOperatorById(id);
 
   if (operator._count.fuelLoads > 0) {
-    throw new Error('No se puede eliminar: el operador tiene cargas de combustible registradas');
+    throw Conflict('No se puede eliminar: el operador tiene cargas de combustible registradas');
   }
 
   await prisma.vehicleAssignment.deleteMany({ where: { operatorId: id } });

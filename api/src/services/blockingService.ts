@@ -6,6 +6,7 @@
 import prisma from '../lib/prisma';
 import { VehicleStatus } from '@prisma/client';
 import { notifyByRole } from './notificationService';
+import { AppError } from '../middlewares/errorHandler';
 
 /**
  * Revisa los documentos de UN vehículo y actualiza su estado.
@@ -38,7 +39,7 @@ export async function checkVehicleCompliance(vehicleId: number) { // <-- CORRECC
   });
 
   if (!vehicle) {
-    throw new Error(`Vehiculo ${vehicleId} no encontrado`);
+    throw new AppError(404, `Vehiculo ${vehicleId} no encontrado`, 'NOT_FOUND');
   }
 
   const previousStatus = vehicle.status;

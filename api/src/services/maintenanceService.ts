@@ -3,6 +3,7 @@
 // Calcula próximos servicios y genera alertas basadas en kilometraje.
 
 import prisma from '../lib/prisma';
+import { NotFound } from '../middlewares/errorHandler';
 
 interface UpcomingService {
   serviceId: number;
@@ -33,7 +34,7 @@ export async function getUpcomingServices(vehicleId: number): Promise<UpcomingSe
     },
   });
 
-  if (!vehicle) throw new Error('Vehículo no encontrado');
+  if (!vehicle) throw NotFound('Vehículo');
 
   // Servicios del catálogo del tipo + último mantenimiento por servicio en UNA
   // sola query (LEFT JOIN LATERAL), en vez de N+1 findFirst por servicio.

@@ -2,6 +2,7 @@
 // NUEVO: Operaciones CRUD de tipos de vehículo contra la base de datos
 import prisma from '../lib/prisma';
 import { VehicleTypeInput } from '../validators/vehicleTypeValidator';
+import { NotFound, Conflict } from '../middlewares/errorHandler';
 
 /**
  * Obtener todos los tipos de vehículo.
@@ -33,7 +34,7 @@ export async function getVehicleTypeById(id: number) {
   });
 
   if (!vehicleType) {
-    throw new Error('Tipo de vehículo no encontrado');
+    throw NotFound('Tipo de vehículo');
   }
 
   return vehicleType;
@@ -50,7 +51,7 @@ export async function createVehicleType(data: VehicleTypeInput) {
   });
 
   if (existing) {
-    throw new Error(`Ya existe un tipo de vehículo con el nombre "${data.name}"`);
+    throw Conflict(`Ya existe un tipo de vehículo con el nombre "${data.name}"`);
   }
 
   return prisma.vehicleType.create({
@@ -78,7 +79,7 @@ export async function updateVehicleType(id: number, data: VehicleTypeInput) {
   });
 
   if (existing) {
-    throw new Error(`Ya existe otro tipo de vehículo con el nombre "${data.name}"`);
+    throw Conflict(`Ya existe otro tipo de vehículo con el nombre "${data.name}"`);
   }
 
   return prisma.vehicleType.update({
@@ -100,7 +101,7 @@ export async function deleteVehicleType(id: number) {
 
   // Verificar que no tiene vehículos asociados
   if (vehicleType._count.vehicles > 0) {
-    throw new Error(
+    throw Conflict(
       `No se puede eliminar: hay ${vehicleType._count.vehicles} vehículo(s) asociados a este tipo`
     );
   }

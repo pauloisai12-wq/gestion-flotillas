@@ -2,6 +2,7 @@
 // NUEVO: Operaciones CRUD de vehículos contra la base de datos
 import prisma from '../lib/prisma';
 import { VehicleInput } from '../validators/vehicleValidator';
+import { NotFound, Conflict, BadRequest } from '../middlewares/errorHandler';
 
 // Interfaz para filtros y paginación
 interface VehicleQuery {
@@ -111,7 +112,7 @@ export async function getVehicleById(id: number) {
   });
 
   if (!vehicle) {
-    throw new Error('Vehículo no encontrado');
+    throw NotFound('Vehículo');
   }
 
   return vehicle;
@@ -126,7 +127,7 @@ export async function createVehicle(data: VehicleInput) {
     where: { plate: data.plate },
   });
   if (existingPlate) {
-    throw new Error(`Ya existe un vehículo con la placa "${data.plate}"`);
+    throw Conflict(`Ya existe un vehículo con la placa "${data.plate}"`);
   }
 
   // Verificar número económico único
@@ -134,7 +135,7 @@ export async function createVehicle(data: VehicleInput) {
     where: { economicNumber: data.economicNumber },
   });
   if (existingEco) {
-    throw new Error(`Ya existe un vehículo con el número económico "${data.economicNumber}"`);
+    throw Conflict(`Ya existe un vehículo con el número económico "${data.economicNumber}"`);
   }
 
   // Verificar que el tipo de vehículo existe
@@ -142,7 +143,7 @@ export async function createVehicle(data: VehicleInput) {
     where: { id: data.vehicleTypeId },
   });
   if (!vehicleType) {
-    throw new Error('El tipo de vehículo seleccionado no existe');
+    throw BadRequest('El tipo de vehículo seleccionado no existe');
   }
 
   return prisma.vehicle.create({
@@ -178,7 +179,7 @@ export async function updateVehicle(id: number, data: VehicleInput) {
     where: { plate: data.plate, NOT: { id } },
   });
   if (existingPlate) {
-    throw new Error(`Ya existe otro vehículo con la placa "${data.plate}"`);
+    throw Conflict(`Ya existe otro vehículo con la placa "${data.plate}"`);
   }
 
   // Verificar número económico único
@@ -186,7 +187,7 @@ export async function updateVehicle(id: number, data: VehicleInput) {
     where: { economicNumber: data.economicNumber, NOT: { id } },
   });
   if (existingEco) {
-    throw new Error(`Ya existe otro vehículo con el número económico "${data.economicNumber}"`);
+    throw Conflict(`Ya existe otro vehículo con el número económico "${data.economicNumber}"`);
   }
 
   return prisma.vehicle.update({
@@ -219,7 +220,7 @@ export async function deleteVehicle(id: number) {
   const vehicle = await getVehicleById(id);
 
   if (vehicle._count.fuelLoads > 0 || vehicle._count.maintenanceRecords > 0) {
-    throw new Error(
+    throw Conflict(
       'No se puede eliminar: el vehículo tiene registros de combustible o mantenimiento asociados'
     );
   }

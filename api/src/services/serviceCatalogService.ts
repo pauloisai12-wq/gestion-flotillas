@@ -3,6 +3,7 @@
 
 import prisma from '../lib/prisma';
 import { ServiceCatalogInput } from '../validators/serviceCatalogValidator';
+import { NotFound, Conflict } from '../middlewares/errorHandler';
 
 /**
  * Obtener todos los servicios, opcionalmente filtrados por tipo de vehículo.
@@ -47,7 +48,7 @@ export async function create(data: ServiceCatalogInput) {
   const vehicleType = await prisma.vehicleType.findUnique({
     where: { id: data.vehicleTypeId },
   });
-  if (!vehicleType) throw new Error('Tipo de vehículo no encontrado');
+  if (!vehicleType) throw NotFound('Tipo de vehículo');
 
   // Verificar que no exista un servicio con el mismo nombre para ese tipo
   const existing = await prisma.serviceCatalog.findFirst({
@@ -57,7 +58,7 @@ export async function create(data: ServiceCatalogInput) {
     },
   });
   if (existing) {
-    throw new Error(
+    throw Conflict(
       'Ya existe el servicio "' + data.name +
       '" para ' + vehicleType.name
     );
@@ -81,7 +82,7 @@ export async function create(data: ServiceCatalogInput) {
  */
 export async function update(id: number, data: ServiceCatalogInput) {
   const existing = await prisma.serviceCatalog.findUnique({ where: { id } });
-  if (!existing) throw new Error('Servicio no encontrado');
+  if (!existing) throw NotFound('Servicio');
 
   return prisma.serviceCatalog.update({
     where: { id },
@@ -107,10 +108,10 @@ export async function remove(id: number) {
     include: { _count: { select: { maintenanceRecords: true } } },
   });
 
-  if (!service) throw new Error('Servicio no encontrado');
+  if (!service) throw NotFound('Servicio');
 
   if (service._count.maintenanceRecords > 0) {
-    throw new Error(
+    throw Conflict(
       'No se puede eliminar: tiene ' + service._count.maintenanceRecords +
       ' registro(s) de mantenimiento asociados'
     );

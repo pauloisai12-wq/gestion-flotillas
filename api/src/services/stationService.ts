@@ -3,6 +3,7 @@
 
 import prisma from '../lib/prisma';
 import { StationInput } from '../validators/stationValidator';
+import { AppError } from '../middlewares/errorHandler';
 
 export async function getAllStations() {
   return prisma.approvedStation.findMany({
@@ -16,7 +17,7 @@ export async function getStationById(id: number) {
     where: { id },
     include: { _count: { select: { fuelLoads: true } } },
   });
-  if (!station) throw new Error('Gasolinera no encontrada');
+  if (!station) throw new AppError(404, 'Gasolinera no encontrada', 'NOT_FOUND');
   return station;
 }
 
