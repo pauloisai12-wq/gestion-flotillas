@@ -13,14 +13,17 @@ import { AppError } from '../middlewares/errorHandler';
  * Retorna el nuevo estado y los documentos vencidos (si los hay).
  */
 export async function checkVehicleCompliance(vehicleId: number) { // <-- CORRECCIÓN: Cambiado de string a number
-  const now = new Date();
+  // "Vencido" = expiresAt ANTES del inicio del día de hoy (consistente con el
+  // semáforo de documentService: un documento que vence HOY todavía NO bloquea).
+  const startOfToday = new Date();
+  startOfToday.setHours(0, 0, 0, 0);
 
   // Buscar documentos vencidos de este vehículo
   const expiredDocs = await prisma.document.findMany({
     where: {
       vehicleId,
       expiresAt: {
-        lt: now,
+        lt: startOfToday,
       },
     },
     select: {
@@ -116,6 +119,10 @@ export async function checkVehicleCompliance(vehicleId: number) { // <-- CORRECC
 export async function runDailyComplianceCheck() {
   console.log('Iniciando revision diaria de compliance...');
   const now = new Date();
+  // "Vencido" = expiresAt ANTES del inicio del día de hoy (mismo criterio que
+  // checkVehicleCompliance y el semáforo: vencer HOY todavía NO bloquea).
+  const startOfToday = new Date();
+  startOfToday.setHours(0, 0, 0, 0);
 
   // 1) Una query agregada: vehículo + estado actual + si tiene algún doc vencido.
   const rows = await prisma.$queryRaw<
@@ -123,7 +130,7 @@ export async function runDailyComplianceCheck() {
   >`
     SELECT v.id, v.status, EXISTS (
       SELECT 1 FROM documents d
-      WHERE d."vehicleId" = v.id AND d."expiresAt" < ${now}
+      WHERE d."vehicleId" = v.id AND d."expiresAt" < ${startOfToday}
     ) AS has_expired
     FROM vehicles v
     WHERE v."isActive" = true

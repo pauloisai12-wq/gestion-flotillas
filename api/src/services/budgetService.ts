@@ -4,8 +4,6 @@
 import prisma, { type Tx } from '../lib/prisma';
 import { BudgetKind, Prisma } from '@prisma/client';
 import { CloseMonthInput } from '../validators/budgetValidator';
-import { notifyByRole } from './notificationService';
-import { AppError } from '../middlewares/errorHandler';
 
 /** Retorna { year, month } del mes anterior al dado */
 function prevMonth(year: number, month: number) {
@@ -19,6 +17,19 @@ function nextMonth(year: number, month: number) {
   return { year, month: month + 1 };
 }
 
+/** Periodo presupuestal actual (mes/año) en la zona horaria del negocio
+ *  (America/Mexico_City), evitando el desfase de la hora local del servidor
+ *  cerca de la frontera de mes. */
+function currentBudgetPeriod(): { year: number; month: number } {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Mexico_City', year: 'numeric', month: '2-digit',
+  }).formatToParts(new Date());
+  return {
+    year: Number(parts.find((p) => p.type === 'year')!.value),
+    month: Number(parts.find((p) => p.type === 'month')!.value),
+  };
+}
+
 /**
  * Valida si un vehículo puede registrar una carga de X monto en el mes en curso.
  * Usa lock pesimista para evitar race conditions.
@@ -29,9 +40,7 @@ export async function checkAndReserveFuelBudget(
   vehicleId: number,
   amount: number,
 ) {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = now.getMonth() + 1;
+  const { year, month } = currentBudgetPeriod();
 
   // Lock pesimista — evita que dos cargas concurrentes del mismo vehículo se cuelen
   const rows = await tx.$queryRaw<
@@ -156,36 +165,7 @@ export async function closeMonthAndRollover(input: CloseMonthInput) {
   return { year, month, results: result };
 }
 
-/**
- * Helper legacy — mantenido para compatibilidad con código que aún llame a recordBudgetSpending.
- * Llama al nuevo flujo dentro de una tx externa.
- */
-export async function recordBudgetSpending(vehicleId: number, amount: number) {
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  return prisma.$transaction(async (tx) => {
-    const res = await checkAndReserveFuelBudget(tx, vehicleId, amount);
-    if (res.reason === 'EXCEDE') throw new AppError(402, `Excede presupuesto disponible: $${res.available}`, 'BUDGET_EXCEEDED');
-
-    // Notificaciones
-    if (res.percentage && res.percentage >= 80 && res.percentage < 100) {
-      await notifyByRole({
-        role: 'SUPERVISOR_FUEL' as never,
-        type: 'BUDGET_WARNING',
-        title: `Presupuesto al ${Math.round(res.percentage)}%`,
-        message: `Vehículo ID ${vehicleId} consumió ${Math.round(res.percentage)}% de su presupuesto de combustible.`,
-        entityRef: `vehicle:${vehicleId}`,
-      });
-    }
-    if ((res.available ?? Infinity) <= 0) {
-      await notifyByRole({
-        role: 'ADMIN' as never,
-        type: 'BUDGET_EXCEEDED',
-        title: 'Presupuesto agotado',
-        message: `Vehículo ID ${vehicleId} alcanzó 100% de su presupuesto. Cargas bloqueadas.`,
-        entityRef: `vehicle:${vehicleId}`,
-      });
-    }
-
-    return res;
-  });
-}
+// (Se eliminó recordBudgetSpending: era código muerto — ningún call-site lo
+// usaba; el gasto real pasa por checkAndReserveFuelBudget dentro de fuelLoadService.
+// Nota: las notificaciones de presupuesto al 80%/100% vivían SOLO aquí, por lo
+// que nunca se disparaban; cablearlas es una decisión de feature aparte.)

@@ -8,12 +8,14 @@ import { NotFound, Conflict } from '../middlewares/errorHandler';
  * Calcula el estado del semáforo basado en la fecha de vencimiento.
  */
 function calculateTrafficLight(expiresAt: Date): 'GREEN' | 'YELLOW' | 'RED' {
-  const now = new Date();
-  const diffMs = expiresAt.getTime() - now.getTime();
-  const diffDays = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
+  const startOfToday = new Date();
+  startOfToday.setHours(0, 0, 0, 0);
+  const startOfExpiry = new Date(expiresAt);
+  startOfExpiry.setHours(0, 0, 0, 0);
+  const diffDays = Math.round((startOfExpiry.getTime() - startOfToday.getTime()) / 86400000);
 
-  if (diffDays <= 0) return 'RED';
-  if (diffDays <= 30) return 'YELLOW';
+  if (diffDays < 0) return 'RED';      // ya venció (antes de hoy)
+  if (diffDays <= 30) return 'YELLOW'; // vence hoy o dentro de 30 días
   return 'GREEN';
 }
 

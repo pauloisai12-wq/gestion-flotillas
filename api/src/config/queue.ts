@@ -38,7 +38,15 @@ export const redisConnection: ConnectionOptions = parseRedisUrl(env.REDIS_URL);
  * Ejemplo: la cola "compliance" tendrá el job de revisar documentos vencidos.
  */
 export function createQueue(name: string): Queue {
-  return new Queue(name, { connection: redisConnection });
+  return new Queue(name, {
+    connection: redisConnection,
+    defaultJobOptions: {
+      attempts: 3,
+      backoff: { type: 'exponential', delay: 5000 },
+      removeOnComplete: { age: 86400, count: 1000 },
+      removeOnFail: { age: 604800 },
+    },
+  });
 }
 
 /**

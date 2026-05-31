@@ -42,24 +42,26 @@ export function useFuelTrend(filters: DashboardFilters = {}) {
   });
 }
 
-export function useVehicleRankingTop(limit: number = 10, filters: DashboardFilters = {}) {
+export function useVehicleRankingTop(limit: number = 10, filters: DashboardFilters = {}, enabled: boolean = true) {
   return useQuery({
     queryKey: ['dashboard', 'vehicle-ranking-top', limit, filters],
     queryFn: async () => {
       const res = await api.get('/dashboard/vehicle-ranking/top?limit=' + limit + buildParams(filters).replace('?', '&'));
       return res.data;
     },
+    enabled,
     refetchInterval: 60000,
   });
 }
 
-export function useVehicleRankingBottom(limit: number = 10, filters: DashboardFilters = {}) {
+export function useVehicleRankingBottom(limit: number = 10, filters: DashboardFilters = {}, enabled: boolean = true) {
   return useQuery({
     queryKey: ['dashboard', 'vehicle-ranking-bottom', limit, filters],
     queryFn: async () => {
       const res = await api.get('/dashboard/vehicle-ranking/bottom?limit=' + limit + buildParams(filters).replace('?', '&'));
       return res.data;
     },
+    enabled,
     refetchInterval: 60000,
   });
 }

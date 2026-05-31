@@ -243,6 +243,13 @@ function AdminActions({
   ticketId: number;
   selectedQuote: number | null;
 }) {
+  // Ganador robusto: el objeto poblado puede no venir; cae a buscar por id en las cotizaciones
+  const winner =
+    ticket.selectedQuote ??
+    (ticket.selectedQuoteId
+      ? (ticket.quotes ?? []).find((q) => q.id === ticket.selectedQuoteId)
+      : undefined);
+
   if (ticket.status === 'PENDING_ADMIN_APPROVAL') {
     return (
       <div className="border border-border rounded-lg p-4 bg-card space-y-3">
@@ -299,10 +306,10 @@ function AdminActions({
       <p className="text-xs text-muted-foreground">
         El ticket ya no requiere acción del admin. Las próximas transiciones las hace el taller ganador.
       </p>
-      {ticket.selectedQuote && (
+      {winner && (
         <div className="mt-2 pt-2 border-t border-border text-xs">
           <span className="text-muted-foreground">Ganador:</span>{' '}
-          <span className="font-medium">{ticket.selectedQuote.workshop?.legalName}</span>
+          <span className="font-medium">{winner.workshop?.legalName}</span>
         </div>
       )}
     </div>
