@@ -91,15 +91,25 @@ export async function closeMonthAndRollover(input: CloseMonthInput) {
   const result: { kind: BudgetKind; closed: number; rolledOver: number; remainderTotal: number }[] = [];
 
   for (const k of kinds) {
-    // Presupuestos del mes a cerrar que NO estén ya cerrados
-    const openBudgets = await prisma.vehicleBudget.findMany({
-      where: { year, month, kind: k, isClosed: false },
-    });
+    const summary = await prisma.$transaction(async (tx) => {
+      // Lectura DENTRO de la tx con lock pesimista (FOR UPDATE) sobre las filas
+      // abiertas del mes a cerrar. Si el job se dispara dos veces (reintento de
+      // BullMQ, doble instancia de API, o manual + cron), la 2ª corrida espera el
+      // commit de la 1ª y entonces ve isClosed=true → 0 filas → rollover
+      // exactly-once (sin doble crédito del remanente al mes siguiente).
+      const openBudgets = await tx.$queryRaw<
+        Array<{ id: number; vehicleId: number; baseAmount: string; rolloverIn: string; spentAmount: string }>
+      >`
+        SELECT id, "vehicleId", "baseAmount"::text, "rolloverIn"::text, "spentAmount"::text
+        FROM vehicle_budgets
+        WHERE year = ${year} AND month = ${month}
+          AND kind = ${k}::"BudgetKind" AND "isClosed" = false
+        FOR UPDATE
+      `;
 
-    let rolledCount = 0;
-    let totalRemainder = 0;
+      let rolledCount = 0;
+      let totalRemainder = 0;
 
-    await prisma.$transaction(async (tx) => {
       for (const b of openBudgets) {
         const available = Number(b.baseAmount) + Number(b.rolloverIn) - Number(b.spentAmount);
         const remainder = Math.max(0, available);
@@ -128,18 +138,18 @@ export async function closeMonthAndRollover(input: CloseMonthInput) {
         rolledCount++;
       }
 
-      // Marcar todos los presupuestos del mes como cerrados en UNA sola escritura
-      // (en vez de un update por iteración): acorta el tiempo que la transacción
-      // queda abierta y reduce a la mitad las mutaciones.
+      // Marcar como cerrados en UNA sola escritura (las filas ya están bloqueadas).
       if (openBudgets.length > 0) {
         await tx.vehicleBudget.updateMany({
-          where: { id: { in: openBudgets.map((bb) => bb.id) } },
+          where: { id: { in: openBudgets.map((b) => b.id) } },
           data: { isClosed: true, closedAt: new Date() },
         });
       }
+
+      return { closed: openBudgets.length, rolledOver: rolledCount, remainderTotal: totalRemainder };
     }, { timeout: 60_000, maxWait: 10_000 });
 
-    result.push({ kind: k, closed: openBudgets.length, rolledOver: rolledCount, remainderTotal: totalRemainder });
+    result.push({ kind: k, closed: summary.closed, rolledOver: summary.rolledOver, remainderTotal: summary.remainderTotal });
   }
 
   return { year, month, results: result };

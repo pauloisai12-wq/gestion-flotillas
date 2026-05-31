@@ -35,6 +35,11 @@ const envSchema = z.object({
   // spoofing de X-Forwarded-For).
   TRUST_PROXY: z.string().default('false'),
 
+  // Directorio compartido (con el worker) donde se generan/sirven los reportes.
+  // Debe coincidir con el del worker y con el bind mount del compose. No derivar
+  // de __dirname (frágil entre dist/ y src/ y según la profundidad de carpetas).
+  REPORTS_DIR: z.string().default('/app/storage/reports'),
+
   // Captcha del portal público (opcional en dev, obligatorio en prod)
   TURNSTILE_SECRET: z.string().optional(),
 

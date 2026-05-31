@@ -20,6 +20,11 @@ ENV NEXT_TELEMETRY_DISABLED=1
 ARG API_PROXY_TARGET=http://api:3001
 ENV API_PROXY_TARGET=$API_PROXY_TARGET
 
+# Site key de Cloudflare Turnstile: NEXT_PUBLIC_* se embebe en build. Si queda
+# vacío, el portal público no muestra captcha (modo dev).
+ARG NEXT_PUBLIC_TURNSTILE_SITE_KEY=
+ENV NEXT_PUBLIC_TURNSTILE_SITE_KEY=$NEXT_PUBLIC_TURNSTILE_SITE_KEY
+
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN npm run build

@@ -78,6 +78,8 @@ services:
       NODE_ENV: ${NODE_ENV:?Define NODE_ENV en .env (development=local/ngrok privado, production=staging/expuesto a internet)}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS}
       SENTRY_DSN: ${SENTRY_DSN}
+      # Debe coincidir con el directorio del worker y con el bind mount de abajo.
+      REPORTS_DIR: /app/storage/reports
     depends_on:
       postgres:
         condition: service_healthy
@@ -89,6 +91,11 @@ services:
       timeout: 5s
       retries: 3
       start_period: 30s
+    volumes:
+      # COMPARTIDO con worker-python: el worker genera los PDF/Excel en
+      # /app/storage/reports y la API los sirve por GET /api/reports/:id/download/:type.
+      # Sin esto la descarga responde 404 (el archivo no existe en el FS de la API).
+      - ./storage/reports:/app/storage/reports
 
   # === FRONTEND WEB (Next.js — modo prod standalone) ===
   web:
@@ -103,6 +110,9 @@ services:
         # Dentro de Docker, "localhost" del web NO es el api — hay que apuntar
         # al hostname del servicio en la red de compose.
         API_PROXY_TARGET: http://api:3001
+        # Site key de Turnstile (build-time). Debe emparejar con TURNSTILE_SECRET
+        # del API. Vacío en dev = sin captcha en el portal.
+        NEXT_PUBLIC_TURNSTILE_SITE_KEY: ${NEXT_PUBLIC_TURNSTILE_SITE_KEY:-}
     container_name: flotillas_web
     restart: unless-stopped
     ports:

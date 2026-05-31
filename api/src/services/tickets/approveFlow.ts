@@ -46,8 +46,21 @@ export async function approveTicket(
 
   const amount = Number(winningQuote.amount);
 
-  // Transacción atómica: reserva presupuesto + marca quote ganadora + actualiza ticket.
+  // Transacción atómica: compare-and-swap del estado + reserva presupuesto +
+  // marca quote ganadora + actualiza ticket.
   const result = await prisma.$transaction(async (tx) => {
+    // CAS atómico ANTES de reservar presupuesto: si otra petición concurrente
+    // (doble-click o dos admins) ya aprobó, esto afecta 0 filas y abortamos por
+    // rollback sin descontar el presupuesto dos veces. El chequeo de estado de
+    // arriba (fuera de la tx) es solo un fast-fail; esta es la barrera real.
+    const swap = await tx.maintenanceTicket.updateMany({
+      where: { id: ticketId, status: 'AWAITING_QUOTES' },
+      data: { status: 'APPROVED_FOR_REPAIR' },
+    });
+    if (swap.count === 0) {
+      throw new TicketError('INVALID_STATE', 'El ticket ya fue aprobado o cambió de estado');
+    }
+
     const budgetResult = await reserveMaintenanceBudget(tx, ticket.vehicleId, amount);
     if (!budgetResult.allowed) {
       throw new TicketError(
@@ -63,10 +76,10 @@ export async function approveTicket(
       data: { isWinner: true },
     });
 
+    // El status ya se fijó en el CAS; aquí completamos los metadatos de aprobación.
     return tx.maintenanceTicket.update({
       where: { id: ticketId },
       data: {
-        status: 'APPROVED_FOR_REPAIR',
         finalConcept: input.finalConcept,
         selectedQuoteId: winningQuote.id,
         approvedByAdminId: adminId,
@@ -167,12 +180,23 @@ export async function completeRepair(
         serviceId: input.serviceId,
         workshopId: ticket.selectedQuote!.workshopId,
         cost: ticket.selectedQuote!.amount!,
-        odometer: input.finalOdometer ?? null,
+        odometer:
+          input.finalOdometerStatus === 'OK' ? (input.finalOdometer ?? null) : null,
         odometerStatus: input.finalOdometerStatus,
         serviceDate: now,
         notes: input.evidenceNotes ?? ticket.finalConcept ?? null,
       },
     });
+
+    // Reflejar el odómetro en el vehículo, igual que maintenanceRecordService.create:
+    // solo si la lectura es válida (OK) y mayor al actual. Así los semáforos de
+    // servicio (getUpcomingServices/getAllPendingServices) no quedan desfasados.
+    if (input.finalOdometerStatus === 'OK' && input.finalOdometer != null) {
+      await tx.vehicle.updateMany({
+        where: { id: ticket.vehicleId, currentOdometer: { lt: input.finalOdometer } },
+        data: { currentOdometer: input.finalOdometer },
+      });
+    }
 
     return tx.maintenanceTicket.update({
       where: { id: ticketId },
