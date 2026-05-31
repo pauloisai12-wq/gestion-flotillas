@@ -59,7 +59,16 @@ def _checkout(cursor_factory=RealDictCursor):
             conn.cursor_factory = cursor_factory
         yield conn
     finally:
-        p.putconn(conn)
+        # Resetear el estado transaccional antes de devolver la conexión al pool:
+        # si una query falló, la conexión queda en transacción abortada y
+        # envenenaría al siguiente que la tome. Si el rollback falla, la
+        # conexión está rota y se descarta del pool (close=True).
+        broken = False
+        try:
+            conn.rollback()
+        except Exception:
+            broken = True
+        p.putconn(conn, close=broken)
 
 
 def get_connection():

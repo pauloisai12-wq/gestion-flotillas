@@ -159,13 +159,13 @@ async def process_report(job, job_token):
         # --- Generar PDF ---
         await job.updateProgress(10)
         pdf_path = generate_pdf(month, year, requested_by)
-        pdf_size = get_file_size(pdf_path)
+        pdf_size = get_file_size(pdf_path) or 0  # 0 si stat falla; evita TypeError en formato ':,'
         print(f"  [PDF] Tamano: {pdf_size:,} bytes")
         await job.updateProgress(50)
 
         # --- Generar Excel ---
         excel_path = generate_excel(month, year, requested_by)
-        excel_size = get_file_size(excel_path)
+        excel_size = get_file_size(excel_path) or 0
         print(f"  [Excel] Tamano: {excel_size:,} bytes")
         await job.updateProgress(80)
 
@@ -180,6 +180,10 @@ async def process_report(job, job_token):
             excel_size=excel_size,
             status="COMPLETED"
         )
+        if report_id is None:
+            # report_history es la fuente de verdad (lista + descarga). Si no se
+            # guardó, NO reportar éxito: propagar para marcar FAILED y reintentar.
+            raise RuntimeError("No se pudo guardar report_history; el reporte no quedó registrado.")
         await job.updateProgress(90)
 
         # --- Notificar a los admins ---
