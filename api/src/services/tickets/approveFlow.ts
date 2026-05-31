@@ -198,14 +198,17 @@ export async function completeRepair(
       });
     }
 
-    return tx.maintenanceTicket.update({
-      where: { id: ticketId },
-      data: {
-        status: 'COMPLETED',
-        repairCompletedAt: now,
-        completedRecordId: record.id,
-      },
+    // CAS atómico IN_REPAIR -> COMPLETED (con los campos que exige el CHECK
+    // tickets_completed_consistency). Un doble submit del taller queda
+    // serializado: el 2º ve count 0 y aborta, revirtiendo su record por rollback.
+    const swap = await tx.maintenanceTicket.updateMany({
+      where: { id: ticketId, status: 'IN_REPAIR' },
+      data: { status: 'COMPLETED', repairCompletedAt: now, completedRecordId: record.id },
     });
+    if (swap.count === 0) {
+      throw new TicketError('INVALID_STATE', 'El ticket ya fue completado o cambió de estado');
+    }
+    return tx.maintenanceTicket.findUniqueOrThrow({ where: { id: ticketId } });
   });
 
   await notifyTicketAdmins({

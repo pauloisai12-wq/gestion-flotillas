@@ -2,12 +2,11 @@
 // Bitácora de notas de un vehículo — append-only log con edición auditada
 
 import { Router, Request, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
+import prisma from '../lib/prisma';
 import { requireRole, RoleGroups, Roles } from '../middlewares/roleMiddleware';
 import { ah } from '../lib/asyncHandler';
 import { vehicleNoteCreateSchema, vehicleNoteUpdateSchema } from '../validators/vehicleNoteValidator';
 
-const prisma = new PrismaClient();
 const router = Router({ mergeParams: true });
 
 /** GET /api/vehicles/:vehicleId/notes — histórico completo */

@@ -3,7 +3,8 @@
 // Reemplaza completamente el router v1.
 
 import { Router, Request, Response } from 'express';
-import { PrismaClient, BudgetKind, Prisma } from '@prisma/client';
+import { BudgetKind, Prisma } from '@prisma/client';
+import prisma from '../lib/prisma';
 import { requireRole, RoleGroups, Roles } from '../middlewares/roleMiddleware';
 import { ah } from '../lib/asyncHandler';
 import {
@@ -14,7 +15,6 @@ import {
 } from '../validators/budgetValidator';
 import { closeMonthAndRollover } from '../services/budgetService';
 
-const prisma = new PrismaClient();
 const router = Router();
 
 /** GET / — lista presupuestos con filtros (kind, year, month, vehicleId) */

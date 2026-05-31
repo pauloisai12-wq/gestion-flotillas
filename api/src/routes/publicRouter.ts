@@ -14,6 +14,7 @@ import { rateLimit, getClientIp } from '../middlewares/rateLimit';
 import { BadRequest, NotFound, Forbidden } from '../middlewares/errorHandler';
 import { logger } from '../lib/logger';
 import { env } from '../config/env';
+import { runWithAuditContext } from '../lib/auditContext';
 
 const router = Router();
 
@@ -178,13 +179,22 @@ router.get('/verify', async (req: Request, res: Response, next: NextFunction) =>
 // POST /fuel-loads — registro público de carga
 // ═══════════════════════════════════════════════════
 router.post('/fuel-loads', async (req: Request, res: Response, next: NextFunction) => {
+  const ip = getClientIp(req);
+  // Contexto de auditoría: el portal es anónimo (sin userId), así que la IP y el
+  // userAgent son el único rastro forense. Se propaga vía AsyncLocalStorage para
+  // que la extensión de auditoría de Prisma lo registre en el AuditLog del FuelLoad.
+  await runWithAuditContext(
+    {
+      ipAddress: ip,
+      userAgent: req.headers['user-agent']?.toString(),
+      requestId: res.getHeader('x-request-id') as string | undefined,
+    },
+    async () => {
   try {
     const parsed = publicFuelLoadSchema.safeParse(req.body);
     if (!parsed.success) {
       return next(BadRequest('Datos inválidos', parsed.error.issues));
     }
-
-    const ip = getClientIp(req);
 
     // 1. CSRF check
     const okCsrf = await consumeCsrfToken(parsed.data.csrfToken, ip);
@@ -219,6 +229,8 @@ router.post('/fuel-loads', async (req: Request, res: Response, next: NextFunctio
   } catch (e) {
     next(e);
   }
+    },
+  );
 });
 
 export default router;
