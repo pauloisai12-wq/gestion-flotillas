@@ -5,7 +5,7 @@
 
 import prisma from '../lib/prisma';
 import { VehicleStatus } from '@prisma/client';
-import { notifyByRole } from './notificationService';
+import { notifyByRole, notifyManyByRole } from './notificationService';
 import { AppError } from '../middlewares/errorHandler';
 
 /**
@@ -165,39 +165,26 @@ export async function runDailyComplianceCheck() {
     ]);
   }
 
-  // 3) Notificar solo los cambios reales (suele ser 0-5 por día, no N).
-  for (const vehicleId of toBlock) {
-    await notifyByRole({
-      role: 'SUPERVISOR_VEHICLES',
-      type: 'VEHICLE_BLOCKED',
+  // 3) Notificar solo los cambios reales (suele ser 0-5 por día), en lote:
+  //    resuelve destinatarios una vez en vez de 2 findMany de usuarios por vehículo.
+  await notifyManyByRole({
+    roles: ['SUPERVISOR_VEHICLES', 'ADMIN'],
+    type: 'VEHICLE_BLOCKED',
+    items: toBlock.map((vehicleId) => ({
       title: 'Vehiculo bloqueado',
       message: `Vehiculo ${vehicleId} bloqueado por documento(s) vencido(s).`,
       entityRef: `vehicle:${vehicleId}`,
-    });
-    await notifyByRole({
-      role: 'ADMIN',
-      type: 'VEHICLE_BLOCKED',
-      title: 'Vehiculo bloqueado',
-      message: `Vehiculo ${vehicleId} bloqueado por documento(s) vencido(s).`,
-      entityRef: `vehicle:${vehicleId}`,
-    });
-  }
-  for (const vehicleId of toUnblock) {
-    await notifyByRole({
-      role: 'SUPERVISOR_VEHICLES',
-      type: 'VEHICLE_UNBLOCKED',
+    })),
+  });
+  await notifyManyByRole({
+    roles: ['SUPERVISOR_VEHICLES', 'ADMIN'],
+    type: 'VEHICLE_UNBLOCKED',
+    items: toUnblock.map((vehicleId) => ({
       title: 'Vehiculo desbloqueado',
       message: `Vehiculo ${vehicleId} desbloqueado. Todos los documentos vigentes.`,
       entityRef: `vehicle:${vehicleId}`,
-    });
-    await notifyByRole({
-      role: 'ADMIN',
-      type: 'VEHICLE_UNBLOCKED',
-      title: 'Vehiculo desbloqueado',
-      message: `Vehiculo ${vehicleId} desbloqueado. Todos los documentos vigentes.`,
-      entityRef: `vehicle:${vehicleId}`,
-    });
-  }
+    })),
+  });
 
   const summary = {
     total: rows.length,

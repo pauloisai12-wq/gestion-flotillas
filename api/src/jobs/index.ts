@@ -4,7 +4,7 @@
 import { createQueue, createWorker } from '../config/queue';
 import { runDailyComplianceCheck } from '../services/blockingService';
 import { getAllPendingServices } from '../services/maintenanceService';
-import { notifyByRole } from '../services/notificationService';
+import { notifyManyByRole } from '../services/notificationService';
 import { refreshMaterializedViews } from './refreshViewsJob';
 import { closeMonthAndRollover } from '../services/budgetService';
 import { logger } from '../lib/logger';
@@ -42,41 +42,30 @@ export async function initializeJobs(): Promise<void> {
       'Mantenimientos: ' + overdue.length + ' vencidos, ' + warning.length + ' próximos (80%+)',
     );
 
-    for (const s of overdue) {
-      await notifyByRole({
-        role: 'SUPERVISOR_VEHICLES',
-        type: 'MAINTENANCE_OVERDUE',
+    // Notificación en lote (resuelve destinatarios una vez) + dedupe diario:
+    // antes eran 2×N llamadas con N+1 de usuarios y re-insertaban las mismas
+    // alertas cada día.
+    await notifyManyByRole({
+      roles: ['SUPERVISOR_VEHICLES', 'ADMIN'],
+      type: 'MAINTENANCE_OVERDUE',
+      dedupeWithinHours: 20,
+      items: overdue.map((s) => ({
         title: 'Mantenimiento vencido',
         message: s.economicNumber + ': ' + s.name + ' vencido por ' + Math.abs(s.remainingKm).toLocaleString() + ' km.',
         entityRef: 'vehicle:' + s.vehicleId,
-      });
+      })),
+    });
 
-      await notifyByRole({
-        role: 'ADMIN',
-        type: 'MAINTENANCE_OVERDUE',
-        title: 'Mantenimiento vencido',
-        message: s.economicNumber + ': ' + s.name + ' vencido por ' + Math.abs(s.remainingKm).toLocaleString() + ' km.',
-        entityRef: 'vehicle:' + s.vehicleId,
-      });
-    }
-
-    for (const s of warning) {
-      await notifyByRole({
-        role: 'SUPERVISOR_VEHICLES',
-        type: 'MAINTENANCE_DUE',
+    await notifyManyByRole({
+      roles: ['SUPERVISOR_VEHICLES', 'ADMIN'],
+      type: 'MAINTENANCE_DUE',
+      dedupeWithinHours: 20,
+      items: warning.map((s) => ({
         title: 'Mantenimiento próximo',
         message: s.economicNumber + ': ' + s.name + ' al ' + s.progressPercent + '%. Faltan ' + s.remainingKm.toLocaleString() + ' km.',
         entityRef: 'vehicle:' + s.vehicleId,
-      });
-
-      await notifyByRole({
-        role: 'ADMIN',
-        type: 'MAINTENANCE_DUE',
-        title: 'Mantenimiento próximo',
-        message: s.economicNumber + ': ' + s.name + ' al ' + s.progressPercent + '%. Faltan ' + s.remainingKm.toLocaleString() + ' km.',
-        entityRef: 'vehicle:' + s.vehicleId,
-      });
-    }
+      })),
+    });
   });
 
   await complianceQueue.obliterate({ force: true });

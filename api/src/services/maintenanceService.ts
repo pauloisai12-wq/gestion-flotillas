@@ -142,6 +142,10 @@ export async function getAllPendingServices() {
       LIMIT 1
     ) mr ON true
     WHERE v."isActive" = true
+      -- Filtra en SQL los pendientes (>=80% del intervalo): progreso >= 80%
+      -- equivale a (odómetro actual - último) >= 0.8 * intervalo. Evita traer
+      -- toda la flota×catálogo a memoria para descartarla en JS.
+      AND (v."currentOdometer" - COALESCE(mr.odometer, 0)) >= 0.8 * NULLIF(sc."intervalKm", 0)
   `;
 
   const allPending: Array<
@@ -152,7 +156,8 @@ export async function getAllPendingServices() {
     const lastKm = row.last_km ?? 0;
     const kmSinceLast = row.current_odometer - lastKm;
     const progressPercent = Math.round((kmSinceLast / row.interval_km) * 100);
-    if (progressPercent < 80) continue; // descartamos los OK aquí mismo
+    // El filtro >=80% ya se aplicó en SQL; recalculamos progressPercent solo
+    // para el valor mostrado.
 
     const nextServiceKm = lastKm + row.interval_km;
     const remainingKm = nextServiceKm - row.current_odometer;
