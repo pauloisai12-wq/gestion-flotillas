@@ -75,8 +75,9 @@ export default function RegistroRapidoPage() {
   const available = verifyData?.budget?.available ?? null;
   const amountNum = Number(amount);
   const exceeds = useMemo(() => {
-    if (!available || !amountNum) return false;
-    return amountNum > available;
+    if (available === null) return false; // sin presupuesto declarado: el backend decide
+    if (!Number.isFinite(amountNum) || amountNum <= 0) return false; // monto vacío/no válido
+    return amountNum > available; // available=0 bloquea cualquier monto positivo
   }, [available, amountNum]);
 
   async function handleSubmit(e: FormEvent) {

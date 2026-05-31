@@ -43,6 +43,7 @@ export function TicketCreateForm({ initialVehicleId }: { initialVehicleId?: numb
     setSubmitting(true);
     setSubmitError(null);
 
+    let ticketId: number;
     try {
       const ticket = await create.mutateAsync({
         vehicleId: Number(vehicleId),
@@ -50,18 +51,26 @@ export function TicketCreateForm({ initialVehicleId }: { initialVehicleId?: numb
         description: description.trim(),
         reportedOdometer: reportedOdometer ? Number(reportedOdometer) : null,
       });
-
-      // Sube fotos una a una (si hay)
-      for (const f of photos) {
-        await upload.mutateAsync({ ticketId: ticket.id, file: f });
-      }
-
-      router.push(`/tickets/${ticket.id}`);
+      ticketId = ticket.id;
     } catch (err) {
+      // Falló la CREACIÓN del ticket: es seguro reintentar (no se creó nada).
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
       setSubmitError(msg ?? 'Error inesperado. Intenta de nuevo.');
       setSubmitting(false);
+      return;
     }
+
+    // El ticket YA existe. Las fotos son best-effort: si una falla NO se debe
+    // permitir recrear el ticket (sería un duplicado). Navegamos al detalle,
+    // donde el ejecutor puede completar las fotos faltantes.
+    try {
+      for (const f of photos) {
+        await upload.mutateAsync({ ticketId, file: f });
+      }
+    } catch {
+      // Ignorado a propósito: el ticket existe; las fotos se reintentan en el detalle.
+    }
+    router.push(`/tickets/${ticketId}`);
   }
 
   const noVehicles = !vehiclesLoading && (vehiclesResp?.data.length ?? 0) === 0;

@@ -51,9 +51,10 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? '';
 
 export default function TicketDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id: idStr } = use(params);
-  const id = parseInt(idStr, 10);
+  const id = Number.parseInt(idStr, 10);
+  const validId = Number.isInteger(id) && id > 0 ? id : null;
   const { user } = useAuth();
-  const { data: ticket, isLoading } = useTicket(id);
+  const { data: ticket, isLoading, isError } = useTicket(validId);
 
   // Selección de quote ganadora — lifted state porque ApprovePanel y BudgetVsQuotesCard la comparten.
   const [selectedQuote, setSelectedQuote] = useState<number | null>(null);
@@ -66,6 +67,19 @@ export default function TicketDetailPage({ params }: { params: Promise<{ id: str
     isAdmin && isAwaitingDecision ? id : null,
   );
 
+  // id no numérico en la URL: no dejar la página en spinner eterno.
+  if (validId === null) {
+    return (
+      <div className="p-6 text-center text-sm text-muted-foreground">Ticket inválido.</div>
+    );
+  }
+  if (isError) {
+    return (
+      <div className="p-6 text-center text-sm text-destructive">
+        No se pudo cargar el ticket. Intenta de nuevo.
+      </div>
+    );
+  }
   if (isLoading || !ticket) {
     return (
       <div className="p-6 flex items-center justify-center gap-2 text-muted-foreground text-sm">
