@@ -66,8 +66,12 @@ services:
     ports:
       - "3001:3001"
     environment:
-      DATABASE_URL: ${DATABASE_URL}
-      REDIS_URL: ${REDIS_URL}
+      # Si DATABASE_URL/REDIS_URL no se definen explícitamente en .env, se derivan
+      # de las credenciales de Postgres/Redis (mismo patrón que worker-python, abajo).
+      # Así basta con definir POSTGRES_*/REDIS_PASSWORD; defínelas explícitas solo si
+      # apuntas a una BD/Redis externos. La password va embebida (literal) en la URL.
+      DATABASE_URL: ${DATABASE_URL:-postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}}
+      REDIS_URL: ${REDIS_URL:-redis://:${REDIS_PASSWORD}@redis:6379}
       JWT_SECRET: ${JWT_SECRET}
       # NODE_ENV debe declararse EXPLÍCITAMENTE en .env (sin fallback silencioso).
       # ⚠ "development" relaja las validaciones de env.ts (JWT >= 64ch, Turnstile,
