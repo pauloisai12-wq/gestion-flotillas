@@ -1,0 +1,119 @@
+# /docker-compose.staging.yml — override para QA/Staging en el servidor de casa
+#
+# Reorienta el stack del modo "prod-para-ngrok" al patrón del servidor de casa
+# (§9 "incorporar un sistema nuevo"): acceso SOLO vía WireGuard + Caddy interno,
+# sin puertos publicados al host, datos persistentes en el disco cifrado LUKS
+# bajo /srv/datos/flotillas/, y la API endurecida (NODE_ENV=production).
+#
+# Uso (en el servidor 10.10.0.2):   ./deploy.sh     (o, manualmente:)
+#   export COMPOSE="docker compose -f docker-compose.yml -f docker-compose.staging.yml"
+#   $COMPOSE build
+#   $COMPOSE up -d
+#
+# Las migraciones ya NO son un paso manual: el servicio one-shot `migrate` (abajo)
+# corre `prisma migrate deploy` y termina ANTES de que arranquen api/worker
+# (depends_on: service_completed_successfully). Servir tráfico sin esquema es
+# imposible (Gotcha 5). `migrate deploy` es idempotente: re-ejecutar `up` es seguro.
+#
+# NOTA: `!reset []` (limpiar la lista de ports heredada del base) requiere
+# Docker Compose >= 2.24. Si el servidor tiene una versión anterior, reemplaza
+# cada `ports: !reset []` por un bind a la interfaz VPN, p.ej.:
+#   ports:
+#     - "10.10.0.2:5432:5432"
+
+services:
+  # === BASE DE DATOS — Postgres 16 dedicado, datos en disco cifrado ===
+  postgres:
+    image: postgres:16
+    ports: !reset []                       # no publicar 5433 al host
+    volumes:
+      - /srv/datos/flotillas/postgres:/var/lib/postgresql/data
+
+  # === REDIS dedicado (aísla las colas BullMQ de las colas RQ del SAS) ===
+  redis:
+    ports: !reset []                       # no publicar 6379 al host
+    volumes:
+      - /srv/datos/flotillas/redis:/data
+
+  # === API (Node/Express) — endurecida como producción ===
+  api:
+    # Etiqueta explícita de la imagen del build (target prod del compose base) para
+    # que el servicio one-shot `migrate` reuse exactamente la misma imagen (sin
+    # rebuild ni imagen duplicada).
+    image: flotillas-api:staging
+    ports: !reset []                       # no publicar 3001; el web la proxya por red interna
+    environment:
+      # NODE_ENV=production ACTIVA las validaciones estrictas de env.ts:
+      #   JWT_SECRET >= 64, BCRYPT_ROUNDS >= 12, CORS sin localhost,
+      #   TURNSTILE_SECRET obligatorio. Todos se inyectan desde .env (abajo).
+      NODE_ENV: production
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-https://flotillas.internal}
+      # El compose base NO pasa estas vars al contenedor api; aquí las añadimos
+      # para que en NODE_ENV=production el arranque no aborte por defaults/faltantes.
+      TURNSTILE_SECRET: ${TURNSTILE_SECRET}
+      BCRYPT_ROUNDS: ${BCRYPT_ROUNDS:-12}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-8h}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      # Persistencia en el disco de datos LUKS:
+      - /srv/datos/flotillas/uploads:/app/uploads             # evidencias/archivos subidos
+      - /srv/datos/flotillas/reports:/app/storage/reports     # para servir descargas de reportes
+    depends_on:
+      # Restated explícito (postgres/redis del base) + espera a que `migrate`
+      # termine OK antes de servir tráfico. Si Compose mergea o reemplaza el
+      # depends_on del base, aquí queda completo de todas formas.
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  # === WEB (Next.js standalone) — solo accesible a través de Caddy ===
+  web:
+    ports: !reset []                       # Caddy llega a web:3000 por la red interna de compose
+
+  # === WORKER Python (reportería WeasyPrint/openpyxl) ===
+  worker-python:
+    volumes:
+      - /srv/datos/flotillas/reports:/app/storage/reports
+    depends_on:
+      # El worker consulta la BD: esperar también a que `migrate` termine OK.
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  # === MIGRACIONES (one-shot) — aplica el esquema ANTES de servir tráfico (Gotcha 5) ===
+  # Reusa la imagen prod de la API (trae el CLI `prisma` en dependencies y la carpeta
+  # prisma/ con las 8 migraciones). Corre `prisma migrate deploy` (idempotente, no
+  # interactivo), puebla las 5 vistas materializadas y termina. api/worker dependen
+  # de su finalización exitosa, así que `up -d` migra y LUEGO sirve.
+  migrate:
+    image: flotillas-api:staging
+    restart: "no"
+    command: ["npx", "prisma", "migrate", "deploy"]
+    environment:
+      # Mismo patrón derivado que la API; migrate solo necesita DATABASE_URL.
+      DATABASE_URL: ${DATABASE_URL:-postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # === REVERSE PROXY interno (HTTPS por CA interna, escucha SOLO en la VPN) ===
+  caddy:
+    image: caddy:2-alpine
+    container_name: flotillas_caddy
+    restart: unless-stopped
+    depends_on:
+      web:
+        condition: service_healthy
+    ports:
+      - "10.10.0.2:443:443"                # HTTPS solo en la interfaz WireGuard del servidor
+      - "10.10.0.2:80:80"                  # redirección HTTP->HTTPS (conveniencia)
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - /srv/datos/flotillas/caddy/data:/data       # contiene la CA interna (root.crt)
+      - /srv/datos/flotillas/caddy/config:/config
