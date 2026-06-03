@@ -9,6 +9,11 @@ node_modules/
 !.env.example
 !.env.staging.example
 
+# CA interna de Caddy exportada (root.crt) — se distribuye a los revisores fuera
+# de banda; NUNCA se versiona. Ver flotillas-runbook.md §2 / GUIA §6.
+*caddy*root.crt
+flotillas-caddy-root.crt
+
 # Next.js build
 .next/
 
