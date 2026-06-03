@@ -1,3 +1,23 @@
+# Contexto de build del web (Next.js). El build hace `npm ci` fresco dentro de
+# Docker (node:20-alpine): el binario nativo de Tailwind 4 (lightningcss) es
+# por-plataforma, así que NUNCA reutilizar node_modules/.next del host.
+
+# Dependencias y build
 node_modules
 .next
+
+# Secretos / entorno — NUNCA al contexto de build
 .env
+.env.*
+
+# Logs y temporales
+*.log
+npm-debug.log*
+
+# Cobertura / Storybook estático
+coverage
+storybook-static
+
+# VCS / editor
+.git
+.gitignore
