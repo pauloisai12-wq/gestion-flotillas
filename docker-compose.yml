@@ -81,6 +81,11 @@ services:
       # docker-compose.staging.yml). El build sigue siendo minificado (node dist/).
       NODE_ENV: ${NODE_ENV:?Define NODE_ENV en .env (development=local/ngrok privado, production=staging/expuesto a internet)}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS}
+      # Cadena de proxies delante de la API (Caddy -> Next -> API = 2 saltos). Sin
+      # esto, req.ip colapsa a la IP interna del proxy y se degradan rate-limit,
+      # CSRF-por-IP y el remoteip de Turnstile. El .env siempre gana. (env.ts:36,
+      # parseo en api/src/index.ts: '2' -> app.set('trust proxy', 2)).
+      TRUST_PROXY: ${TRUST_PROXY:-2}
       SENTRY_DSN: ${SENTRY_DSN}
       # Debe coincidir con el directorio del worker y con el bind mount de abajo.
       REPORTS_DIR: /app/storage/reports
