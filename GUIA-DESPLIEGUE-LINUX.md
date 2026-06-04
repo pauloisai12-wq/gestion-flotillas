@@ -235,9 +235,12 @@ $COMPOSE build
 #    + puebla las 5 vistas) ANTES de que arranquen api/worker — automático (Gotcha 5).
 $COMPOSE up -d --wait
 
-# 6) (OPCIONAL, solo BD vacía) datos demo. El seed está deshabilitado en
-#    NODE_ENV=production; córrelo en modo development y guarda las contraseñas
-#    generadas (o fija SEED_*_PASSWORD). Ver Gotcha 6.
+# 6) Crear el primer ADMIN (necesario para iniciar sesión con datos REALES).
+#    Idempotente; no usa el seed demo. ADMIN_PASSWORD >= 12 chars.
+$COMPOSE run --rm -e ADMIN_EMAIL=tu@correo.com -e ADMIN_PASSWORD='claveFuerte' api npm run bootstrap:admin
+
+# 6b) (SOLO QA, opcional, BD vacía) datos demo. Deshabilitado en NODE_ENV=production;
+#     córrelo en modo development. NO usar con datos reales. Ver Gotcha 6.
 # $COMPOSE run --rm -e NODE_ENV=development api npx prisma db seed
 
 # 7) Estado del stack

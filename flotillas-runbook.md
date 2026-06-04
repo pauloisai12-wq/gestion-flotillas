@@ -121,6 +121,11 @@ $COMPOSE ps
 
 ## 6. Datos semilla y cuentas
 
+- **Primer admin (datos reales):** la BD arranca vacía. Crea el ADMIN inicial con el script idempotente
+  (no usa el seed demo); `ADMIN_PASSWORD` >= 12 caracteres:
+  ```bash
+  $COMPOSE run --rm -e ADMIN_EMAIL=tu@correo.com -e ADMIN_PASSWORD='claveFuerte' api npm run bootstrap:admin
+  ```
 - El seed (`prisma db seed`) es **solo para demo/QA** y está **deshabilitado** con `NODE_ENV=production`.
   Para sembrar una BD de QA:
   ```bash

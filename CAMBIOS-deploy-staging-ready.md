@@ -62,58 +62,51 @@ Acceso (solo por VPN): **https://flotillas.internal**
 
 ---
 
-## ✅ Prueba local — CORRIENDO AHORA (modo dev)
+## ✅ Migraciones reparadas — `migrate deploy` ahora funciona en BD limpia
 
-El stack dev está **levantado y verificado** en esta máquina (sin la infra de servidor LUKS/VPN/Caddy/Turnstile):
+Al probar el despliegue desde 0 aparecieron **bugs pre-existentes del historial de migraciones** (el
+schema se había venido aplicando con `db push`/`migrate dev`, no con migraciones versionadas). Un
+`migrate deploy` limpio producía un esquema roto/incompleto. **Arreglado** con 2 migraciones nuevas:
+
+- `20260421041508_add_audit_logs_table` — la tabla `audit_logs` (modelo `AuditLog`) que ninguna migración
+  creaba (solo existía la que le crea el índice) → antes fallaba con `42P01`.
+- `20260527165001_sync_schema_drift` — columnas que faltaban: **`vehicles`** (`expedientNumber`,
+  `engineNumber`, `area`, `usage`, `vehicleClass`, … 13 en total + índice único) y **`users`**
+  (`lockedUntil`, `lastLoginAt`), más normalización de FKs. Sin esto, **importar vehículos reales habría
+  fallado** y el lockout de login daba `P2022`.
+
+Verificado en BD limpia: **10 migraciones aplican sin error**, `prisma migrate diff` reporta *empty
+migration* (cero drift), y el servicio one-shot `migrate` de staging ya funciona en el primer despliegue.
+
+## ✅ Primer admin sin datos demo — `bootstrap-admin`
+
+Con la BD limpia no hay usuarios (el seed demo está bloqueado en producción y mete datos de ejemplo). Se
+añadió `api/src/scripts/bootstrap-admin.ts` (npm `bootstrap:admin`) que crea/actualiza un **ADMIN** desde
+`ADMIN_EMAIL`/`ADMIN_PASSWORD` (idempotente, valida, no eco de la contraseña). En el servidor:
+```bash
+$COMPOSE run --rm -e ADMIN_EMAIL=tu@correo.com -e ADMIN_PASSWORD='claveFuerte' api npm run bootstrap:admin
+```
+
+---
+
+## ✅ Prueba local — CORRIENDO AHORA (modo dev), LIMPIO para datos reales
+
+El stack dev está **levantado** con la BD **vacía (desde 0)** salvo un admin — listo para cargar coches reales:
 
 | Recurso | URL |
 |---|---|
 | **Web (app)** | **http://localhost:3000** |
 | Login | http://localhost:3000/login |
 | API health | http://localhost:3001/api/health → `{"status":"ok"}` |
-| Portal público (sin login) | http://localhost:3000/cargas/registro-rapido |
 
-**Credenciales demo (sembradas):**
+**Admin (temporal, cámbialo):** `admin@flotillas.com` / `Admin-Local-2026!` — login verificado (HTTP 200).
+BD: 1 usuario (admin), 0 vehículos. Sin datos demo. Usa un `.env` local desechable (gitignored).
 
-| Usuario | Contraseña | Rol |
-|---|---|---|
-| admin@flotillas.com | `admin-local` | ADMIN |
-| vehiculos@ / gasolina@ / mantenimiento@flotillas.com | `super-local` | Supervisores |
-| ejecutor1@ / ejecutor2@flotillas.com | `ejecutor-local` | EXECUTOR |
-| taller1@ / taller2@ / taller3@flotillas.com | `taller-local` | WORKSHOP |
-
-Verificado: login admin → HTTP 200 (JWT). Seed **idempotente** confirmado (2ª corrida: conteos idénticos,
-sin duplicar). Usa un `.env` local desechable (gitignored, sin secretos reales).
-
-Comandos (para reproducir / reiniciar):
+Reproducir desde 0:
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build postgres redis api web
-docker compose -f docker-compose.yml -f docker-compose.dev.yml exec api npx prisma db push   # ver nota ⚠ abajo
-docker compose -f docker-compose.yml -f docker-compose.dev.yml exec \
-  -e SEED_ADMIN_PASSWORD=admin-local -e SEED_SUPER_PASSWORD=super-local \
-  -e SEED_EXECUTOR_PASSWORD=ejecutor-local -e SEED_WORKSHOP_PASSWORD=taller-local \
-  api npx prisma db seed
+COMPOSE="docker compose -f docker-compose.yml -f docker-compose.dev.yml"
+$COMPOSE down -v && $COMPOSE up -d --build postgres redis api web   # empieza limpio
+$COMPOSE exec api npx prisma migrate deploy                          # 10 migraciones, sin drift
+$COMPOSE exec -e ADMIN_EMAIL=tu@correo.com -e ADMIN_PASSWORD='claveFuerte' api npx tsx src/scripts/bootstrap-admin.ts
 ```
-Para apagar: `docker compose -f docker-compose.yml -f docker-compose.dev.yml down` (añade `-v` para borrar datos).
-
----
-
-## ⚠️ BLOQUEADOR PRE-EXISTENTE descubierto (NO es de estos cambios) — requiere tu decisión
-
-Al levantar la prueba salió un bug **del historial de migraciones**, independiente de mis 10 tareas
-(tocar migraciones estaba fuera de alcance, y la premisa era que el despliegue funcionaba):
-
-- El schema declara `model AuditLog @@map("audit_logs")`, pero **ninguna migración crea la tabla
-  `audit_logs`**. La migración `20260521000000_audit_log_global_created_at_index` solo le crea un
-  **índice** a esa tabla inexistente → `prisma migrate deploy` **falla en una BD nueva** con
-  `42P01: relation "audit_logs" does not exist`.
-- La BD histórica en esta máquina funcionaba porque se creó con `db push`/`migrate dev` (que sí crea la
-  tabla desde el modelo); el repo nunca incluyó la migración `CREATE TABLE "audit_logs"`.
-
-**Impacto:** afecta el `migrate deploy` en limpio — es decir, el **servicio one-shot `migrate`** de staging
-fallaría en el primer despliegue real sobre una BD vacía. Para la prueba local lo reconcilié con
-`prisma db push` (crea `audit_logs` + lo faltante, preserva las vistas materializadas ya migradas).
-
-**Recomendación (pendiente de tu OK):** crear una migración que haga `CREATE TABLE "audit_logs" (...)`
-**antes** de `20260521000000_...`, o regenerar el diff con `prisma migrate diff`. Es un arreglo de
-**migraciones** (lo dejé fuera por instrucción); dime si quieres que lo haga.
+Apagar: `$COMPOSE down` (con `-v` borra datos). **No** se corre el seed demo (es para QA, no para datos reales).
