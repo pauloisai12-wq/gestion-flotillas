@@ -122,6 +122,10 @@ services:
         # Site key de Turnstile (build-time). Debe emparejar con TURNSTILE_SECRET
         # del API. Vacío en dev = sin captcha en el portal.
         NEXT_PUBLIC_TURNSTILE_SITE_KEY: ${NEXT_PUBLIC_TURNSTILE_SITE_KEY:-}
+        # Interruptor del captcha (build-time). 'false' lo apaga en el portal
+        # (despliegue interno VPN-only, §6.1). Debe coincidir con TURNSTILE_ENABLED
+        # del API. Default 'true'.
+        NEXT_PUBLIC_TURNSTILE_ENABLED: ${NEXT_PUBLIC_TURNSTILE_ENABLED:-true}
     container_name: flotillas_web
     restart: unless-stopped
     ports:

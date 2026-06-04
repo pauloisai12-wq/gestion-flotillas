@@ -25,6 +25,11 @@ ENV API_PROXY_TARGET=$API_PROXY_TARGET
 ARG NEXT_PUBLIC_TURNSTILE_SITE_KEY=
 ENV NEXT_PUBLIC_TURNSTILE_SITE_KEY=$NEXT_PUBLIC_TURNSTILE_SITE_KEY
 
+# Interruptor del captcha (build-time). 'false' lo deshabilita por completo en el
+# portal (despliegue interno VPN-only, CLAUDE.md §6.1). Default 'true'.
+ARG NEXT_PUBLIC_TURNSTILE_ENABLED=true
+ENV NEXT_PUBLIC_TURNSTILE_ENABLED=$NEXT_PUBLIC_TURNSTILE_ENABLED
+
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN npm run build

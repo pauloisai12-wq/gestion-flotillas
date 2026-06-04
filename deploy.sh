@@ -20,7 +20,7 @@ set -Eeuo pipefail
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 readonly ENV_FILE=".env"
-readonly ENV_TEMPLATE=".env.staging.example"
+readonly ENV_TEMPLATE="env.staging.plantilla.txt"
 readonly MIN_MAJOR=2
 readonly MIN_MINOR=24
 
@@ -85,7 +85,9 @@ else
 fi
 
 # Comando Compose combinado (base + override de staging).
-COMPOSE=("${COMPOSE_BASE[@]}" -f docker-compose.yml -f docker-compose.staging.yml)
+# `-p flotillas` AÍSLA el proyecto del SAS (red/volúmenes/ciclo de vida). Sin esto
+# el nombre por defecto sería el de la carpeta y podría chocar con el SAS (§4).
+COMPOSE=("${COMPOSE_BASE[@]}" -p flotillas -f docker-compose.yml -f docker-compose.staging.yml)
 c_ylw "  COMPOSE=\"${COMPOSE[*]}\""
 
 # ── 5. Build de imágenes (dentro de Docker) ─────────────────────────────────
@@ -124,9 +126,13 @@ step "Despliegue completo"
 "${COMPOSE[@]}" ps
 cat <<EOF
 
-$(c_grn "Stack arriba.")  Acceso (solo por VPN):  https://flotillas.internal
+$(c_grn "Stack arriba.")  Acceso (solo por VPN):  https://flotillas.internal:8443
 
 Siguientes pasos (una vez):
+  - Crear el primer ADMIN (la BD arranca vacía; el seed demo está bloqueado en prod):
+      ${COMPOSE[*]} run --rm \\
+        -e ADMIN_EMAIL=tu@correo.com -e ADMIN_PASSWORD='UnaPasswordFuerte12+' \\
+        api node dist/scripts/bootstrap-admin.js
   - Exportar la CA interna de Caddy para distribuir a los revisores:
       ${COMPOSE[*]} cp flotillas_caddy:/data/caddy/pki/authorities/local/root.crt ./flotillas-caddy-root.crt
   - Asegurar la resolución  flotillas.internal -> 10.10.0.2  en cada cliente.

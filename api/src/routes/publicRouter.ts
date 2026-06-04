@@ -48,6 +48,9 @@ async function consumeCsrfToken(token: string, ip: string): Promise<boolean> {
 // Verificación de Cloudflare Turnstile (opcional)
 // ─────────────────────────────────────────────
 async function verifyTurnstile(token: string, ip: string): Promise<boolean> {
+  // Captcha deshabilitado por configuración (despliegue interno VPN-only, §6.1):
+  // no hay nada que verificar.
+  if (!env.TURNSTILE_ENABLED) return true;
   if (!env.TURNSTILE_SECRET) {
     // Sin secret solo se bypasea en development local. En staging o
     // production el portal es público en internet: si falta el secret
@@ -200,10 +203,11 @@ router.post('/fuel-loads', async (req: Request, res: Response, next: NextFunctio
     const okCsrf = await consumeCsrfToken(parsed.data.csrfToken, ip);
     if (!okCsrf) throw Forbidden('Token expirado o inválido. Refresca la página.');
 
-    // 2. Turnstile check (si está configurado)
+    // 2. Turnstile check (solo si está habilitado Y configurado; en dev sin
+    //    secret, o en despliegues internos con TURNSTILE_ENABLED=false, se omite).
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const turnstileToken = (req.body as any).turnstileToken as string | undefined;
-    if (env.TURNSTILE_SECRET) {
+    if (env.TURNSTILE_ENABLED && env.TURNSTILE_SECRET) {
       if (!turnstileToken) throw BadRequest('Captcha requerido');
       const ok = await verifyTurnstile(turnstileToken, ip);
       if (!ok) throw Forbidden('Captcha inválido');

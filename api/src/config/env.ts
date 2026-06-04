@@ -40,8 +40,17 @@ const envSchema = z.object({
   // de __dirname (frágil entre dist/ y src/ y según la profundidad de carpetas).
   REPORTS_DIR: z.string().default('/app/storage/reports'),
 
-  // Captcha del portal público (opcional en dev, obligatorio en prod)
+  // Captcha del portal público (opcional en dev, obligatorio en prod si está habilitado)
   TURNSTILE_SECRET: z.string().optional(),
+
+  // Interruptor del captcha. 'false' lo deshabilita por completo: no se exige
+  // TURNSTILE_SECRET ni se valida el token. Pensado para despliegues internos
+  // VPN-only sin formularios públicos en internet (CLAUDE.md §6.1). Default
+  // 'true' (secure-by-default): hay que apagarlo EXPLÍCITAMENTE en el .env.
+  TURNSTILE_ENABLED: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
 
   // Rate limits (configurables)
   RATE_LIMIT_LOGIN_MAX: z.coerce.number().int().min(1).default(5),
@@ -79,8 +88,10 @@ if (parsed.data.NODE_ENV === 'production') {
   if (parsed.data.JWT_SECRET.length < 64) {
     errors.push('JWT_SECRET debe tener al menos 64 caracteres en producción');
   }
-  if (!parsed.data.TURNSTILE_SECRET) {
-    errors.push('TURNSTILE_SECRET es obligatorio en producción (portal público)');
+  // Solo se exige el secret si el captcha está HABILITADO. En despliegues
+  // internos VPN-only (TURNSTILE_ENABLED=false) no aplica (CLAUDE.md §6.1).
+  if (parsed.data.TURNSTILE_ENABLED && !parsed.data.TURNSTILE_SECRET) {
+    errors.push('TURNSTILE_SECRET es obligatorio en producción cuando TURNSTILE_ENABLED=true (portal público)');
   }
   if (parsed.data.CORS_ALLOWED_ORIGINS.some((o) => o.includes('localhost'))) {
     errors.push('CORS_ALLOWED_ORIGINS no debe contener localhost en producción');
@@ -103,7 +114,7 @@ if (parsed.data.NODE_ENV === 'production') {
   }
   // Rechazar las "test keys" always-pass de Cloudflare Turnstile (1x/2x/3x0000…):
   // pasan la validación de presencia pero dejan el captcha decorativo.
-  if (parsed.data.TURNSTILE_SECRET && /^[123]x0000/.test(parsed.data.TURNSTILE_SECRET)) {
+  if (parsed.data.TURNSTILE_ENABLED && parsed.data.TURNSTILE_SECRET && /^[123]x0000/.test(parsed.data.TURNSTILE_SECRET)) {
     errors.push('TURNSTILE_SECRET es una test key always-pass de Cloudflare; usa el secret real en producción');
   }
   if (errors.length > 0) {

@@ -21,17 +21,18 @@
 | `flotillas_api` | build `api/` (Node 20) | 3001 | No (proxiado por web) |
 | `flotillas_web` | build `web/` (Next standalone) | 3000 | No (detrás de Caddy) |
 | `flotillas_worker` | build `worker/` (Python) | — | No |
-| `flotillas_caddy` | caddy:2-alpine | 80/443 | **Sí, solo en 10.10.0.2 (VPN)** |
+| `flotillas_caddy` | caddy:2-alpine | 443 (interno) | **Sí, en `10.10.0.2:8443` (VPN; el SAS ocupa 443/80)** |
 
 - **Datos persistentes (disco cifrado LUKS):** `/srv/datos/flotillas/{postgres,redis,reports,uploads,caddy}`.
 - **Scheduler:** no hay contenedor aparte; los 4 cron jobs BullMQ viven embebidos en `flotillas_api` (`api/src/jobs/index.ts`).
 - **Reportería:** la API solo **encola** en la cola `reports`; el worker Python la procesa (PDF WeasyPrint + Excel openpyxl).
 
-Archivos de despliegue: `docker-compose.yml` + `docker-compose.staging.yml` + `Caddyfile` + `.env` (desde `.env.staging.example`).
+Archivos de despliegue: `docker-compose.yml` + `docker-compose.staging.yml` + `Caddyfile` + `.env` (desde `env.staging.plantilla.txt`).
 
 ```bash
-# Atajo usado en todo este runbook (ejecutar en el servidor):
-export COMPOSE="docker compose -f docker-compose.yml -f docker-compose.staging.yml"
+# Atajo usado en todo este runbook (ejecutar en el servidor).
+# `-p flotillas` aísla el proyecto del SAS (red/volúmenes/ciclo de vida).
+export COMPOSE="docker compose -p flotillas -f docker-compose.yml -f docker-compose.staging.yml"
 ```
 
 ---
@@ -44,22 +45,23 @@ export COMPOSE="docker compose -f docker-compose.yml -f docker-compose.staging.y
    ```bash
    $COMPOSE cp flotillas_caddy:/data/caddy/pki/authorities/local/root.crt ./flotillas-caddy-root.crt
    ```
-4. **URL de acceso:** `https://flotillas.internal`.
+4. **URL de acceso:** `https://flotillas.internal:8443` (el `:8443` es porque el SAS ya ocupa 443/80).
 5. **Administración:** SSH al servidor por VPN — `ssh toshinori_nmh@10.10.0.2`.
 
 ---
 
 ## 3. Secretos / variables de entorno
 
-Viven en `.env` **en el servidor** (nunca en el repo). Plantilla: `.env.staging.example`.
+Viven en `.env` **en el servidor** (nunca en el repo). Plantilla: `env.staging.plantilla.txt`.
 Con `NODE_ENV=production`, `env.ts` **aborta el arranque** si:
 
 - `JWT_SECRET` < 64 caracteres → genéralo con `openssl rand -base64 64`.
-- falta `TURNSTILE_SECRET` → es **obligatorio en producción**. Usa el **secret real** de
-  Cloudflare Turnstile (las *test keys* always-pass `1x/2x/3x0000…` se **rechazan** en prod —
-  no las uses). Déjalo vacío **solo** en `development`. Empareja con `NEXT_PUBLIC_TURNSTILE_SITE_KEY`
-  (build-time del web).
-- `CORS_ALLOWED_ORIGINS` contiene `localhost` → debe ser `https://flotillas.internal`.
+- **Turnstile (captcha):** en este despliegue está **DESHABILITADO** (`TURNSTILE_ENABLED=false`,
+  decisión §6.1: VPN-only, sin dependencia de Cloudflare). Con el flag en `false`, `env.ts`
+  **no exige** `TURNSTILE_SECRET`. Si algún día lo habilitas (`TURNSTILE_ENABLED=true`), entonces
+  sí es obligatorio un secret REAL de Cloudflare (las *test keys* `1x/2x/3x0000…` se rechazan) y
+  emparejarlo con `NEXT_PUBLIC_TURNSTILE_SITE_KEY` + `NEXT_PUBLIC_TURNSTILE_ENABLED=true` (build-time).
+- `CORS_ALLOWED_ORIGINS` contiene `localhost` → debe ser `https://flotillas.internal:8443` (con el puerto).
 - `BCRYPT_ROUNDS` < 12.
 - `JWT_SECRET`/`DATABASE_URL`/`REDIS_URL` contienen un valor *placeholder* de la plantilla
   (`CAMBIA_ESTO`, `tu_password`, `genera_con_openssl`, …) → reemplázalos por los reales.
@@ -84,14 +86,14 @@ Notas:
 sudo mkdir -p /srv/datos/flotillas/{postgres,redis,reports,uploads,caddy/data,caddy/config}
 git clone <repo-flotillas-v2> /srv/datos/flotillas/app
 cd /srv/datos/flotillas/app
-cp .env.staging.example .env && nano .env        # reemplaza cada CAMBIA_ESTO_* (POSTGRES_PASSWORD, JWT_SECRET, …)
+cp env.staging.plantilla.txt .env && nano .env   # reemplaza cada CAMBIA_ESTO_* (POSTGRES_PASSWORD, REDIS_PASSWORD, JWT_SECRET)
 chmod 600 .env
 
 # Un solo comando (build + migraciones automáticas + smoke test):
 ./deploy.sh
 
 # --- o, manualmente: ---
-export COMPOSE="docker compose -f docker-compose.yml -f docker-compose.staging.yml"
+export COMPOSE="docker compose -p flotillas -f docker-compose.yml -f docker-compose.staging.yml"
 $COMPOSE build
 # El servicio one-shot `migrate` aplica `prisma migrate deploy` (tablas + 5 vistas)
 # ANTES de que arranquen api/worker; servir sin esquema es imposible.
@@ -210,7 +212,7 @@ $COMPOSE down                                            # bajar el stack (sin b
 
 | Síntoma | Causa probable | Acción |
 |---|---|---|
-| El contenedor `api` no arranca | `env.ts` abortó (config débil) | Revisar `JWT_SECRET≥64`, `TURNSTILE_SECRET`, `CORS` sin localhost, `BCRYPT_ROUNDS≥12`, `SENTRY_DSN` válido o vacío |
+| El contenedor `api` no arranca | `env.ts` abortó (config débil) | Revisar `JWT_SECRET≥64`, `CORS` con `:8443` sin localhost, `BCRYPT_ROUNDS≥12`, `SENTRY_DSN` válido o vacío (y `TURNSTILE_SECRET` solo si `TURNSTILE_ENABLED=true`) |
 | `/api/health` devuelve 503 | Postgres o Redis caídos | `$COMPOSE ps`; revisar logs de `postgres`/`redis` |
 | Dashboard vacío | Vistas no pobladas | Confirmar que `migrate deploy` corrió; forzar refresco (§7) |
 | Reportes no descargan | La API no ve `storage/reports` | Verificar el bind `/srv/datos/flotillas/reports:/app/storage/reports` en `api` (incluido en el override) |

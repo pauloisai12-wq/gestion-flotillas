@@ -13,6 +13,9 @@ const API = process.env.NEXT_PUBLIC_API_URL || '';
 // Site key de Turnstile (build-time). Si está vacío (dev), no se muestra el
 // captcha y el backend omite la verificación en development.
 const TURNSTILE_SITE_KEY = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY || '';
+// Interruptor del captcha (build-time). 'false' lo deshabilita en despliegues
+// internos VPN-only (CLAUDE.md §6.1). Default habilitado salvo que se apague.
+const TURNSTILE_ENABLED = process.env.NEXT_PUBLIC_TURNSTILE_ENABLED !== 'false';
 
 type Station = { id: number; legalName: string; tradeName?: string | null };
 type VerifyResponse = {
@@ -46,7 +49,7 @@ export default function RegistroRapidoPage() {
   // token nuevo tras un submit (el token es de un solo uso).
   const [turnstileToken, setTurnstileToken] = useState('');
   const [turnstileKey, setTurnstileKey] = useState(0);
-  const turnstileRequired = !!TURNSTILE_SITE_KEY;
+  const turnstileRequired = TURNSTILE_ENABLED && !!TURNSTILE_SITE_KEY;
 
   // Carga inicial: CSRF token + gasolineras
   useEffect(() => {

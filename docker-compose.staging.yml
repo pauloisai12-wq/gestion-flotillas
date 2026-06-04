@@ -47,10 +47,15 @@ services:
       #   JWT_SECRET >= 64, BCRYPT_ROUNDS >= 12, CORS sin localhost,
       #   TURNSTILE_SECRET obligatorio. Todos se inyectan desde .env (abajo).
       NODE_ENV: production
-      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-https://flotillas.internal}
+      # Caddy publica en :8443 (el SAS ocupa 443/80), así que el origen que ve el
+      # navegador incluye el puerto. CORS debe coincidir EXACTO (con :8443).
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-https://flotillas.internal:8443}
       # El compose base NO pasa estas vars al contenedor api; aquí las añadimos
       # para que en NODE_ENV=production el arranque no aborte por defaults/faltantes.
-      TURNSTILE_SECRET: ${TURNSTILE_SECRET}
+      # TURNSTILE_ENABLED=false (despliegue interno VPN-only, §6.1) hace OPCIONAL el
+      # TURNSTILE_SECRET: con el captcha apagado, env.ts no lo exige.
+      TURNSTILE_ENABLED: ${TURNSTILE_ENABLED:-true}
+      TURNSTILE_SECRET: ${TURNSTILE_SECRET:-}
       BCRYPT_ROUNDS: ${BCRYPT_ROUNDS:-12}
       JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-8h}
       LOG_LEVEL: ${LOG_LEVEL:-info}
@@ -88,7 +93,7 @@ services:
 
   # === MIGRACIONES (one-shot) — aplica el esquema ANTES de servir tráfico (Gotcha 5) ===
   # Reusa la imagen prod de la API (trae el CLI `prisma` en dependencies y la carpeta
-  # prisma/ con las 8 migraciones). Corre `prisma migrate deploy` (idempotente, no
+  # prisma/ con las migraciones). Corre `prisma migrate deploy` (idempotente, no
   # interactivo), puebla las 5 vistas materializadas y termina. api/worker dependen
   # de su finalización exitosa, así que `up -d` migra y LUEGO sirve.
   migrate:
@@ -111,8 +116,10 @@ services:
       web:
         condition: service_healthy
     ports:
-      - "10.10.0.2:443:443"                # HTTPS solo en la interfaz WireGuard del servidor
-      - "10.10.0.2:80:80"                  # redirección HTTP->HTTPS (conveniencia)
+      # El SAS ya ocupa 443/80 en esta IP (sas-caddy). flotillas publica en 8443
+      # para NO colisionar (CLAUDE.md §4). Acceso: https://flotillas.internal:8443
+      # Sin :80: no hay redirección HTTP automática; se entra directo por https.
+      - "10.10.0.2:8443:443"               # HTTPS solo en la interfaz WireGuard del servidor
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - /srv/datos/flotillas/caddy/data:/data       # contiene la CA interna (root.crt)
