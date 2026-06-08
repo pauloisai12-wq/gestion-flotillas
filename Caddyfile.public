@@ -1,0 +1,34 @@
+# Caddyfile.public — reverse proxy PÚBLICO con HTTPS automático (Let's Encrypt)
+#
+# Para el despliegue de QA abierto en un VPS dedicado (docker-compose.public.yml).
+# A diferencia del Caddyfile interno (`tls internal` + hostname flotillas.internal),
+# aquí Caddy obtiene y renueva SOLO un certificado de Let's Encrypt válido públicamente
+# para el dominio real → los revisores ven el candado verde SIN instalar ninguna CA.
+#
+# ANTES DE DESPLEGAR, reemplaza:
+#   - el `email` (contacto ACME, recibe avisos de expiración)
+#   - el dominio `flotillas-qa.duckdns.org` por el tuyo (debe resolver por DNS al VPS)
+#
+# El cert se emite en el primer arranque (necesita el puerto 80 abierto para el reto
+# HTTP-01) y se persiste en el volumen caddy_data. HTTP -> HTTPS es automático.
+
+{
+	email tu-correo@ejemplo.com
+}
+
+flotillas-qa.duckdns.org {
+	encode zstd gzip
+
+	# El frontend Next sirve la UI y proxya internamente /api y /uploads a la API
+	# (rewrites horneados con API_PROXY_TARGET=http://api:3001). Un solo origen.
+	reverse_proxy web:3000
+
+	# --- Acceso restringido (OPCIONAL) ------------------------------------------
+	# Tu elección fue acceso ABIERTO, así que esto queda comentado. Si más adelante
+	# quieres una puerta única para revisores invitados (defensa en profundidad sobre
+	# el login del app), descomenta y pon un hash bcrypt. Genéralo con:
+	#   docker run --rm caddy:2-alpine caddy hash-password --plaintext 'TuClaveQA'
+	# basic_auth {
+	#	qa $2a$14$REEMPLAZA_CON_EL_HASH_BCRYPT
+	# }
+}
