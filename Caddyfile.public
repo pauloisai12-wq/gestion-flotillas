@@ -19,6 +19,16 @@
 qa.aztechcomposites.com {
 	encode zstd gzip
 
+	# Cabeceras de seguridad para las respuestas del web (HTML de Next). Helmet en
+	# la API solo cubre /api; este bloque endurece lo que sirve Caddy directamente.
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		X-Frame-Options "SAMEORIGIN"
+		-Server
+	}
+
 	# El frontend Next sirve la UI y proxya internamente /api y /uploads a la API
 	# (rewrites horneados con API_PROXY_TARGET=http://api:3001). Un solo origen.
 	reverse_proxy web:3000

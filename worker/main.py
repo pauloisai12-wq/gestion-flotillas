@@ -5,6 +5,7 @@
 import asyncio
 import json
 import os
+import signal
 import sys
 from datetime import datetime
 from urllib.parse import urlparse
@@ -271,15 +272,24 @@ async def main():
     )
 
     print("Escuchando jobs en la cola 'reports'...")
-    print("(Presiona Ctrl+C para detener)\n")
+    print("(SIGTERM o Ctrl+C para detener)\n")
 
-    try:
-        while True:
-            await asyncio.sleep(1)
-    except KeyboardInterrupt:
-        print("\nDeteniendo worker...")
-        await worker.close()
-        print("Worker detenido.")
+    # Cierre ordenado: Docker envía SIGTERM en `stop`/redeploy (NO SIGINT). Sin
+    # capturarlo, el loop moría de golpe y el job en curso quedaba a medias
+    # (fila report_history en PROCESSING + PDF/Excel parcial en storage/reports).
+    loop = asyncio.get_running_loop()
+    stop = asyncio.Event()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            loop.add_signal_handler(sig, stop.set)
+        except NotImplementedError:
+            # Algunas plataformas (p.ej. Windows) no soportan add_signal_handler.
+            signal.signal(sig, lambda *_: stop.set())
+
+    await stop.wait()
+    print("\nDeteniendo worker (señal recibida)...")
+    await worker.close()
+    print("Worker detenido.")
 
 
 if __name__ == "__main__":

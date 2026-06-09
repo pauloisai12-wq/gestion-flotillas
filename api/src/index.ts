@@ -39,7 +39,9 @@ import docsRouter from './routes/docsRouter';
 import maintenanceTicketRouter from './routes/maintenanceTicketRouter';
 import ticketQuoteRouter from './routes/ticketQuoteRouter';
 
-import { initializeJobs } from './jobs';
+import { initializeJobs, shutdownJobs } from './jobs';
+import prisma from './lib/prisma';
+import { closeRedis } from './lib/redis';
 import { authMiddleware } from './middlewares/authMiddleware';
 import { errorHandler } from './middlewares/errorHandler';
 import { logger, httpLoggerMiddleware } from './lib/logger';
@@ -214,24 +216,47 @@ const server = app.listen(env.PORT, async () => {
   await initializeJobs();
 });
 
-function shutdown(signal: string) {
+let shuttingDown = false;
+async function shutdown(signal: string): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
   logger.info({ signal }, 'Apagado solicitado, cerrando…');
-  server.close(() => {
-    logger.info('Servidor HTTP cerrado');
-    process.exit(0);
-  });
-  setTimeout(() => {
-    logger.error('Forzando salida tras 10s sin cerrar');
+
+  // Si el cierre ordenado se cuelga, forzar salida (no bloquear el redeploy).
+  const forceTimer = setTimeout(() => {
+    logger.error('Forzando salida tras 30s sin cerrar');
     process.exit(1);
-  }, 10_000).unref();
+  }, 30_000);
+  forceTimer.unref();
+
+  // 1. Dejar de aceptar nuevas conexiones HTTP.
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  logger.info('Servidor HTTP cerrado');
+
+  // 2. Cerrar workers/colas BullMQ, luego Prisma y Redis (en ese orden).
+  try {
+    await shutdownJobs();
+  } catch (err) {
+    logger.error({ err }, 'Error cerrando jobs BullMQ');
+  }
+  try {
+    await prisma.$disconnect();
+    logger.info('Prisma desconectado');
+  } catch (err) {
+    logger.error({ err }, 'Error desconectando Prisma');
+  }
+  await closeRedis();
+
+  process.exit(0);
 }
 
-process.on('SIGTERM', () => shutdown('SIGTERM'));
-process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', () => { void shutdown('SIGTERM'); });
+process.on('SIGINT', () => { void shutdown('SIGINT'); });
 process.on('uncaughtException', (err) => {
   logger.fatal({ err }, 'uncaughtException');
-  shutdown('uncaughtException');
+  void shutdown('uncaughtException');
 });
 process.on('unhandledRejection', (reason) => {
   logger.fatal({ reason }, 'unhandledRejection');
+  void shutdown('unhandledRejection');
 });

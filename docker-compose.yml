@@ -64,7 +64,10 @@ services:
     container_name: flotillas_api
     restart: unless-stopped
     ports:
-      - "3001:3001"
+      # Solo loopback del host: el acceso entra SIEMPRE por Caddy (TLS). Evita
+      # exponer la API directa si se levanta el base sin el override que la
+      # neutraliza con `ports: !reset []` (defensa ante footgun de exposición).
+      - "127.0.0.1:3001:3001"
     environment:
       # Si DATABASE_URL/REDIS_URL no se definen explícitamente en .env, se derivan
       # de las credenciales de Postgres/Redis (mismo patrón que worker-python, abajo).
@@ -129,7 +132,8 @@ services:
     container_name: flotillas_web
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      # Solo loopback del host: el acceso entra SIEMPRE por Caddy (TLS).
+      - "127.0.0.1:3000:3000"
     environment:
       NODE_ENV: production
       API_PROXY_TARGET: http://api:3001

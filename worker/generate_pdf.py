@@ -288,10 +288,11 @@ def get_maintenance_done(month, year):
             mr."serviceDate" as performed_at,
             mr.odometer as odometer_km,
             mr.cost,
-            mr.provider
+            COALESCE(w."legalName", mr."workshopRaw") AS provider
         FROM maintenance_records mr
         JOIN vehicles v ON mr."vehicleId" = v.id
         JOIN service_catalog sc ON mr."serviceId" = sc.id
+        LEFT JOIN workshops w ON mr."workshopId" = w.id
         WHERE mr."serviceDate" >= %s AND mr."serviceDate" <= %s
         ORDER BY mr."serviceDate" DESC
         """,
