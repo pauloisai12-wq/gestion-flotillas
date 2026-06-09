@@ -114,18 +114,6 @@ export default function LoginPage() {
             {loading ? 'Iniciando sesión…' : 'Iniciar sesión'}
           </Button>
         </form>
-
-        <div className="mt-6 pt-6 border-t border-border">
-          <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground text-center mb-3">
-            Usuarios de prueba
-          </p>
-          <div className="text-xs text-muted-foreground space-y-1 text-center font-mono tabular-nums">
-            <p>admin@flotillas.com / admin123</p>
-            <p>vehiculos@flotillas.com / super123</p>
-            <p>gasolina@flotillas.com / super123</p>
-            <p>mantenimiento@flotillas.com / super123</p>
-          </div>
-        </div>
       </Card>
     </div>
   );
