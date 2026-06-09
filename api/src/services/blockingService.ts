@@ -7,6 +7,7 @@ import prisma from '../lib/prisma';
 import { VehicleStatus } from '@prisma/client';
 import { notifyByRole, notifyManyByRole } from './notificationService';
 import { AppError } from '../middlewares/errorHandler';
+import { logger } from '../lib/logger';
 
 /**
  * Revisa los documentos de UN vehículo y actualiza su estado.
@@ -117,7 +118,7 @@ export async function checkVehicleCompliance(vehicleId: number) { // <-- CORRECC
  * antiguo loop N+1 que disparaba 3-4 queries por vehículo.
  */
 export async function runDailyComplianceCheck() {
-  console.log('Iniciando revision diaria de compliance...');
+  logger.info('Iniciando revisión diaria de compliance...');
   const now = new Date();
   // "Vencido" = expiresAt ANTES del inicio del día de hoy (mismo criterio que
   // checkVehicleCompliance y el semáforo: vencer HOY todavía NO bloquea).
@@ -194,7 +195,7 @@ export async function runDailyComplianceCheck() {
     timestamp: now.toISOString(),
   };
 
-  console.log('Resultado de compliance:', JSON.stringify(summary));
+  logger.info({ summary }, 'Resultado de compliance');
 
   return summary;
 }
