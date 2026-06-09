@@ -7,16 +7,16 @@
 #
 # ANTES DE DESPLEGAR, reemplaza:
 #   - el `email` (contacto ACME, recibe avisos de expiración)
-#   - el dominio `flotillas-qa.duckdns.org` por el tuyo (debe resolver por DNS al VPS)
+#   - el dominio por el tuyo (debe resolver por DNS al VPS; en Cloudflare: nube GRIS)
 #
 # El cert se emite en el primer arranque (necesita el puerto 80 abierto para el reto
 # HTTP-01) y se persiste en el volumen caddy_data. HTTP -> HTTPS es automático.
 
 {
-	email tu-correo@ejemplo.com
+	email paulo.azamar.comp@gmail.com
 }
 
-flotillas-qa.duckdns.org {
+qa.aztechcomposites.com {
 	encode zstd gzip
 
 	# El frontend Next sirve la UI y proxya internamente /api y /uploads a la API
