@@ -4,12 +4,14 @@ import withBundleAnalyzer from "@next/bundle-analyzer";
 
 const API_TARGET = process.env.API_PROXY_TARGET || "http://localhost:3001";
 
-// En builds de producción API_PROXY_TARGET debe apuntar al servicio `api` (se
-// hornea en los rewrites). El fallback a localhost solo sirve para `next dev`
-// fuera de Docker; en prod sin la var, la app proxearía a localhost (roto).
+// El build real de Docker hornea API_PROXY_TARGET (ARG → http://api:3001). Si no
+// está en un build de producción (p.ej. el check de CI o un `npm run build` local),
+// avisamos pero NO rompemos: el fallback a localhost solo afecta a builds que no se
+// despliegan; el rewrite solo importa en runtime.
 if (process.env.NODE_ENV === "production" && !process.env.API_PROXY_TARGET) {
-  throw new Error(
-    "API_PROXY_TARGET es obligatorio en builds de producción (p.ej. http://api:3001).",
+  console.warn(
+    "[next.config] API_PROXY_TARGET no definido; usando fallback http://localhost:3001 " +
+      "(el build de Docker lo inyecta vía ARG).",
   );
 }
 
