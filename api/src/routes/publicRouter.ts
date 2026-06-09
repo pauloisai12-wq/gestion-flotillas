@@ -14,6 +14,7 @@ import { rateLimit, getClientIp } from '../middlewares/rateLimit';
 import { BadRequest, NotFound, Forbidden } from '../middlewares/errorHandler';
 import { logger } from '../lib/logger';
 import { env } from '../config/env';
+import { runWithAuditContext } from '../lib/auditContext';
 
 const router = Router();
 
@@ -47,6 +48,9 @@ async function consumeCsrfToken(token: string, ip: string): Promise<boolean> {
 // Verificación de Cloudflare Turnstile (opcional)
 // ─────────────────────────────────────────────
 async function verifyTurnstile(token: string, ip: string): Promise<boolean> {
+  // Captcha deshabilitado por configuración (despliegue interno VPN-only, §6.1):
+  // no hay nada que verificar.
+  if (!env.TURNSTILE_ENABLED) return true;
   if (!env.TURNSTILE_SECRET) {
     // Sin secret solo se bypasea en development local. En staging o
     // production el portal es público en internet: si falta el secret
@@ -178,22 +182,32 @@ router.get('/verify', async (req: Request, res: Response, next: NextFunction) =>
 // POST /fuel-loads — registro público de carga
 // ═══════════════════════════════════════════════════
 router.post('/fuel-loads', async (req: Request, res: Response, next: NextFunction) => {
+  const ip = getClientIp(req);
+  // Contexto de auditoría: el portal es anónimo (sin userId), así que la IP y el
+  // userAgent son el único rastro forense. Se propaga vía AsyncLocalStorage para
+  // que la extensión de auditoría de Prisma lo registre en el AuditLog del FuelLoad.
+  await runWithAuditContext(
+    {
+      ipAddress: ip,
+      userAgent: req.headers['user-agent']?.toString(),
+      requestId: res.getHeader('x-request-id') as string | undefined,
+    },
+    async () => {
   try {
     const parsed = publicFuelLoadSchema.safeParse(req.body);
     if (!parsed.success) {
       return next(BadRequest('Datos inválidos', parsed.error.issues));
     }
 
-    const ip = getClientIp(req);
-
     // 1. CSRF check
     const okCsrf = await consumeCsrfToken(parsed.data.csrfToken, ip);
     if (!okCsrf) throw Forbidden('Token expirado o inválido. Refresca la página.');
 
-    // 2. Turnstile check (si está configurado)
+    // 2. Turnstile check (solo si está habilitado Y configurado; en dev sin
+    //    secret, o en despliegues internos con TURNSTILE_ENABLED=false, se omite).
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const turnstileToken = (req.body as any).turnstileToken as string | undefined;
-    if (env.TURNSTILE_SECRET) {
+    if (env.TURNSTILE_ENABLED && env.TURNSTILE_SECRET) {
       if (!turnstileToken) throw BadRequest('Captcha requerido');
       const ok = await verifyTurnstile(turnstileToken, ip);
       if (!ok) throw Forbidden('Captcha inválido');
@@ -219,6 +233,8 @@ router.post('/fuel-loads', async (req: Request, res: Response, next: NextFunctio
   } catch (e) {
     next(e);
   }
+    },
+  );
 });
 
 export default router;

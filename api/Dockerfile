@@ -6,6 +6,9 @@
 # ─── STAGE 1: dependencias compartidas ───────────────────────────
 FROM node:20-alpine AS deps
 WORKDIR /app
+# Toolchain para compilar módulos nativos (bcrypt) desde fuente: en Alpine (musl)
+# no existe binario precompilado de bcrypt, así que node-pre-gyp compila.
+RUN apk add --no-cache python3 make g++
 COPY package*.json ./
 # npm ci respeta el lockfile exactamente y es más rápido que npm install
 RUN npm ci
@@ -32,9 +35,12 @@ FROM node:20-alpine AS prod
 WORKDIR /app
 ENV NODE_ENV=production
 
-# Solo dependencias de runtime
+# Solo dependencias de runtime. El toolchain se instala como paquete virtual
+# para compilar bcrypt y se elimina después (imagen final slim).
 COPY package*.json ./
-RUN npm ci --omit=dev && npm cache clean --force
+RUN apk add --no-cache --virtual .build-deps python3 make g++ \
+  && npm ci --omit=dev && npm cache clean --force \
+  && apk del .build-deps
 
 # Artefactos compilados
 COPY --from=builder /app/dist ./dist

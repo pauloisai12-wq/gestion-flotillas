@@ -19,8 +19,8 @@ interface RankingItem {
 
 export default function VehicleRankingChart({ filters = {} }: { filters?: DashboardFilters }) {
   const [view, setView] = useState<'top' | 'bottom'>('top');
-  const { data: topData, isLoading: loadingTop } = useVehicleRankingTop(10, filters);
-  const { data: bottomData, isLoading: loadingBottom } = useVehicleRankingBottom(10, filters);
+  const { data: topData, isLoading: loadingTop } = useVehicleRankingTop(10, filters, view === 'top');
+  const { data: bottomData, isLoading: loadingBottom } = useVehicleRankingBottom(10, filters, view === 'bottom');
 
   const isLoading = view === 'top' ? loadingTop : loadingBottom;
   const data = view === 'top' ? topData : bottomData;

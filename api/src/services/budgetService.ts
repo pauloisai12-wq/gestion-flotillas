@@ -4,7 +4,6 @@
 import prisma, { type Tx } from '../lib/prisma';
 import { BudgetKind, Prisma } from '@prisma/client';
 import { CloseMonthInput } from '../validators/budgetValidator';
-import { notifyByRole } from './notificationService';
 
 /** Retorna { year, month } del mes anterior al dado */
 function prevMonth(year: number, month: number) {
@@ -18,6 +17,19 @@ function nextMonth(year: number, month: number) {
   return { year, month: month + 1 };
 }
 
+/** Periodo presupuestal actual (mes/año) en la zona horaria del negocio
+ *  (America/Mexico_City), evitando el desfase de la hora local del servidor
+ *  cerca de la frontera de mes. */
+function currentBudgetPeriod(): { year: number; month: number } {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Mexico_City', year: 'numeric', month: '2-digit',
+  }).formatToParts(new Date());
+  return {
+    year: Number(parts.find((p) => p.type === 'year')!.value),
+    month: Number(parts.find((p) => p.type === 'month')!.value),
+  };
+}
+
 /**
  * Valida si un vehículo puede registrar una carga de X monto en el mes en curso.
  * Usa lock pesimista para evitar race conditions.
@@ -28,9 +40,7 @@ export async function checkAndReserveFuelBudget(
   vehicleId: number,
   amount: number,
 ) {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = now.getMonth() + 1;
+  const { year, month } = currentBudgetPeriod();
 
   // Lock pesimista — evita que dos cargas concurrentes del mismo vehículo se cuelen
   const rows = await tx.$queryRaw<
@@ -91,15 +101,25 @@ export async function closeMonthAndRollover(input: CloseMonthInput) {
   const result: { kind: BudgetKind; closed: number; rolledOver: number; remainderTotal: number }[] = [];
 
   for (const k of kinds) {
-    // Presupuestos del mes a cerrar que NO estén ya cerrados
-    const openBudgets = await prisma.vehicleBudget.findMany({
-      where: { year, month, kind: k, isClosed: false },
-    });
+    const summary = await prisma.$transaction(async (tx) => {
+      // Lectura DENTRO de la tx con lock pesimista (FOR UPDATE) sobre las filas
+      // abiertas del mes a cerrar. Si el job se dispara dos veces (reintento de
+      // BullMQ, doble instancia de API, o manual + cron), la 2ª corrida espera el
+      // commit de la 1ª y entonces ve isClosed=true → 0 filas → rollover
+      // exactly-once (sin doble crédito del remanente al mes siguiente).
+      const openBudgets = await tx.$queryRaw<
+        Array<{ id: number; vehicleId: number; baseAmount: string; rolloverIn: string; spentAmount: string }>
+      >`
+        SELECT id, "vehicleId", "baseAmount"::text, "rolloverIn"::text, "spentAmount"::text
+        FROM vehicle_budgets
+        WHERE year = ${year} AND month = ${month}
+          AND kind = ${k}::"BudgetKind" AND "isClosed" = false
+        FOR UPDATE
+      `;
 
-    let rolledCount = 0;
-    let totalRemainder = 0;
+      let rolledCount = 0;
+      let totalRemainder = 0;
 
-    await prisma.$transaction(async (tx) => {
       for (const b of openBudgets) {
         const available = Number(b.baseAmount) + Number(b.rolloverIn) - Number(b.spentAmount);
         const remainder = Math.max(0, available);
@@ -125,51 +145,27 @@ export async function closeMonthAndRollover(input: CloseMonthInput) {
           },
         });
 
-        await tx.vehicleBudget.update({
-          where: { id: b.id },
-          data: { isClosed: true, closedAt: new Date() },
-        });
-
         rolledCount++;
       }
-    });
 
-    result.push({ kind: k, closed: openBudgets.length, rolledOver: rolledCount, remainderTotal: totalRemainder });
+      // Marcar como cerrados en UNA sola escritura (las filas ya están bloqueadas).
+      if (openBudgets.length > 0) {
+        await tx.vehicleBudget.updateMany({
+          where: { id: { in: openBudgets.map((b) => b.id) } },
+          data: { isClosed: true, closedAt: new Date() },
+        });
+      }
+
+      return { closed: openBudgets.length, rolledOver: rolledCount, remainderTotal: totalRemainder };
+    }, { timeout: 60_000, maxWait: 10_000 });
+
+    result.push({ kind: k, closed: summary.closed, rolledOver: summary.rolledOver, remainderTotal: summary.remainderTotal });
   }
 
   return { year, month, results: result };
 }
 
-/**
- * Helper legacy — mantenido para compatibilidad con código que aún llame a recordBudgetSpending.
- * Llama al nuevo flujo dentro de una tx externa.
- */
-export async function recordBudgetSpending(vehicleId: number, amount: number) {
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  return prisma.$transaction(async (tx) => {
-    const res = await checkAndReserveFuelBudget(tx, vehicleId, amount);
-    if (res.reason === 'EXCEDE') throw new Error(`Excede presupuesto disponible: $${res.available}`);
-
-    // Notificaciones
-    if (res.percentage && res.percentage >= 80 && res.percentage < 100) {
-      await notifyByRole({
-        role: 'SUPERVISOR_FUEL' as never,
-        type: 'BUDGET_WARNING',
-        title: `Presupuesto al ${Math.round(res.percentage)}%`,
-        message: `Vehículo ID ${vehicleId} consumió ${Math.round(res.percentage)}% de su presupuesto de combustible.`,
-        entityRef: `vehicle:${vehicleId}`,
-      });
-    }
-    if ((res.available ?? Infinity) <= 0) {
-      await notifyByRole({
-        role: 'ADMIN' as never,
-        type: 'BUDGET_EXCEEDED',
-        title: 'Presupuesto agotado',
-        message: `Vehículo ID ${vehicleId} alcanzó 100% de su presupuesto. Cargas bloqueadas.`,
-        entityRef: `vehicle:${vehicleId}`,
-      });
-    }
-
-    return res;
-  });
-}
+// (Se eliminó recordBudgetSpending: era código muerto — ningún call-site lo
+// usaba; el gasto real pasa por checkAndReserveFuelBudget dentro de fuelLoadService.
+// Nota: las notificaciones de presupuesto al 80%/100% vivían SOLO aquí, por lo
+// que nunca se disparaban; cablearlas es una decisión de feature aparte.)

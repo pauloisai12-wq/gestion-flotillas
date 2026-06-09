@@ -1,0 +1,47 @@
+# Caddyfile.public — reverse proxy PÚBLICO con HTTPS automático (Let's Encrypt)
+#
+# Para el despliegue de QA abierto en un VPS dedicado (docker-compose.public.yml).
+# A diferencia del Caddyfile interno (`tls internal` + hostname flotillas.internal),
+# aquí Caddy obtiene y renueva SOLO un certificado de Let's Encrypt válido públicamente
+# para el dominio real → los revisores ven el candado verde SIN instalar ninguna CA.
+#
+# ANTES DE DESPLEGAR, reemplaza:
+#   - el `email` (contacto ACME, recibe avisos de expiración)
+#   - el dominio por el tuyo (debe resolver por DNS al VPS; en Cloudflare: nube GRIS)
+#
+# El cert se emite en el primer arranque (necesita el puerto 80 abierto para el reto
+# HTTP-01) y se persiste en el volumen caddy_data. HTTP -> HTTPS es automático.
+
+{
+	email paulo.azamar.comp@gmail.com
+}
+
+qa.aztechcomposites.com {
+	encode zstd gzip
+
+	# Refuerzo de seguridad en el borde. Next ya emite estas cabeceras en su HTML
+	# (web/next.config.ts), pero las fijamos también aquí por si una respuesta la
+	# sirve Caddy directo (errores/redirects) y para ocultar el header Server.
+	# Los valores DEBEN coincidir con los de Next (X-Frame-Options: DENY) para no
+	# degradarlos al sobrescribir.
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		X-Frame-Options "DENY"
+		-Server
+	}
+
+	# El frontend Next sirve la UI y proxya internamente /api y /uploads a la API
+	# (rewrites horneados con API_PROXY_TARGET=http://api:3001). Un solo origen.
+	reverse_proxy web:3000
+
+	# --- Acceso restringido (OPCIONAL) ------------------------------------------
+	# Tu elección fue acceso ABIERTO, así que esto queda comentado. Si más adelante
+	# quieres una puerta única para revisores invitados (defensa en profundidad sobre
+	# el login del app), descomenta y pon un hash bcrypt. Genéralo con:
+	#   docker run --rm caddy:2-alpine caddy hash-password --plaintext 'TuClaveQA'
+	# basic_auth {
+	#	qa $2a$14$REEMPLAZA_CON_EL_HASH_BCRYPT
+	# }
+}

@@ -75,15 +75,20 @@ export async function reserveMaintenanceBudget(tx: Tx, vehicleId: number, amount
     return { allowed: false, available };
   }
 
+  // Saldo que quedará tras reservar este monto. Cortamos el presupuesto cuando
+  // se agota (remaining <= 0), igual que checkAndReserveFuelBudget; NO usamos
+  // igualdad estricta de floats (casi nunca verdadera). Si queda saldo, dejamos
+  // isCutOff SIN tocar (undefined) para no resetear un corte previo.
+  const remaining = available - amount;
   await tx.vehicleBudget.update({
     where: { id: b.id },
     data: {
       spentAmount: { increment: amount },
-      isCutOff: amount === available ? true : undefined,
+      isCutOff: remaining <= 0 ? true : undefined,
     },
   });
 
-  return { allowed: true, available: available - amount };
+  return { allowed: true, available: remaining };
 }
 
 /** Notifica a todos los admins de mantenimiento (ADMIN + SUPERVISOR_MAINTENANCE). */

@@ -70,12 +70,16 @@ def get_summary(month, year):
     total_spent = float(fuel_data["total_spent"].iloc[0]) if len(fuel_data) > 0 else 0
     avg_kml = float(fuel_data["avg_kml"].iloc[0]) if len(fuel_data) > 0 else 0
 
-    # Presupuesto del mes
+    # Presupuesto del mes (pote mensual de COMBUSTIBLE — esquema unificado v2).
+    # La tabla 'fuel_budgets'/'globalAmount' ya no existe tras la unificación;
+    # se usa monthly_budgets.totalAmount filtrando por kind='FUEL'.
     budget_total = query_single_value(
         """
-        SELECT COALESCE("globalAmount", 0)
-        FROM fuel_budgets
-        WHERE month = %s AND year = %s
+        SELECT COALESCE("totalAmount", 0)
+        FROM monthly_budgets
+        WHERE kind = 'FUEL'::"BudgetKind"
+          AND month = %s
+          AND year = %s
         """,
         (month, year)
     ) or 0
@@ -284,10 +288,11 @@ def get_maintenance_done(month, year):
             mr."serviceDate" as performed_at,
             mr.odometer as odometer_km,
             mr.cost,
-            mr.provider
+            COALESCE(w."legalName", mr."workshopRaw") AS provider
         FROM maintenance_records mr
         JOIN vehicles v ON mr."vehicleId" = v.id
         JOIN service_catalog sc ON mr."serviceId" = sc.id
+        LEFT JOIN workshops w ON mr."workshopId" = w.id
         WHERE mr."serviceDate" >= %s AND mr."serviceDate" <= %s
         ORDER BY mr."serviceDate" DESC
         """,

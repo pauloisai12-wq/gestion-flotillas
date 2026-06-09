@@ -2,19 +2,20 @@
 // Bitácora de notas de un vehículo — append-only log con edición auditada
 
 import { Router, Request, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
+import prisma from '../lib/prisma';
 import { requireRole, RoleGroups, Roles } from '../middlewares/roleMiddleware';
+import { ah } from '../lib/asyncHandler';
 import { vehicleNoteCreateSchema, vehicleNoteUpdateSchema } from '../validators/vehicleNoteValidator';
 
-const prisma = new PrismaClient();
 const router = Router({ mergeParams: true });
 
 /** GET /api/vehicles/:vehicleId/notes — histórico completo */
 router.get(
   '/vehicles/:vehicleId/notes',
   requireRole(RoleGroups.VEHICLE_READERS),
-  async (req: Request, res: Response) => {
+  ah(async (req: Request, res: Response) => {
     const vehicleId = Number(req.params.vehicleId);
+    if (!Number.isInteger(vehicleId)) return res.status(400).json({ error: 'ID inválido' });
     const notes = await prisma.vehicleNote.findMany({
       where: { vehicleId, deletedAt: null },
       include: {
@@ -24,15 +25,16 @@ router.get(
       orderBy: { createdAt: 'desc' },
     });
     res.json({ data: notes });
-  },
+  }),
 );
 
 /** POST /api/vehicles/:vehicleId/notes — agregar nota nueva */
 router.post(
   '/vehicles/:vehicleId/notes',
   requireRole(RoleGroups.NOTES_WRITERS),
-  async (req: Request, res: Response) => {
+  ah(async (req: Request, res: Response) => {
     const vehicleId = Number(req.params.vehicleId);
+    if (!Number.isInteger(vehicleId)) return res.status(400).json({ error: 'ID inválido' });
     const parsed = vehicleNoteCreateSchema.safeParse(req.body);
     if (!parsed.success) {
       return res.status(400).json({ error: 'Datos inválidos', issues: parsed.error.issues });
@@ -47,15 +49,16 @@ router.post(
       include: { author: { select: { id: true, fullName: true } } },
     });
     res.status(201).json({ data: note });
-  },
+  }),
 );
 
 /** PATCH /api/notes/:noteId — editar (autor o admin) */
 router.patch(
   '/notes/:noteId',
   requireRole(RoleGroups.NOTES_WRITERS),
-  async (req: Request, res: Response) => {
+  ah(async (req: Request, res: Response) => {
     const noteId = Number(req.params.noteId);
+    if (!Number.isInteger(noteId)) return res.status(400).json({ error: 'ID inválido' });
     const parsed = vehicleNoteUpdateSchema.safeParse(req.body);
     if (!parsed.success) {
       return res.status(400).json({ error: 'Datos inválidos', issues: parsed.error.issues });
@@ -79,15 +82,16 @@ router.patch(
       },
     });
     res.json({ data: updated });
-  },
+  }),
 );
 
 /** DELETE /api/notes/:noteId — soft delete (admin o autor) */
 router.delete(
   '/notes/:noteId',
   requireRole(RoleGroups.NOTES_WRITERS),
-  async (req: Request, res: Response) => {
+  ah(async (req: Request, res: Response) => {
     const noteId = Number(req.params.noteId);
+    if (!Number.isInteger(noteId)) return res.status(400).json({ error: 'ID inválido' });
     const user = req.user!;
 
     const note = await prisma.vehicleNote.findUnique({ where: { id: noteId } });
@@ -102,7 +106,7 @@ router.delete(
       data: { deletedAt: new Date(), updatedBy: user.userId },
     });
     res.status(204).end();
-  },
+  }),
 );
 
 export default router;

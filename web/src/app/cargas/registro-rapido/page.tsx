@@ -7,8 +7,15 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { AlertTriangle, CheckCircle2, Fuel, Search, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import TurnstileWidget from '@/components/TurnstileWidget';
 
 const API = process.env.NEXT_PUBLIC_API_URL || '';
+// Site key de Turnstile (build-time). Si está vacío (dev), no se muestra el
+// captcha y el backend omite la verificación en development.
+const TURNSTILE_SITE_KEY = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY || '';
+// Interruptor del captcha (build-time). 'false' lo deshabilita en despliegues
+// internos VPN-only (CLAUDE.md §6.1). Default habilitado salvo que se apague.
+const TURNSTILE_ENABLED = process.env.NEXT_PUBLIC_TURNSTILE_ENABLED !== 'false';
 
 type Station = { id: number; legalName: string; tradeName?: string | null };
 type VerifyResponse = {
@@ -38,6 +45,12 @@ export default function RegistroRapidoPage() {
   const [submitError, setSubmitError] = useState('');
   const [success, setSuccess] = useState<{ folio: number; available: number | null } | null>(null);
 
+  // Token de Turnstile (captcha). turnstileKey remonta el widget para obtener un
+  // token nuevo tras un submit (el token es de un solo uso).
+  const [turnstileToken, setTurnstileToken] = useState('');
+  const [turnstileKey, setTurnstileKey] = useState(0);
+  const turnstileRequired = TURNSTILE_ENABLED && !!TURNSTILE_SITE_KEY;
+
   // Carga inicial: CSRF token + gasolineras
   useEffect(() => {
     axios.get(`${API}/api/public/session-token`).then((r) => setCsrfToken(r.data.csrfToken));
@@ -65,8 +78,9 @@ export default function RegistroRapidoPage() {
   const available = verifyData?.budget?.available ?? null;
   const amountNum = Number(amount);
   const exceeds = useMemo(() => {
-    if (!available || !amountNum) return false;
-    return amountNum > available;
+    if (available === null) return false; // sin presupuesto declarado: el backend decide
+    if (!Number.isFinite(amountNum) || amountNum <= 0) return false; // monto vacío/no válido
+    return amountNum > available; // available=0 bloquea cualquier monto positivo
   }, [available, amountNum]);
 
   async function handleSubmit(e: FormEvent) {
@@ -76,6 +90,7 @@ export default function RegistroRapidoPage() {
     try {
       const payload = {
         csrfToken,
+        turnstileToken,
         vehicleEconomicNumber: economicNumber.trim(),
         operatorEmployee: employeeNumber.trim(),
         operatorName: verifyData?.operator?.fullName || '',
@@ -90,6 +105,11 @@ export default function RegistroRapidoPage() {
     } catch (err) {
       const r = (err as { response?: { data?: { error?: string; available?: number } }; message?: string }).response;
       setSubmitError(r?.data?.error || (err as Error).message || 'Error al registrar');
+      // El token de captcha es de un solo uso: tras un intento hay que renovarlo.
+      if (turnstileRequired) {
+        setTurnstileToken('');
+        setTurnstileKey((k) => k + 1);
+      }
       // Si fue por presupuesto, refrescar verify
       if (r?.data?.available !== undefined) {
         handleVerify();
@@ -126,6 +146,7 @@ export default function RegistroRapidoPage() {
               setSuccess(null);
               setAmount(''); setLiters(''); setOdometer(''); setOdometerNF(false);
               setStationId('');
+              setTurnstileToken(''); setTurnstileKey((k) => k + 1);
               axios.get(`${API}/api/public/session-token`).then((r) => setCsrfToken(r.data.csrfToken));
             }}
           >
@@ -341,11 +362,15 @@ export default function RegistroRapidoPage() {
                 </div>
               )}
 
+              {turnstileRequired && (
+                <TurnstileWidget key={turnstileKey} siteKey={TURNSTILE_SITE_KEY} onToken={setTurnstileToken} />
+              )}
+
               <Button
                 type="submit"
                 className="w-full"
                 size="lg"
-                disabled={submitting || exceeds || !stationId || !amount || (!odometerNF && !odometer)}
+                disabled={submitting || exceeds || !stationId || !amount || (!odometerNF && !odometer) || (turnstileRequired && !turnstileToken)}
               >
                 {submitting ? <Loader2 className="size-4 animate-spin" /> : <Fuel className="size-4" />}
                 {submitting ? 'Registrando…' : 'Registrar carga'}

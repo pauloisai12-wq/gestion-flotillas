@@ -13,10 +13,15 @@ from contextlib import contextmanager
 # Silenciar el UserWarning de pandas respecto a SQLAlchemy
 warnings.filterwarnings('ignore', category=UserWarning, module='pandas')
 
-DATABASE_URL = os.environ.get(
-    "DATABASE_URL",
-    "postgresql://postgres:postgres@localhost:5433/flotillas"
-)
+DATABASE_URL = os.environ.get("DATABASE_URL")
+if not DATABASE_URL:
+    # Sin fallback a localhost: dentro del contenedor el host es el servicio
+    # `postgres` (lo inyecta docker-compose). Fallar explícito evita conexiones
+    # silenciosas a una BD equivocada si la variable no se propagó.
+    raise RuntimeError(
+        "DATABASE_URL es obligatorio "
+        "(p.ej. postgresql://user:pass@postgres:5432/flotillas)"
+    )
 
 # Tamaño del pool. Mín 1 conexión (uso bajo en idle), máx 5 (suficiente para
 # generación concurrente de reportes — el worker tiene concurrency=1, pero
@@ -59,7 +64,16 @@ def _checkout(cursor_factory=RealDictCursor):
             conn.cursor_factory = cursor_factory
         yield conn
     finally:
-        p.putconn(conn)
+        # Resetear el estado transaccional antes de devolver la conexión al pool:
+        # si una query falló, la conexión queda en transacción abortada y
+        # envenenaría al siguiente que la tome. Si el rollback falla, la
+        # conexión está rota y se descarta del pool (close=True).
+        broken = False
+        try:
+            conn.rollback()
+        except Exception:
+            broken = True
+        p.putconn(conn, close=broken)
 
 
 def get_connection():
@@ -120,8 +134,19 @@ def query_single_value(sql, params=None):
 
 
 # --- Prueba de conexión ---
+def _redact_url(url: str) -> str:
+    """Oculta la contraseña de una URL de conexión antes de imprimirla."""
+    if "://" in url and "@" in url:
+        scheme, rest = url.split("://", 1)
+        if "@" in rest:
+            creds, host = rest.split("@", 1)
+            user = creds.split(":", 1)[0]
+            return f"{scheme}://{user}:***@{host}"
+    return url
+
+
 if __name__ == "__main__":
-    print(f"Conectando a: {DATABASE_URL}")
+    print(f"Conectando a: {_redact_url(DATABASE_URL)}")
     try:
         with _checkout() as conn:
             cursor = conn.cursor()

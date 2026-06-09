@@ -1,0 +1,25 @@
+# Contexto de build del worker Python. El build hace `pip install` fresco dentro
+# de Docker (python:3.11-slim): nada de bytecode/venv del host debe colarse.
+
+# Bytecode y caches de Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+
+# Entornos virtuales locales
+.venv/
+venv/
+
+# Secretos / entorno — NUNCA al contexto de build
+.env
+.env.*
+
+# Logs y reportes generados en runtime (se montan por volumen, no se hornean)
+*.log
+storage/
+
+# VCS / editor
+.git
+.gitignore

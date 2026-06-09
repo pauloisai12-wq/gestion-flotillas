@@ -4,10 +4,26 @@
 import { createQueue, createWorker } from '../config/queue';
 import { runDailyComplianceCheck } from '../services/blockingService';
 import { getAllPendingServices } from '../services/maintenanceService';
-import { notifyByRole } from '../services/notificationService';
+import { notifyManyByRole } from '../services/notificationService';
 import { refreshMaterializedViews } from './refreshViewsJob';
 import { closeMonthAndRollover } from '../services/budgetService';
 import { logger } from '../lib/logger';
+import type { Queue, Worker } from 'bullmq';
+
+// Refs vivas de colas/workers para cierre ordenado (graceful shutdown, SIGTERM).
+const queues: Queue[] = [];
+const workers: Worker[] = [];
+
+/**
+ * Cierra todos los workers y colas de BullMQ. Lo invoca el shutdown de la API
+ * (api/src/index.ts) para no dejar jobs a medias ni conexiones Redis colgando.
+ */
+export async function shutdownJobs(): Promise<void> {
+  logger.info('Cerrando workers y colas de BullMQ...');
+  await Promise.allSettled(workers.map((w) => w.close()));
+  await Promise.allSettled(queues.map((q) => q.close()));
+  logger.info('Workers y colas de BullMQ cerrados');
+}
 
 /**
  * Calcula año/mes del MES ANTERIOR de forma robusta, sin importar
@@ -29,8 +45,9 @@ export async function initializeJobs(): Promise<void> {
 
   // ─── Cola 1: Compliance (diario a las 00:01) ───
   const complianceQueue = createQueue('compliance');
+  queues.push(complianceQueue);
 
-  createWorker('compliance', async () => {
+  const complianceWorker = createWorker('compliance', async () => {
     await runDailyComplianceCheck();
 
     logger.info('Revisando mantenimientos pendientes...');
@@ -42,44 +59,33 @@ export async function initializeJobs(): Promise<void> {
       'Mantenimientos: ' + overdue.length + ' vencidos, ' + warning.length + ' próximos (80%+)',
     );
 
-    for (const s of overdue) {
-      await notifyByRole({
-        role: 'SUPERVISOR_VEHICLES',
-        type: 'MAINTENANCE_OVERDUE',
+    // Notificación en lote (resuelve destinatarios una vez) + dedupe diario:
+    // antes eran 2×N llamadas con N+1 de usuarios y re-insertaban las mismas
+    // alertas cada día.
+    await notifyManyByRole({
+      roles: ['SUPERVISOR_VEHICLES', 'ADMIN'],
+      type: 'MAINTENANCE_OVERDUE',
+      dedupeWithinHours: 20,
+      items: overdue.map((s) => ({
         title: 'Mantenimiento vencido',
         message: s.economicNumber + ': ' + s.name + ' vencido por ' + Math.abs(s.remainingKm).toLocaleString() + ' km.',
         entityRef: 'vehicle:' + s.vehicleId,
-      });
+      })),
+    });
 
-      await notifyByRole({
-        role: 'ADMIN',
-        type: 'MAINTENANCE_OVERDUE',
-        title: 'Mantenimiento vencido',
-        message: s.economicNumber + ': ' + s.name + ' vencido por ' + Math.abs(s.remainingKm).toLocaleString() + ' km.',
-        entityRef: 'vehicle:' + s.vehicleId,
-      });
-    }
-
-    for (const s of warning) {
-      await notifyByRole({
-        role: 'SUPERVISOR_VEHICLES',
-        type: 'MAINTENANCE_DUE',
+    await notifyManyByRole({
+      roles: ['SUPERVISOR_VEHICLES', 'ADMIN'],
+      type: 'MAINTENANCE_DUE',
+      dedupeWithinHours: 20,
+      items: warning.map((s) => ({
         title: 'Mantenimiento próximo',
         message: s.economicNumber + ': ' + s.name + ' al ' + s.progressPercent + '%. Faltan ' + s.remainingKm.toLocaleString() + ' km.',
         entityRef: 'vehicle:' + s.vehicleId,
-      });
-
-      await notifyByRole({
-        role: 'ADMIN',
-        type: 'MAINTENANCE_DUE',
-        title: 'Mantenimiento próximo',
-        message: s.economicNumber + ': ' + s.name + ' al ' + s.progressPercent + '%. Faltan ' + s.remainingKm.toLocaleString() + ' km.',
-        entityRef: 'vehicle:' + s.vehicleId,
-      });
-    }
+      })),
+    });
   });
 
-  await complianceQueue.obliterate({ force: true });
+  workers.push(complianceWorker);
 
   await complianceQueue.upsertJobScheduler(
     'daily-compliance-check',
@@ -100,12 +106,12 @@ export async function initializeJobs(): Promise<void> {
 
   // ─── Cola 2: Refresco de vistas materializadas (cada 15 min) ───
   const viewsQueue = createQueue('refresh-views');
+  queues.push(viewsQueue);
 
-  createWorker('refresh-views', async () => {
+  const viewsWorker = createWorker('refresh-views', async () => {
     await refreshMaterializedViews();
   });
-
-  await viewsQueue.obliterate({ force: true });
+  workers.push(viewsWorker);
 
   await viewsQueue.upsertJobScheduler(
     'refresh-views-scheduler',
@@ -128,8 +134,7 @@ export async function initializeJobs(): Promise<void> {
   // NOTA: Esta cola solo ENCOLA el job en Redis.
   // El worker Python (worker/main.py) es quien lo PROCESA.
   const reportsQueue = createQueue('reports');
-
-  await reportsQueue.obliterate({ force: true });
+  queues.push(reportsQueue);
 
   await reportsQueue.upsertJobScheduler(
     'monthly-report-scheduler',
@@ -152,15 +157,16 @@ export async function initializeJobs(): Promise<void> {
 
   // ─── Cola 4: Rollover de presupuestos (día 1 a las 00:05) ───
   const rolloverQueue = createQueue('budget-rollover');
+  queues.push(rolloverQueue);
 
-  createWorker('budget-rollover', async () => {
+  const rolloverWorker = createWorker('budget-rollover', async () => {
     const { year: prevYear, month: prevMonth } = getPreviousMonth();
     logger.info({ year: prevYear, month: prevMonth }, 'Cerrando mes y aplicando rollover');
     const result = await closeMonthAndRollover({ year: prevYear, month: prevMonth });
     logger.info({ results: result.results }, 'Rollover aplicado');
   });
 
-  await rolloverQueue.obliterate({ force: true });
+  workers.push(rolloverWorker);
 
   await rolloverQueue.upsertJobScheduler(
     'monthly-rollover-scheduler',

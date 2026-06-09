@@ -20,7 +20,8 @@ services:
     container_name: flotillas_postgres
     restart: unless-stopped
     ports:
-      - "5433:5432"
+      # Solo loopback del host (no exponer la BD a la red del host/internet).
+      - "127.0.0.1:5433:5432"
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -38,12 +39,18 @@ services:
     image: redis:7-alpine
     container_name: flotillas_redis
     restart: unless-stopped
+    # SEGURIDAD: Redis exige contraseña (--requirepass). Sin esto, cualquier
+    # proceso en la red Docker podría leer/escribir/inyectar jobs en las colas
+    # BullMQ (incluida la cola 'reports' que ejecuta el worker Python).
+    # REDIS_PASSWORD es OBLIGATORIO: el arranque falla si no está en .env.
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:?REDIS_PASSWORD es obligatorio - definelo en .env}"]
     ports:
-      - "6379:6379"
+      # Solo loopback del host (no exponer Redis/colas a la red del host/internet).
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "--no-auth-warning", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -57,18 +64,38 @@ services:
     container_name: flotillas_api
     restart: unless-stopped
     ports:
-      - "3001:3001"
+      # Solo loopback del host: el acceso entra SIEMPRE por Caddy (TLS). Evita
+      # exponer la API directa si se levanta el base sin el override que la
+      # neutraliza con `ports: !reset []` (defensa ante footgun de exposición).
+      - "127.0.0.1:3001:3001"
     environment:
-      DATABASE_URL: ${DATABASE_URL}
-      REDIS_URL: ${REDIS_URL}
+      # Si DATABASE_URL/REDIS_URL no se definen explícitamente en .env, se derivan
+      # de las credenciales de Postgres/Redis (mismo patrón que worker-python, abajo).
+      # Así basta con definir POSTGRES_*/REDIS_PASSWORD; defínelas explícitas solo si
+      # apuntas a una BD/Redis externos. La password va embebida (literal) en la URL.
+      # connection_limit acota el pool de Prisma (default = cpus*2+1, que con BullMQ
+      # + cron jobs + healthchecks puede agotar conexiones). Si defines DATABASE_URL
+      # explícito en .env, inclúyelo tú (?connection_limit=15). El worker usa su
+      # propia URL SIN este parámetro (psycopg2 no lo entiende).
+      DATABASE_URL: ${DATABASE_URL:-postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?connection_limit=15}
+      REDIS_URL: ${REDIS_URL:-redis://:${REDIS_PASSWORD}@redis:6379}
       JWT_SECRET: ${JWT_SECRET}
-      # Mantenemos NODE_ENV de tu .env (típicamente "development") para que
-      # las validaciones estrictas de env.ts (JWT >= 64ch, Turnstile, sin
-      # localhost en CORS, bcrypt >= 12) no exploten en este entorno de
-      # pruebas con ngrok. El build sigue siendo el minificado (node dist/).
-      NODE_ENV: ${NODE_ENV:-development}
+      # NODE_ENV debe declararse EXPLÍCITAMENTE en .env (sin fallback silencioso).
+      # ⚠ "development" relaja las validaciones de env.ts (JWT >= 64ch, Turnstile,
+      # CORS sin localhost, bcrypt >= 12) Y BYPASEA el captcha del portal público
+      # (verifyTurnstile en publicRouter). NO uses "development" sobre un túnel
+      # ngrok PÚBLICO: para exponer a internet usa "production" (ver
+      # docker-compose.staging.yml). El build sigue siendo minificado (node dist/).
+      NODE_ENV: ${NODE_ENV:?Define NODE_ENV en .env (development=local/ngrok privado, production=staging/expuesto a internet)}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS}
+      # Cadena de proxies delante de la API (Caddy -> Next -> API = 2 saltos). Sin
+      # esto, req.ip colapsa a la IP interna del proxy y se degradan rate-limit,
+      # CSRF-por-IP y el remoteip de Turnstile. El .env siempre gana. (env.ts:36,
+      # parseo en api/src/index.ts: '2' -> app.set('trust proxy', 2)).
+      TRUST_PROXY: ${TRUST_PROXY:-2}
       SENTRY_DSN: ${SENTRY_DSN}
+      # Debe coincidir con el directorio del worker y con el bind mount de abajo.
+      REPORTS_DIR: /app/storage/reports
     depends_on:
       postgres:
         condition: service_healthy
@@ -80,6 +107,11 @@ services:
       timeout: 5s
       retries: 3
       start_period: 30s
+    volumes:
+      # COMPARTIDO con worker-python: el worker genera los PDF/Excel en
+      # /app/storage/reports y la API los sirve por GET /api/reports/:id/download/:type.
+      # Sin esto la descarga responde 404 (el archivo no existe en el FS de la API).
+      - ./storage/reports:/app/storage/reports
 
   # === FRONTEND WEB (Next.js — modo prod standalone) ===
   web:
@@ -94,10 +126,18 @@ services:
         # Dentro de Docker, "localhost" del web NO es el api — hay que apuntar
         # al hostname del servicio en la red de compose.
         API_PROXY_TARGET: http://api:3001
+        # Site key de Turnstile (build-time). Debe emparejar con TURNSTILE_SECRET
+        # del API. Vacío en dev = sin captcha en el portal.
+        NEXT_PUBLIC_TURNSTILE_SITE_KEY: ${NEXT_PUBLIC_TURNSTILE_SITE_KEY:-}
+        # Interruptor del captcha (build-time). 'false' lo apaga en el portal
+        # (despliegue interno VPN-only, §6.1). Debe coincidir con TURNSTILE_ENABLED
+        # del API. Default 'true'.
+        NEXT_PUBLIC_TURNSTILE_ENABLED: ${NEXT_PUBLIC_TURNSTILE_ENABLED:-true}
     container_name: flotillas_web
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      # Solo loopback del host: el acceso entra SIEMPRE por Caddy (TLS).
+      - "127.0.0.1:3000:3000"
     environment:
       NODE_ENV: production
       API_PROXY_TARGET: http://api:3001
@@ -121,7 +161,7 @@ services:
     restart: unless-stopped
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-      REDIS_URL: redis://redis:6379
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
       PYTHONUNBUFFERED: 1
     depends_on:
       postgres:

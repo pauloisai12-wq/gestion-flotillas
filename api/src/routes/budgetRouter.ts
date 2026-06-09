@@ -3,8 +3,10 @@
 // Reemplaza completamente el router v1.
 
 import { Router, Request, Response } from 'express';
-import { PrismaClient, BudgetKind, Prisma } from '@prisma/client';
+import { BudgetKind, Prisma } from '@prisma/client';
+import prisma from '../lib/prisma';
 import { requireRole, RoleGroups, Roles } from '../middlewares/roleMiddleware';
+import { ah } from '../lib/asyncHandler';
 import {
   assignBudgetSchema,
   distributeBudgetSchema,
@@ -12,12 +14,25 @@ import {
   listBudgetsQuerySchema,
 } from '../validators/budgetValidator';
 import { closeMonthAndRollover } from '../services/budgetService';
+import { BadRequest, Forbidden } from '../middlewares/errorHandler';
 
-const prisma = new PrismaClient();
 const router = Router();
 
+/** Autorización por kind (FUEL/MAINTENANCE) — centraliza el check antes
+ *  duplicado inline en /assign, /distribute y PUT /monthly-pool. */
+function assertCanManageKind(role: string, kind: BudgetKind): void {
+  const allowed = kind === 'FUEL' ? [Roles.ADMIN, Roles.SUP_FUEL] : [Roles.ADMIN, Roles.SUP_MAINT];
+  if (!allowed.includes(role as never)) {
+    throw Forbidden(
+      kind === 'FUEL'
+        ? 'Solo admin o supervisor de combustible pueden gestionar este presupuesto'
+        : 'Solo admin o supervisor de mantenimiento pueden gestionar este presupuesto',
+    );
+  }
+}
+
 /** GET / — lista presupuestos con filtros (kind, year, month, vehicleId) */
-router.get('/', requireRole(RoleGroups.ANY_AUTH), async (req: Request, res: Response) => {
+router.get('/', requireRole(RoleGroups.ANY_AUTH), ah(async (req: Request, res: Response) => {
   const parsed = listBudgetsQuerySchema.safeParse(req.query);
   if (!parsed.success) {
     return res.status(400).json({ error: 'Query inválida', issues: parsed.error.issues });
@@ -49,6 +64,7 @@ router.get('/', requireRole(RoleGroups.ANY_AUTH), async (req: Request, res: Resp
       editor: { select: { id: true, fullName: true } },
     },
     orderBy: [{ year: 'desc' }, { month: 'desc' }, { vehicleId: 'asc' }],
+    take: 2000, // tope de seguridad: el listado crece cada mes; no cargar todo el histórico sin límite
   });
 
   const serialized = budgets.map((b) => ({
@@ -60,10 +76,11 @@ router.get('/', requireRole(RoleGroups.ANY_AUTH), async (req: Request, res: Resp
   }));
 
   res.json({ data: serialized });
-});
+}));
 
-/** POST /assign — asignar baseAmount a UN vehículo en un periodo */
-router.post('/assign', async (req: Request, res: Response) => {
+/** POST /assign — asignar baseAmount a UN vehículo en un periodo.
+ *  requireRole(BUDGET_MANAGERS) como primera barrera; el check por kind afina luego. */
+router.post('/assign', requireRole(RoleGroups.BUDGET_MANAGERS), ah(async (req: Request, res: Response) => {
   const parsed = assignBudgetSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: 'Datos inválidos', issues: parsed.error.issues });
@@ -72,14 +89,9 @@ router.post('/assign', async (req: Request, res: Response) => {
 
   const user = req.user!;
 
-  if (kind === 'FUEL' && ![Roles.ADMIN, Roles.SUP_FUEL].includes(user.role as never)) {
-    return res.status(403).json({ error: 'Solo admin/sup_fuel asignan combustible' });
-  }
-  if (kind === 'MAINTENANCE' && ![Roles.ADMIN, Roles.SUP_MAINT].includes(user.role as never)) {
-    return res.status(403).json({ error: 'Solo admin/sup_maint asignan mantenimiento' });
-  }
+  assertCanManageKind(user.role, kind);
 
-  // Validar contra el pote mensual (si existe)
+  // Pre-check (UX): mensaje detallado para el caso común.
   const pool = await prisma.monthlyBudget.findUnique({
     where: { kind_year_month: { kind, year, month } },
   });
@@ -99,10 +111,30 @@ router.post('/assign', async (req: Request, res: Response) => {
     }
   }
 
-  const budget = await prisma.vehicleBudget.upsert({
-    where: { vehicleId_kind_year_month: { vehicleId, kind, year, month } },
-    create: { vehicleId, kind, year, month, baseAmount, createdBy: user.userId, updatedBy: user.userId },
-    update: { baseAmount, updatedBy: user.userId },
+  // Escritura con guard de concurrencia: lockeamos el pote del periodo (FOR UPDATE)
+  // y re-validamos DENTRO de la tx, para que dos asignaciones simultáneas al mismo
+  // pote no lo excedan (el pre-check de arriba puede ver datos obsoletos bajo carrera).
+  const budget = await prisma.$transaction(async (tx) => {
+    const poolRows = await tx.$queryRaw<Array<{ totalAmount: string }>>`
+      SELECT "totalAmount"::text FROM monthly_budgets
+      WHERE kind = ${kind}::"BudgetKind" AND year = ${year} AND month = ${month}
+      FOR UPDATE
+    `;
+    if (poolRows.length > 0) {
+      const agg = await tx.vehicleBudget.aggregate({
+        where: { kind, year, month, NOT: { vehicleId } },
+        _sum: { baseAmount: true },
+      });
+      const newTotal = Number(agg._sum.baseAmount ?? 0) + baseAmount;
+      if (newTotal > Number(poolRows[0].totalAmount)) {
+        throw BadRequest('Excede el pote mensual (otra asignación concurrente consumió el saldo). Refresca e intenta de nuevo.');
+      }
+    }
+    return tx.vehicleBudget.upsert({
+      where: { vehicleId_kind_year_month: { vehicleId, kind, year, month } },
+      create: { vehicleId, kind, year, month, baseAmount, createdBy: user.userId, updatedBy: user.userId },
+      update: { baseAmount, updatedBy: user.userId },
+    });
   });
 
   res.json({
@@ -113,10 +145,10 @@ router.post('/assign', async (req: Request, res: Response) => {
       spentAmount: Number(budget.spentAmount),
     },
   });
-});
+}));
 
 /** POST /distribute — asignación masiva (valida contra pote) */
-router.post('/distribute', async (req: Request, res: Response) => {
+router.post('/distribute', requireRole(RoleGroups.BUDGET_MANAGERS), ah(async (req: Request, res: Response) => {
   const parsed = distributeBudgetSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: 'Datos inválidos', issues: parsed.error.issues });
@@ -124,25 +156,22 @@ router.post('/distribute', async (req: Request, res: Response) => {
   const { kind, year, month, distributions } = parsed.data;
   const user = req.user!;
 
-  if (kind === 'FUEL' && ![Roles.ADMIN, Roles.SUP_FUEL].includes(user.role as never)) {
-    return res.status(403).json({ error: 'Sin permiso' });
-  }
-  if (kind === 'MAINTENANCE' && ![Roles.ADMIN, Roles.SUP_MAINT].includes(user.role as never)) {
-    return res.status(403).json({ error: 'Sin permiso' });
-  }
+  assertCanManageKind(user.role, kind);
 
-  // Validar contra pote: suma de lo NO afectado por el distribute + suma del distribute
+  const userId = user.userId;
+  const targetIds = distributions.map((d) => d.vehicleId);
+  const distSum = distributions.reduce((s, d) => s + d.baseAmount, 0);
+
+  // Pre-check (UX): mensaje detallado para el caso común.
   const pool = await prisma.monthlyBudget.findUnique({
     where: { kind_year_month: { kind, year, month } },
   });
   if (pool) {
-    const targetIds = distributions.map((d) => d.vehicleId);
     const agg = await prisma.vehicleBudget.aggregate({
       where: { kind, year, month, NOT: { vehicleId: { in: targetIds } } },
       _sum: { baseAmount: true },
     });
     const othersSum = Number(agg._sum.baseAmount ?? 0);
-    const distSum = distributions.reduce((s, d) => s + d.baseAmount, 0);
     const newTotal = othersSum + distSum;
     const poolAmount = Number(pool.totalAmount);
     if (newTotal > poolAmount) {
@@ -153,39 +182,57 @@ router.post('/distribute', async (req: Request, res: Response) => {
     }
   }
 
-  const userId = user.userId;
-  const results = await prisma.$transaction(
-    distributions.map((d) =>
-      prisma.vehicleBudget.upsert({
+  // Escritura con guard de concurrencia: lock del pote + re-validación dentro de
+  // la tx (igual que /assign), para que distribuciones concurrentes no lo excedan.
+  const count = await prisma.$transaction(async (tx) => {
+    const poolRows = await tx.$queryRaw<Array<{ totalAmount: string }>>`
+      SELECT "totalAmount"::text FROM monthly_budgets
+      WHERE kind = ${kind}::"BudgetKind" AND year = ${year} AND month = ${month}
+      FOR UPDATE
+    `;
+    if (poolRows.length > 0) {
+      const agg = await tx.vehicleBudget.aggregate({
+        where: { kind, year, month, NOT: { vehicleId: { in: targetIds } } },
+        _sum: { baseAmount: true },
+      });
+      if (Number(agg._sum.baseAmount ?? 0) + distSum > Number(poolRows[0].totalAmount)) {
+        throw BadRequest('Excede el pote mensual (asignación concurrente). Refresca e intenta de nuevo.');
+      }
+    }
+    let n = 0;
+    for (const d of distributions) {
+      await tx.vehicleBudget.upsert({
         where: { vehicleId_kind_year_month: { vehicleId: d.vehicleId, kind, year, month } },
         create: {
           vehicleId: d.vehicleId, kind, year, month,
           baseAmount: d.baseAmount, createdBy: userId, updatedBy: userId,
         },
         update: { baseAmount: d.baseAmount, updatedBy: userId },
-      }),
-    ),
-  );
+      });
+      n++;
+    }
+    return n;
+  });
 
-  res.json({ data: { count: results.length } });
-});
+  res.json({ data: { count } });
+}));
 
 /** POST /close-month — cerrar mes + rollover idempotente (admin) */
-router.post('/close-month', requireRole(RoleGroups.ADMIN_ONLY), async (req: Request, res: Response) => {
+router.post('/close-month', requireRole(RoleGroups.ADMIN_ONLY), ah(async (req: Request, res: Response) => {
   const parsed = closeMonthSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: 'Datos inválidos', issues: parsed.error.issues });
   }
   const result = await closeMonthAndRollover(parsed.data);
   res.json({ data: result });
-});
+}));
 
 // ─────────────────────────────────────────────
 // POTE MENSUAL TOTAL (MonthlyBudget)
 // ─────────────────────────────────────────────
 
 /** GET /monthly-pool — pote declarado + suma asignada + resumen */
-router.get('/monthly-pool', requireRole(RoleGroups.ANY_AUTH), async (req: Request, res: Response) => {
+router.get('/monthly-pool', requireRole(RoleGroups.ANY_AUTH), ah(async (req: Request, res: Response) => {
   const kind = (req.query.kind as BudgetKind) || 'FUEL';
   const year = Number(req.query.year) || new Date().getFullYear();
   const month = Number(req.query.month) || new Date().getMonth() + 1;
@@ -230,10 +277,10 @@ router.get('/monthly-pool', requireRole(RoleGroups.ANY_AUTH), async (req: Reques
       hasPool: !!pool,
     },
   });
-});
+}));
 
 /** PUT /monthly-pool — declarar/actualizar el pote total del mes */
-router.put('/monthly-pool', requireRole(RoleGroups.BUDGET_MANAGERS), async (req: Request, res: Response) => {
+router.put('/monthly-pool', requireRole(RoleGroups.BUDGET_MANAGERS), ah(async (req: Request, res: Response) => {
   const schema = {
     kind: req.body.kind,
     year: Number(req.body.year),
@@ -250,12 +297,7 @@ router.put('/monthly-pool', requireRole(RoleGroups.BUDGET_MANAGERS), async (req:
   }
 
   const user = req.user!;
-  if (schema.kind === 'FUEL' && ![Roles.ADMIN, Roles.SUP_FUEL].includes(user.role as never)) {
-    return res.status(403).json({ error: 'Sin permiso' });
-  }
-  if (schema.kind === 'MAINTENANCE' && ![Roles.ADMIN, Roles.SUP_MAINT].includes(user.role as never)) {
-    return res.status(403).json({ error: 'Sin permiso' });
-  }
+  assertCanManageKind(user.role, schema.kind as BudgetKind);
 
   const pool = await prisma.monthlyBudget.upsert({
     where: { kind_year_month: { kind: schema.kind, year: schema.year, month: schema.month } },
@@ -270,6 +312,6 @@ router.put('/monthly-pool', requireRole(RoleGroups.BUDGET_MANAGERS), async (req:
   });
 
   res.json({ data: { ...pool, totalAmount: Number(pool.totalAmount) } });
-});
+}));
 
 export default router;

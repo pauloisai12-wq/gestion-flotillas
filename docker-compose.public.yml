@@ -1,0 +1,164 @@
+# /docker-compose.public.yml — override para VPS PÚBLICO (QA abierto, HTTPS real)
+#
+# A diferencia de docker-compose.staging.yml (servidor de casa, VPN-only, Caddy en
+# 10.10.0.2:8443 con `tls internal` y datos en LUKS /srv/datos), este override expone
+# el stack en internet desde un VPS dedicado y desechable:
+#   - Caddy escucha en 0.0.0.0:80 y :443 y emite HTTPS automático con Let's Encrypt
+#     (Caddyfile.public, dominio real tipo *.duckdns.org).
+#   - Persistencia en VOLÚMENES Docker con nombre (no bind mounts LUKS).
+#   - API endurecida (NODE_ENV=production): JWT>=64, BCRYPT>=12, CORS sin localhost.
+#   - Acceso TOTALMENTE ABIERTO (sin basic_auth): la defensa es login + rate-limit +
+#     credenciales demo fuertes. Datos demo en un box desechable.
+#
+# Uso (en el VPS):   ./deploy-public.sh     (o, manualmente:)
+#   export COMPOSE="docker compose -p flotillas -f docker-compose.yml -f docker-compose.public.yml"
+#   $COMPOSE build
+#   $COMPOSE up -d --wait
+#
+# Las migraciones NO son un paso manual: el servicio one-shot `migrate` corre
+# `prisma migrate deploy` y termina ANTES de que arranquen api/worker
+# (depends_on: service_completed_successfully). `migrate deploy` es idempotente.
+#
+# NOTA: `ports: !reset []` (limpiar la lista de ports heredada del base) requiere
+# Docker Compose >= 2.24. deploy-public.sh lo verifica.
+
+# Política de logging compartida: rota los logs json-file para que no llenen el
+# disco del VPS (sin esto crecen sin tope). Se referencia por servicio con `*log`.
+x-logging: &log
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  # === BASE DE DATOS — Postgres 16 (volumen con nombre del base) ===
+  postgres:
+    ports: !reset []                       # quita el bind 127.0.0.1:5433 del base (no exponer la BD)
+    mem_limit: 768m
+    cpus: "1.0"
+    logging: *log
+    # Tuning para VPS chico (~2 GB). AJUSTA a la RAM real: shared_buffers≈25% RAM,
+    # effective_cache_size≈50-75% RAM. max_connections holgado para Prisma(15)+worker(5).
+    command:
+      - "postgres"
+      - "-c"
+      - "shared_buffers=256MB"
+      - "-c"
+      - "effective_cache_size=768MB"
+      - "-c"
+      - "work_mem=8MB"
+      - "-c"
+      - "maintenance_work_mem=64MB"
+      - "-c"
+      - "max_connections=50"
+
+  # === REDIS (volumen con nombre del base) ===
+  redis:
+    ports: !reset []                       # quita el bind 127.0.0.1:6379 del base (no exponer Redis)
+    mem_limit: 256m
+    cpus: "0.5"
+    logging: *log
+
+  # === API (Node/Express) — endurecida como producción ===
+  api:
+    # Tag fijo de la imagen (build target prod del base) para que el one-shot
+    # `migrate` reuse exactamente la misma imagen (sin rebuild ni duplicado).
+    image: flotillas-api:public
+    ports: !reset []                       # quita 3001:3001; solo Caddy la alcanza por red interna
+    mem_limit: 512m
+    cpus: "1.0"
+    logging: *log
+    environment:
+      # NODE_ENV=production ACTIVA las validaciones estrictas de env.ts:
+      #   JWT_SECRET >= 64, BCRYPT_ROUNDS >= 12, CORS sin localhost.
+      NODE_ENV: production
+      # Origen público EXACTO que ve el navegador (sin :8443, sin slash final).
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS}
+      # Cadena Caddy -> Next(rewrite) -> API = 2 saltos; con 2, req.ip recupera la
+      # IP real del cliente (clave para rate-limit y auditoría por IP). NUNCA 'true'.
+      TRUST_PROXY: ${TRUST_PROXY:-2}
+      # Captcha del portal público apagado por defecto (QA abierto + rate-limit).
+      # Para blindar el portal contra bots: TURNSTILE_ENABLED=true + claves reales.
+      TURNSTILE_ENABLED: ${TURNSTILE_ENABLED:-false}
+      TURNSTILE_SECRET: ${TURNSTILE_SECRET:-}
+      BCRYPT_ROUNDS: ${BCRYPT_ROUNDS:-12}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-8h}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      # Persistencia en volúmenes Docker (no en ./storage del host):
+      - uploads_data:/app/uploads                 # evidencias/archivos subidos (el base no los persiste)
+      - reports_data:/app/storage/reports         # reemplaza el bind ./storage/reports del base (mismo target)
+    depends_on:
+      # postgres/redis healthy + `migrate` terminado OK antes de servir tráfico.
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  # === WEB (Next.js standalone) — solo accesible a través de Caddy ===
+  web:
+    ports: !reset []                       # quita 3000:3000; Caddy llega a web:3000 por la red interna
+    mem_limit: 384m
+    cpus: "0.5"
+    logging: *log
+
+  # === WORKER Python (reportería WeasyPrint/openpyxl) ===
+  worker-python:
+    # WeasyPrint/pandas hacen picos de RAM al generar PDF/Excel; el límite evita
+    # que un pico OOM-ee el VPS entero.
+    mem_limit: 1g
+    cpus: "1.0"
+    logging: *log
+    volumes:
+      - reports_data:/app/storage/reports         # mismo volumen compartido con la api (descargas)
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  # === MIGRACIONES (one-shot) — aplica el esquema ANTES de servir tráfico ===
+  # Reusa la imagen prod de la API (trae el CLI `prisma` y la carpeta prisma/ con las
+  # migraciones). Corre `prisma migrate deploy` (idempotente, no interactivo), puebla
+  # las 5 vistas materializadas y termina. api/worker dependen de su finalización OK.
+  migrate:
+    image: flotillas-api:public
+    restart: "no"
+    command: ["npx", "prisma", "migrate", "deploy"]
+    environment:
+      # Mismo patrón derivado que la API; migrate solo necesita DATABASE_URL.
+      DATABASE_URL: ${DATABASE_URL:-postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # === REVERSE PROXY público (HTTPS automático con Let's Encrypt) ===
+  caddy:
+    image: caddy:2-alpine
+    container_name: flotillas_caddy
+    restart: unless-stopped
+    mem_limit: 128m
+    cpus: "0.5"
+    logging: *log
+    depends_on:
+      web:
+        condition: service_healthy
+    ports:
+      # :80 es necesario para el reto ACME HTTP-01 y el redirect HTTP->HTTPS.
+      - "0.0.0.0:80:80"
+      - "0.0.0.0:443:443"
+    volumes:
+      - ./Caddyfile.public:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data                   # PERSISTE el certificado Let's Encrypt (evita re-emitir y topar el rate-limit)
+      - caddy_config:/config
+
+# === VOLÚMENES PERSISTENTES (postgres_data/redis_data ya los declara el base) ===
+volumes:
+  uploads_data:
+  reports_data:
+  caddy_data:
+  caddy_config:

@@ -5,21 +5,26 @@
 
 import prisma from '../lib/prisma';
 import { VehicleStatus } from '@prisma/client';
-import { notifyByRole } from './notificationService';
+import { notifyByRole, notifyManyByRole } from './notificationService';
+import { AppError } from '../middlewares/errorHandler';
+import { logger } from '../lib/logger';
 
 /**
  * Revisa los documentos de UN vehículo y actualiza su estado.
  * Retorna el nuevo estado y los documentos vencidos (si los hay).
  */
 export async function checkVehicleCompliance(vehicleId: number) { // <-- CORRECCIÓN: Cambiado de string a number
-  const now = new Date();
+  // "Vencido" = expiresAt ANTES del inicio del día de hoy (consistente con el
+  // semáforo de documentService: un documento que vence HOY todavía NO bloquea).
+  const startOfToday = new Date();
+  startOfToday.setHours(0, 0, 0, 0);
 
   // Buscar documentos vencidos de este vehículo
   const expiredDocs = await prisma.document.findMany({
     where: {
       vehicleId,
       expiresAt: {
-        lt: now,
+        lt: startOfToday,
       },
     },
     select: {
@@ -38,7 +43,7 @@ export async function checkVehicleCompliance(vehicleId: number) { // <-- CORRECC
   });
 
   if (!vehicle) {
-    throw new Error(`Vehiculo ${vehicleId} no encontrado`);
+    throw new AppError(404, `Vehiculo ${vehicleId} no encontrado`, 'NOT_FOUND');
   }
 
   const previousStatus = vehicle.status;
@@ -113,8 +118,12 @@ export async function checkVehicleCompliance(vehicleId: number) { // <-- CORRECC
  * antiguo loop N+1 que disparaba 3-4 queries por vehículo.
  */
 export async function runDailyComplianceCheck() {
-  console.log('Iniciando revision diaria de compliance...');
+  logger.info('Iniciando revisión diaria de compliance...');
   const now = new Date();
+  // "Vencido" = expiresAt ANTES del inicio del día de hoy (mismo criterio que
+  // checkVehicleCompliance y el semáforo: vencer HOY todavía NO bloquea).
+  const startOfToday = new Date();
+  startOfToday.setHours(0, 0, 0, 0);
 
   // 1) Una query agregada: vehículo + estado actual + si tiene algún doc vencido.
   const rows = await prisma.$queryRaw<
@@ -122,7 +131,7 @@ export async function runDailyComplianceCheck() {
   >`
     SELECT v.id, v.status, EXISTS (
       SELECT 1 FROM documents d
-      WHERE d."vehicleId" = v.id AND d."expiresAt" < ${now}
+      WHERE d."vehicleId" = v.id AND d."expiresAt" < ${startOfToday}
     ) AS has_expired
     FROM vehicles v
     WHERE v."isActive" = true
@@ -157,39 +166,26 @@ export async function runDailyComplianceCheck() {
     ]);
   }
 
-  // 3) Notificar solo los cambios reales (suele ser 0-5 por día, no N).
-  for (const vehicleId of toBlock) {
-    await notifyByRole({
-      role: 'SUPERVISOR_VEHICLES',
-      type: 'VEHICLE_BLOCKED',
+  // 3) Notificar solo los cambios reales (suele ser 0-5 por día), en lote:
+  //    resuelve destinatarios una vez en vez de 2 findMany de usuarios por vehículo.
+  await notifyManyByRole({
+    roles: ['SUPERVISOR_VEHICLES', 'ADMIN'],
+    type: 'VEHICLE_BLOCKED',
+    items: toBlock.map((vehicleId) => ({
       title: 'Vehiculo bloqueado',
       message: `Vehiculo ${vehicleId} bloqueado por documento(s) vencido(s).`,
       entityRef: `vehicle:${vehicleId}`,
-    });
-    await notifyByRole({
-      role: 'ADMIN',
-      type: 'VEHICLE_BLOCKED',
-      title: 'Vehiculo bloqueado',
-      message: `Vehiculo ${vehicleId} bloqueado por documento(s) vencido(s).`,
-      entityRef: `vehicle:${vehicleId}`,
-    });
-  }
-  for (const vehicleId of toUnblock) {
-    await notifyByRole({
-      role: 'SUPERVISOR_VEHICLES',
-      type: 'VEHICLE_UNBLOCKED',
+    })),
+  });
+  await notifyManyByRole({
+    roles: ['SUPERVISOR_VEHICLES', 'ADMIN'],
+    type: 'VEHICLE_UNBLOCKED',
+    items: toUnblock.map((vehicleId) => ({
       title: 'Vehiculo desbloqueado',
       message: `Vehiculo ${vehicleId} desbloqueado. Todos los documentos vigentes.`,
       entityRef: `vehicle:${vehicleId}`,
-    });
-    await notifyByRole({
-      role: 'ADMIN',
-      type: 'VEHICLE_UNBLOCKED',
-      title: 'Vehiculo desbloqueado',
-      message: `Vehiculo ${vehicleId} desbloqueado. Todos los documentos vigentes.`,
-      entityRef: `vehicle:${vehicleId}`,
-    });
-  }
+    })),
+  });
 
   const summary = {
     total: rows.length,
@@ -199,7 +195,7 @@ export async function runDailyComplianceCheck() {
     timestamp: now.toISOString(),
   };
 
-  console.log('Resultado de compliance:', JSON.stringify(summary));
+  logger.info({ summary }, 'Resultado de compliance');
 
   return summary;
 }

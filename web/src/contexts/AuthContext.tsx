@@ -3,7 +3,7 @@
 
 'use client';
 
-import { createContext, useContext, useCallback, ReactNode, useSyncExternalStore } from 'react';
+import { createContext, useContext, useCallback, useEffect, ReactNode, useSyncExternalStore } from 'react';
 import { useRouter } from 'next/navigation';
 import api from '@/lib/api';
 
@@ -74,11 +74,15 @@ function initAuth() {
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  initAuth();
-
   const user = useSyncExternalStore(subscribe, () => externalUser, () => null);
   const loading = useSyncExternalStore(subscribe, () => externalLoading, () => true);
   const router = useRouter();
+
+  // Verificar la sesión en un efecto (no durante el render): evita side-effects
+  // en render. initAuth() es idempotente (guardado por `initialized`).
+  useEffect(() => {
+    initAuth();
+  }, []);
 
   const login = useCallback(async (email: string, password: string) => {
     // El backend emite Set-Cookie httpOnly con el token. El cliente solo
@@ -97,6 +101,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       /* aun si falla, salimos del cliente */
     }
     externalUser = null;
+    initialized = false; // permite re-verificar /auth/me si el provider se remonta
     emitChange();
     router.push('/login');
   }, [router]);

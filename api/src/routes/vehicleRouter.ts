@@ -3,15 +3,16 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { vehicleSchema } from '../validators/vehicleValidator';
 import * as vehicleService from '../services/vehicleService';
-import { roleMiddleware } from '../middlewares/roleMiddleware';
+import { roleMiddleware, RoleGroups, Roles } from '../middlewares/roleMiddleware';
 
 const router = Router();
 
 /**
  * GET /api/vehicles
- * Lista paginada con filtros. Acceso: todos los roles autenticados.
+ * Lista paginada con filtros. Acceso: lectores de flota + EXECUTOR (acotado a
+ * SUS vehículos). WORKSHOP (taller externo) queda excluido.
  */
-router.get('/', async (req: Request, res: Response, next: NextFunction) => {
+router.get('/', roleMiddleware([...RoleGroups.VEHICLE_READERS, Roles.EXECUTOR]), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const query = {
       page: req.query.page ? parseInt(req.query.page as string) : 1,
@@ -26,6 +27,12 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
         : undefined,
     };
 
+    // El EXECUTOR solo puede ver SUS vehículos: forzamos el scope en el servidor
+    // e ignoramos cualquier executorId que envíe el cliente.
+    if (req.user?.role === Roles.EXECUTOR) {
+      query.executorId = req.user.userId;
+    }
+
     const result = await vehicleService.getAllVehicles(query);
     res.json(result);
   } catch (error) {
@@ -35,9 +42,10 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
 
 /**
  * GET /api/vehicles/:id
- * Detalle de un vehículo con relaciones.
+ * Detalle de un vehículo con relaciones. Acceso: lectores de flota
+ * (excluye EXECUTOR/WORKSHOP, que no necesitan el detalle global).
  */
-router.get('/:id', async (req: Request, res: Response, next: NextFunction) => {
+router.get('/:id', roleMiddleware(RoleGroups.VEHICLE_READERS), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = parseInt(req.params.id);
     if (isNaN(id)) {

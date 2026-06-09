@@ -39,13 +39,27 @@ import docsRouter from './routes/docsRouter';
 import maintenanceTicketRouter from './routes/maintenanceTicketRouter';
 import ticketQuoteRouter from './routes/ticketQuoteRouter';
 
-import { initializeJobs } from './jobs';
+import { initializeJobs, shutdownJobs } from './jobs';
+import prisma from './lib/prisma';
+import { closeRedis } from './lib/redis';
 import { authMiddleware } from './middlewares/authMiddleware';
 import { errorHandler } from './middlewares/errorHandler';
 import { logger, httpLoggerMiddleware } from './lib/logger';
 import { healthHandler } from './lib/health';
 
 const app = express();
+
+// ═══════════════════════════════════════════════════
+// 0. Trust proxy — detrás de Caddy/Next, req.ip debe reflejar la IP real del
+//    cliente (X-Forwarded-For) o rate-limit, CSRF-por-IP y el remoteip de
+//    Turnstile colapsan a la IP interna del proxy. Configurable por TRUST_PROXY
+//    (nº de saltos); nunca 'true' por defecto (permitiría spoofing de XFF).
+// ═══════════════════════════════════════════════════
+const trustProxy = env.TRUST_PROXY.trim();
+if (trustProxy === 'true') app.set('trust proxy', true);
+else if (trustProxy === 'false' || trustProxy === '') app.set('trust proxy', false);
+else if (/^\d+$/.test(trustProxy)) app.set('trust proxy', Number(trustProxy));
+else app.set('trust proxy', trustProxy.split(',').map((s) => s.trim()));
 
 // ═══════════════════════════════════════════════════
 // 1. Headers de seguridad (Helmet)
@@ -127,10 +141,15 @@ app.use(
 app.use(express.json({ limit: '2mb' }));
 app.use(httpLoggerMiddleware);
 
-// Headers de cache largos para /uploads — los archivos son inmutables
-// (cada upload genera un nombre único, nunca se sobrescriben).
+// Archivos subidos (documentos vehiculares, evidencia, cotizaciones). Contienen
+// PII sensible (pólizas, tarjetas de circulación, facturas), por lo que se
+// exigen credenciales: authMiddleware ANTES de express.static. El frontend
+// accede vía proxy mismo-origen de Next (rewrite /uploads → API), por lo que la
+// cookie httpOnly viaja y el render de <img> sigue funcionando.
+// Headers de cache largos: cada upload genera un nombre UUID único, inmutable.
 app.use(
   '/uploads',
+  authMiddleware,
   express.static(path.join(__dirname, '../uploads'), {
     maxAge: '30d',
     immutable: true,
@@ -142,7 +161,11 @@ app.use(
 // 4. Healthcheck + documentación OpenAPI (sin auth)
 // ═══════════════════════════════════════════════════
 app.get('/api/health', healthHandler);
-app.use('/api', docsRouter);  // expone /api/docs y /api/docs.json
+// Documentación OpenAPI: solo fuera de producción. En prod (ngrok/internet) no
+// publicamos el mapa completo de endpoints/schemas (reconocimiento de ataque).
+if (env.NODE_ENV !== 'production') {
+  app.use('/api', docsRouter); // expone /api/docs y /api/docs.json
+}
 
 // ═══════════════════════════════════════════════════
 // 5. RUTAS PÚBLICAS
@@ -193,24 +216,47 @@ const server = app.listen(env.PORT, async () => {
   await initializeJobs();
 });
 
-function shutdown(signal: string) {
+let shuttingDown = false;
+async function shutdown(signal: string): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
   logger.info({ signal }, 'Apagado solicitado, cerrando…');
-  server.close(() => {
-    logger.info('Servidor HTTP cerrado');
-    process.exit(0);
-  });
-  setTimeout(() => {
-    logger.error('Forzando salida tras 10s sin cerrar');
+
+  // Si el cierre ordenado se cuelga, forzar salida (no bloquear el redeploy).
+  const forceTimer = setTimeout(() => {
+    logger.error('Forzando salida tras 30s sin cerrar');
     process.exit(1);
-  }, 10_000).unref();
+  }, 30_000);
+  forceTimer.unref();
+
+  // 1. Dejar de aceptar nuevas conexiones HTTP.
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  logger.info('Servidor HTTP cerrado');
+
+  // 2. Cerrar workers/colas BullMQ, luego Prisma y Redis (en ese orden).
+  try {
+    await shutdownJobs();
+  } catch (err) {
+    logger.error({ err }, 'Error cerrando jobs BullMQ');
+  }
+  try {
+    await prisma.$disconnect();
+    logger.info('Prisma desconectado');
+  } catch (err) {
+    logger.error({ err }, 'Error desconectando Prisma');
+  }
+  await closeRedis();
+
+  process.exit(0);
 }
 
-process.on('SIGTERM', () => shutdown('SIGTERM'));
-process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', () => { void shutdown('SIGTERM'); });
+process.on('SIGINT', () => { void shutdown('SIGINT'); });
 process.on('uncaughtException', (err) => {
   logger.fatal({ err }, 'uncaughtException');
-  shutdown('uncaughtException');
+  void shutdown('uncaughtException');
 });
 process.on('unhandledRejection', (reason) => {
   logger.fatal({ reason }, 'unhandledRejection');
+  void shutdown('unhandledRejection');
 });

@@ -6,6 +6,7 @@ import prisma from '../lib/prisma';
 import { FuelLoadInput, PublicFuelLoadInput } from '../validators/fuelLoadValidator';
 import { checkAndReserveFuelBudget } from './budgetService';
 import { FuelLoadStatus, OdometerStatus, Prisma } from '@prisma/client';
+import { NotFound, BadRequest, AppError } from '../middlewares/errorHandler';
 
 interface FuelLoadQuery {
   page?: number;
@@ -77,10 +78,10 @@ export async function createFuelLoad(data: FuelLoadInput) {
     where: { id: data.vehicleId },
     include: { vehicleType: true },
   });
-  if (!vehicle) throw new Error('Vehículo no encontrado');
+  if (!vehicle) throw NotFound('Vehículo');
 
   const station = await prisma.approvedStation.findUnique({ where: { id: data.stationId } });
-  if (!station) throw new Error('Gasolinera no encontrada');
+  if (!station) throw new AppError(404, 'Gasolinera no encontrada', 'NOT_FOUND');
 
   // Match de operador por employeeNumber (si existe)
   const operatorMatch = await prisma.operator.findUnique({
@@ -91,15 +92,23 @@ export async function createFuelLoad(data: FuelLoadInput) {
   if (data.odometerStatus === 'OK') {
     const od = data.odometer as number;
     if (od < vehicle.currentOdometer) {
-      throw new Error(`El odómetro (${od} km) no puede ser menor al actual (${vehicle.currentOdometer} km)`);
+      throw BadRequest(`El odómetro (${od} km) no puede ser menor al actual (${vehicle.currentOdometer} km)`);
     }
   }
 
   // km/l calculable solo si hay odómetro y carga previa con odómetro
   let kmPerLiter: number | null = null;
   if (data.odometerStatus === 'OK' && data.liters) {
+    // La carga "anterior" debe ser anterior EN EL TIEMPO y con odómetro menor:
+    // con cargas retroactivas (loadDate pasado) la más reciente por fecha no es
+    // la previa real y daría km/l negativo o erróneo.
+    const loadDateValue = data.loadDate ? new Date(data.loadDate) : new Date();
     const prev = await prisma.fuelLoad.findFirst({
-      where: { vehicleId: data.vehicleId, odometer: { not: null } },
+      where: {
+        vehicleId: data.vehicleId,
+        odometer: { not: null, lte: data.odometer as number },
+        loadDate: { lte: loadDateValue },
+      },
       orderBy: { loadDate: 'desc' },
     });
     if (prev && prev.odometer != null) {
@@ -114,7 +123,12 @@ export async function createFuelLoad(data: FuelLoadInput) {
     // 1. Reservar presupuesto (lock + update)
     const reserve = await checkAndReserveFuelBudget(tx, data.vehicleId, data.amount);
     if (!reserve.allowed) {
-      throw new Error(`Excede presupuesto disponible: $${reserve.available?.toFixed(2)}`);
+      throw new AppError(
+        402,
+        `Excede presupuesto disponible: $${reserve.available?.toFixed(2)}`,
+        'BUDGET_EXCEEDED',
+        { available: reserve.available ?? 0 },
+      );
     }
 
     // 2. Insertar carga
@@ -136,10 +150,11 @@ export async function createFuelLoad(data: FuelLoadInput) {
       },
     });
 
-    // 3. Actualizar odómetro del vehículo si corresponde
+    // 3. Actualizar odómetro del vehículo solo si AVANZA (nunca retroceder).
+    //    Condicional dentro de la tx → cargas concurrentes no bajan el odómetro.
     if (data.odometerStatus === 'OK' && data.odometer != null) {
-      await tx.vehicle.update({
-        where: { id: data.vehicleId },
+      await tx.vehicle.updateMany({
+        where: { id: data.vehicleId, currentOdometer: { lte: data.odometer as number } },
         data: { currentOdometer: data.odometer as number },
       });
     }
@@ -158,12 +173,12 @@ export async function createPublicFuelLoad(data: PublicFuelLoadInput) {
     where: { economicNumber: data.vehicleEconomicNumber },
     include: { vehicleType: true },
   });
-  if (!vehicle) throw new Error('Número económico no encontrado');
-  if (!vehicle.isActive) throw new Error('Vehículo dado de baja');
-  if (vehicle.status === 'BLOCKED') throw new Error(`Vehículo bloqueado: ${vehicle.blockReason ?? 'documentos vencidos'}`);
+  if (!vehicle) throw NotFound('Número económico');
+  if (!vehicle.isActive) throw BadRequest('Vehículo dado de baja');
+  if (vehicle.status === 'BLOCKED') throw BadRequest(`Vehículo bloqueado: ${vehicle.blockReason ?? 'documentos vencidos'}`);
 
   const station = await prisma.approvedStation.findUnique({ where: { id: data.stationId } });
-  if (!station) throw new Error('Gasolinera no encontrada');
+  if (!station) throw new AppError(404, 'Gasolinera no encontrada', 'NOT_FOUND');
 
   // Match de operador
   const operatorMatch = await prisma.operator.findUnique({
@@ -174,7 +189,7 @@ export async function createPublicFuelLoad(data: PublicFuelLoadInput) {
   if (data.odometerStatus === 'OK') {
     const od = data.odometer as number;
     if (od < vehicle.currentOdometer) {
-      throw new Error(`Odómetro menor al actual del vehículo (${vehicle.currentOdometer} km)`);
+      throw BadRequest(`Odómetro menor al actual del vehículo (${vehicle.currentOdometer} km)`);
     }
   }
 
@@ -188,6 +203,16 @@ export async function createPublicFuelLoad(data: PublicFuelLoadInput) {
       err.available = reserve.available ?? 0;
       throw err;
     }
+
+    // Re-verificar el estado DENTRO de la tx: si el vehículo quedó BLOCKED o de
+    // baja por un proceso concurrente (p.ej. el job de compliance) tras la
+    // validación inicial, abortamos y la reserva se revierte por rollback.
+    const fresh = await tx.vehicle.findUnique({
+      where: { id: vehicle.id },
+      select: { status: true, isActive: true },
+    });
+    if (!fresh || !fresh.isActive) throw BadRequest('Vehículo dado de baja');
+    if (fresh.status === 'BLOCKED') throw BadRequest('Vehículo bloqueado por documentos vencidos');
 
     const load = await tx.fuelLoad.create({
       data: {
@@ -207,8 +232,8 @@ export async function createPublicFuelLoad(data: PublicFuelLoadInput) {
     });
 
     if (data.odometerStatus === 'OK' && data.odometer != null) {
-      await tx.vehicle.update({
-        where: { id: vehicle.id },
+      await tx.vehicle.updateMany({
+        where: { id: vehicle.id, currentOdometer: { lte: data.odometer as number } },
         data: { currentOdometer: data.odometer as number },
       });
     }

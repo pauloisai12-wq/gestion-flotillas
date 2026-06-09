@@ -2,7 +2,7 @@
 // Importa vehículos desde Excel/CSV — upsert por economicNumber o expedientNumber
 
 import * as XLSX from 'xlsx';
-import prisma from '../lib/prisma';
+import prisma, { type Tx } from '../lib/prisma';
 import { VehicleClassification } from '@prisma/client';
 
 interface ImportResult {
@@ -11,6 +11,9 @@ interface ImportResult {
   updated: number;
   skipped: number;
   errors: { row: number; message: string; data?: Record<string, unknown> }[];
+  // Avisos no fatales: p.ej. una clave única REAL (placa/económico/expediente)
+  // que ya existía y se guardó desambiguada con sufijo -DUP- (revisar duplicado).
+  warnings: { row: number; message: string }[];
 }
 
 // Mapeo flexible de nombres de columnas → campo del modelo
@@ -45,6 +48,12 @@ const FIELD_MAP: Record<string, string> = {
   'mod': 'year',
   'modelo': 'year',
   'ano': 'year',
+  // En inventarios MX "MODELO" suele ser el AÑO (de ahí el mapeo de arriba). El
+  // nombre/submodelo del vehículo (Vehicle.model) viene en columnas aparte; sin
+  // estos alias el campo quedaba siempre en 'SIN DATO'.
+  'submodelo': 'model',
+  'version': 'model',
+  'linea': 'model',
   'motor': 'engineNumber',
   'nomotor': 'engineNumber',
   'serie': 'vin',
@@ -167,13 +176,14 @@ function detectHeaderRow(matrix: any[][]): number {
  * Crea un Vehicle con retry inteligente: si falla por unique constraint,
  * ajusta el campo conflictivo con sufijo único y reintenta (hasta 5 veces).
  */
+// db: cliente transaccional (tx) o el prisma global — inyectado para permitir
+// atomicidad por fila y testeo. warnings: registra desambiguaciones visibles.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function safeCreate(data: any, rowNumber: number): Promise<any> {
+async function safeCreate(db: Tx, data: any, rowNumber: number, warnings: ImportResult['warnings']): Promise<any> {
   let attempt = 0;
   while (attempt < 6) {
     try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      return await prisma.vehicle.create({ data });
+      return await db.vehicle.create({ data });
     } catch (e) {
       attempt++;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -183,13 +193,20 @@ async function safeCreate(data: any, rowNumber: number): Promise<any> {
       const suffix = `-DUP-${rowNumber}${attempt > 1 ? `-${attempt}` : ''}`;
 
       if (target.includes('vin') && data.vin) {
+        warnings.push({ row: rowNumber, message: `VIN '${data.vin}' ya existía; se guardó SIN vin. Revise duplicado.` });
         data.vin = null;  // VIN se puede dejar null
       } else if (target.includes('plate')) {
+        const orig = data.plate;
         data.plate = `${(data.plate || 'SIN-PLACA').slice(0, 40)}${suffix}`;
+        warnings.push({ row: rowNumber, message: `Placa '${orig}' ya existía; se guardó como '${data.plate}'. Revise duplicado.` });
       } else if (target.includes('expedientNumber') && data.expedientNumber) {
+        const orig = data.expedientNumber;
         data.expedientNumber = `${(data.expedientNumber).slice(0, 40)}${suffix}`;
+        warnings.push({ row: rowNumber, message: `Expediente '${orig}' ya existía; se guardó como '${data.expedientNumber}'. Revise duplicado.` });
       } else if (target.includes('economicNumber')) {
+        const orig = data.economicNumber;
         data.economicNumber = `${(data.economicNumber || 'SIN-ECO').slice(0, 40)}${suffix}`;
+        warnings.push({ row: rowNumber, message: `Número económico '${orig}' ya existía; se guardó como '${data.economicNumber}'. Revise duplicado.` });
       } else {
         throw e;  // campo unique desconocido
       }
@@ -203,11 +220,11 @@ async function safeCreate(data: any, rowNumber: number): Promise<any> {
  * Si al actualizar genera duplicado con OTRO registro, nullifica/desambigua el campo.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function safeUpdate(id: number, data: any, rowNumber: number): Promise<any> {
+async function safeUpdate(db: Tx, id: number, data: any, rowNumber: number, warnings: ImportResult['warnings']): Promise<any> {
   let attempt = 0;
   while (attempt < 6) {
     try {
-      return await prisma.vehicle.update({ where: { id }, data });
+      return await db.vehicle.update({ where: { id }, data });
     } catch (e) {
       attempt++;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -217,11 +234,16 @@ async function safeUpdate(id: number, data: any, rowNumber: number): Promise<any
       const suffix = `-DUP-${rowNumber}${attempt > 1 ? `-${attempt}` : ''}`;
 
       if (target.includes('vin') && data.vin) {
+        warnings.push({ row: rowNumber, message: `VIN '${data.vin}' ya existía; se guardó SIN vin. Revise duplicado.` });
         data.vin = null;
       } else if (target.includes('plate')) {
+        const orig = data.plate;
         data.plate = `${(data.plate || 'SIN-PLACA').slice(0, 40)}${suffix}`;
+        warnings.push({ row: rowNumber, message: `Placa '${orig}' ya existía; se guardó como '${data.plate}'. Revise duplicado.` });
       } else if (target.includes('expedientNumber') && data.expedientNumber) {
+        const orig = data.expedientNumber;
         data.expedientNumber = `${(data.expedientNumber).slice(0, 40)}${suffix}`;
+        warnings.push({ row: rowNumber, message: `Expediente '${orig}' ya existía; se guardó como '${data.expedientNumber}'. Revise duplicado.` });
       } else {
         throw e;
       }
@@ -259,7 +281,7 @@ export async function importVehiclesFromBuffer(buffer: Buffer): Promise<ImportRe
     if (hasAny) rows.push(obj);
   }
 
-  const result: ImportResult = { total: rows.length, created: 0, updated: 0, skipped: 0, errors: [] };
+  const result: ImportResult = { total: rows.length, created: 0, updated: 0, skipped: 0, errors: [], warnings: [] };
 
   // Offset para reportar nº de fila Excel real al usuario
   const excelRowOffset = headerRowIdx + 2; // +1 (1-indexed) +1 (saltar header)
@@ -271,6 +293,11 @@ export async function importVehiclesFromBuffer(buffer: Buffer): Promise<ImportRe
   // Cache de operadores por fullName
   const operators = await prisma.operator.findMany({ select: { id: true, fullName: true } });
   const opByName = new Map<string, number>(operators.map((o) => [o.fullName.toLowerCase(), o.id]));
+
+  // Usuario de sistema para las notas de bitácora de importación, resuelto UNA
+  // sola vez (antes era un findFirst(ADMIN) por cada fila con observaciones: N+1).
+  const sysUser = await prisma.user.findFirst({ where: { role: 'ADMIN' }, select: { id: true } });
+  const sysUserId = sysUser?.id ?? null;
 
   for (let i = 0; i < rows.length; i++) {
     const raw = rows[i];
@@ -359,56 +386,57 @@ export async function importVehiclesFromBuffer(buffer: Buffer): Promise<ImportRe
         ...(vehicleTypeId ? { vehicleTypeId } : {}),
       };
 
-      // Upsert por economicNumber primero (más confiable que plate que cambia)
+      // Upsert por economicNumber primero (más confiable que la placa, que cambia).
+      // La LECTURA y la resolución del tipo de respaldo van FUERA de la tx
+      // (la caché de tipos es compartida entre filas, no debe revertirse).
       const existing = economicNumber
         ? await prisma.vehicle.findUnique({ where: { economicNumber } })
         : null;
 
-      let vehicle;
       if (existing) {
         if (!vehicleTypeId) delete data.vehicleTypeId;
-        // Si el update colisiona en unique fields, ajustar
-        vehicle = await safeUpdate(existing.id, data, rowNumber);
-        result.updated++;
-      } else {
-        if (!vehicleTypeId) {
-          const fallback = typeByName.get('sin clasificar')
-            || (await prisma.vehicleType.create({ data: { name: 'Sin clasificar', expectedKmPerLiter: 8.0 } })).id;
-          typeByName.set('sin clasificar', fallback);
-          data.vehicleTypeId = fallback;
-        }
-        vehicle = await safeCreate(data, rowNumber);
-        result.created++;
+      } else if (!vehicleTypeId) {
+        const fallback = typeByName.get('sin clasificar')
+          || (await prisma.vehicleType.create({ data: { name: 'Sin clasificar', expectedKmPerLiter: 8.0 } })).id;
+        typeByName.set('sin clasificar', fallback);
+        data.vehicleTypeId = fallback;
       }
 
-      // Resguardante → crear/actualizar asignación
       const resguardanteName = parseString(norm._resguardanteName);
-      if (resguardanteName) {
-        const opId = opByName.get(resguardanteName.toLowerCase());
-        if (opId) {
-          const active = await prisma.vehicleAssignment.findFirst({
+      const resguardanteOpId = resguardanteName ? opByName.get(resguardanteName.toLowerCase()) : undefined;
+      const obs = parseString(norm._observations);
+
+      // Todas las ESCRITURAS de la fila en UNA transacción: si algo falla a media
+      // fila, no queda un vehículo sin su asignación/nota (estado parcial).
+      await prisma.$transaction(async (tx) => {
+        const vehicle = existing
+          ? await safeUpdate(tx, existing.id, data, rowNumber, result.warnings)
+          : await safeCreate(tx, data, rowNumber, result.warnings);
+
+        // Resguardante → crear/actualizar asignación
+        if (resguardanteOpId) {
+          const active = await tx.vehicleAssignment.findFirst({
             where: { vehicleId: vehicle.id, endDate: null },
           });
-          if (!active || active.operatorId !== opId) {
-            // Cerrar la anterior si existe
-            if (active) await prisma.vehicleAssignment.update({ where: { id: active.id }, data: { endDate: new Date() } });
-            await prisma.vehicleAssignment.create({
-              data: { vehicleId: vehicle.id, operatorId: opId, type: 'FIXED' },
+          if (!active || active.operatorId !== resguardanteOpId) {
+            if (active) await tx.vehicleAssignment.update({ where: { id: active.id }, data: { endDate: new Date() } });
+            await tx.vehicleAssignment.create({
+              data: { vehicleId: vehicle.id, operatorId: resguardanteOpId, type: 'FIXED' },
             });
           }
         }
-      }
 
-      // Observaciones → nota de bitácora (si hay user de sistema)
-      const obs = parseString(norm._observations);
-      if (obs && existing == null) {
-        const sysUser = await prisma.user.findFirst({ where: { role: 'ADMIN' } });
-        if (sysUser) {
-          await prisma.vehicleNote.create({
-            data: { vehicleId: vehicle.id, content: `[Importado] ${obs}`, createdBy: sysUser.id },
+        // Observaciones → nota de bitácora (solo en alta y si hay user de sistema)
+        if (obs && existing == null && sysUserId != null) {
+          await tx.vehicleNote.create({
+            data: { vehicleId: vehicle.id, content: `[Importado] ${obs}`, createdBy: sysUserId },
           });
         }
-      }
+      });
+
+      // Contadores SOLO tras el commit exitoso de la fila.
+      if (existing) result.updated++;
+      else result.created++;
     } catch (e) {
       result.errors.push({
         row: rowNumber,

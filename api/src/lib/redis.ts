@@ -25,3 +25,19 @@ export function getRedis(): Redis {
 
   return client;
 }
+
+/**
+ * Cierra el cliente Redis singleton (graceful shutdown). Idempotente: seguro
+ * llamarlo aunque nunca se haya abierto la conexión.
+ */
+export async function closeRedis(): Promise<void> {
+  if (!client) return;
+  try {
+    await client.quit();
+    logger.info('Redis cerrado');
+  } catch (err) {
+    logger.error({ err: (err as Error).message }, 'Error cerrando Redis');
+  } finally {
+    client = null;
+  }
+}

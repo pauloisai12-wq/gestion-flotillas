@@ -75,6 +75,10 @@ router.get(
       });
       if (!user?.workshopId) return res.json({ quotes: [] });
 
+      // Paginación con tope para no traer todo el histórico de cotizaciones.
+      const page = Math.max(1, Number(req.query.page) || 1);
+      const limit = Math.min(50, Number(req.query.limit) || 20);
+
       const quotes = await prisma.ticketQuote.findMany({
         where: { workshopId: user.workshopId },
         include: {
@@ -90,6 +94,8 @@ router.get(
           },
         },
         orderBy: { createdAt: 'desc' },
+        skip: (page - 1) * limit,
+        take: limit,
       });
 
       res.json({ quotes });

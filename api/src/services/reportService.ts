@@ -3,6 +3,7 @@
 
 import { createQueue } from '../config/queue';
 import prisma from '../lib/prisma';
+import { Conflict } from '../middlewares/errorHandler';
 
 const reportsQueue = createQueue('reports');
 
@@ -25,7 +26,7 @@ export async function requestReportGeneration(
   });
 
   if (existing) {
-    throw new Error(
+    throw Conflict(
       'Ya hay un reporte en proceso para ' + month + '/' + year + '. Espera a que termine.'
     );
   }

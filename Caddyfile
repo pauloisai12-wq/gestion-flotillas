@@ -1,0 +1,22 @@
+# Caddyfile — reverse proxy interno para flotillas-v2 (QA/Staging)
+#
+# Acceso SOLO vía WireGuard: este host se resuelve a 10.10.0.2 (la IP VPN del
+# servidor de casa) en cada cliente revisor (vía /etc/hosts o el DNS de la VPN).
+#
+# `tls internal` => Caddy emite el certificado con su CA interna. Los 5 revisores
+# deben confiar en esa CA o aceptar la advertencia del navegador una vez.
+# Exportar la raíz para distribuirla:
+#   docker compose -f docker-compose.yml -f docker-compose.staging.yml \
+#     cp flotillas_caddy:/data/caddy/pki/authorities/local/root.crt ./flotillas-caddy-root.crt
+#
+# HTTPS es necesario porque, con NODE_ENV=production, las cookies de sesión de la
+# API van marcadas como Secure (el navegador solo las envía sobre https://).
+
+flotillas.internal {
+	tls internal
+	encode zstd gzip
+
+	# El frontend Next sirve la UI y proxya internamente /api y /uploads a la API
+	# (rewrites horneados con API_PROXY_TARGET=http://api:3001). Un solo origen.
+	reverse_proxy web:3000
+}

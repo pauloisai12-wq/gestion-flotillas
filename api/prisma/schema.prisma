@@ -352,6 +352,8 @@ model VehicleNote {
   deletedAt  DateTime?
 
   @@index([vehicleId, createdAt(sort: Desc)])
+  @@index([createdBy])
+  @@index([updatedBy])
   @@map("vehicle_notes")
 }
 
@@ -539,6 +541,8 @@ model VehicleBudget {
   @@unique([vehicleId, kind, year, month])
   @@index([year, month, kind])
   @@index([vehicleId, kind])
+  @@index([createdBy])
+  @@index([updatedBy])
   @@map("vehicle_budgets")
 }
 
@@ -692,6 +696,8 @@ model MaintenanceTicket {
   @@index([vehicleId, createdAt(sort: Desc)])
   @@index([requestedById, status])
   @@index([status, createdAt(sort: Desc)])
+  @@index([rejectedById])
+  @@index([approvedByAdminId])
   @@map("maintenance_tickets")
 }
 

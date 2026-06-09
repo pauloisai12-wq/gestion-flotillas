@@ -2,7 +2,18 @@
 node_modules/
 
 # Variables de entorno (contraseñas, secretos)
+# Cubre .env, .env.staging, .env.production, .env.local, etc.
+# Solo se versionan las plantillas *.example.
 .env
+.env.*
+!.env.example
+!.env.staging.example
+!.env.public.example
+
+# CA interna de Caddy exportada (root.crt) — se distribuye a los revisores fuera
+# de banda; NUNCA se versiona. Ver flotillas-runbook.md §2 / GUIA §6.
+*caddy*root.crt
+flotillas-caddy-root.crt
 
 # Next.js build
 .next/

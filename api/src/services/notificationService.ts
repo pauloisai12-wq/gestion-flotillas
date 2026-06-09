@@ -2,7 +2,7 @@
 // Servicio central de notificaciones internas.
 
 import prisma from '../lib/prisma';
-import { NotificationType } from '@prisma/client';
+import { NotificationType, UserRole } from '@prisma/client';
 
 export { NotificationType };
 
@@ -57,6 +57,58 @@ export async function notifyByRole(params: {
   }
 
   return notifications.length;
+}
+
+/**
+ * Notifica a TODOS los usuarios de uno o varios roles sobre VARIOS items en
+ * lote: resuelve los destinatarios UNA sola vez (evita el N+1 de llamar
+ * notifyByRole por item/rol) y hace UN solo createMany. Si se pasa
+ * dedupeWithinHours, NO recrea notificaciones (mismo userId+type+entityRef) ya
+ * emitidas en esa ventana — evita inundar al usuario en jobs diarios.
+ */
+export async function notifyManyByRole(params: {
+  roles: UserRole[];
+  type: NotificationType;
+  items: { title: string; message: string; entityRef?: string }[];
+  dedupeWithinHours?: number;
+}): Promise<number> {
+  if (params.items.length === 0) return 0;
+
+  const users = await prisma.user.findMany({
+    where: { role: { in: params.roles }, isActive: true },
+    select: { id: true },
+  });
+  if (users.length === 0) return 0;
+  const userIds = users.map((u) => u.id);
+
+  let candidates = userIds.flatMap((userId) =>
+    params.items.map((it) => ({
+      userId,
+      type: params.type,
+      title: it.title,
+      message: it.message,
+      entityRef: it.entityRef ?? null,
+      read: false,
+    })),
+  );
+
+  if (params.dedupeWithinHours && params.dedupeWithinHours > 0) {
+    const since = new Date(Date.now() - params.dedupeWithinHours * 3_600_000);
+    const refs = [...new Set(candidates.map((c) => c.entityRef).filter((r): r is string => r != null))];
+    if (refs.length > 0) {
+      const existing = await prisma.notification.findMany({
+        where: { type: params.type, userId: { in: userIds }, entityRef: { in: refs }, createdAt: { gte: since } },
+        select: { userId: true, entityRef: true },
+      });
+      const seen = new Set(existing.map((e) => `${e.userId}::${e.entityRef}`));
+      candidates = candidates.filter((c) => !seen.has(`${c.userId}::${c.entityRef}`));
+    }
+  }
+
+  if (candidates.length > 0) {
+    await prisma.notification.createMany({ data: candidates });
+  }
+  return candidates.length;
 }
 
 /**

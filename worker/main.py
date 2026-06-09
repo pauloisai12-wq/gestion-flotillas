@@ -5,8 +5,10 @@
 import asyncio
 import json
 import os
+import signal
 import sys
 from datetime import datetime
+from urllib.parse import urlparse
 
 from bullmq import Worker
 
@@ -18,9 +20,13 @@ from generate_excel import generate_excel
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379")
 QUEUE_NAME = "reports"
 
-redis_parts = REDIS_URL.replace("redis://", "").split(":")
-REDIS_HOST = redis_parts[0]
-REDIS_PORT = int(redis_parts[1]) if len(redis_parts) > 1 else 6379
+# Parseo robusto de la URL (soporta redis://[:password@]host[:port]).
+# El split manual anterior ignoraba la contraseña; si Redis corre con
+# --requirepass el worker debe autenticarse o no podrá consumir la cola.
+_redis = urlparse(REDIS_URL)
+REDIS_HOST = _redis.hostname or "localhost"
+REDIS_PORT = _redis.port or 6379
+REDIS_PASSWORD = _redis.password or None
 
 
 def save_report_history(month, year, requested_by, pdf_path, excel_path,
@@ -154,13 +160,13 @@ async def process_report(job, job_token):
         # --- Generar PDF ---
         await job.updateProgress(10)
         pdf_path = generate_pdf(month, year, requested_by)
-        pdf_size = get_file_size(pdf_path)
+        pdf_size = get_file_size(pdf_path) or 0  # 0 si stat falla; evita TypeError en formato ':,'
         print(f"  [PDF] Tamano: {pdf_size:,} bytes")
         await job.updateProgress(50)
 
         # --- Generar Excel ---
         excel_path = generate_excel(month, year, requested_by)
-        excel_size = get_file_size(excel_path)
+        excel_size = get_file_size(excel_path) or 0
         print(f"  [Excel] Tamano: {excel_size:,} bytes")
         await job.updateProgress(80)
 
@@ -175,6 +181,10 @@ async def process_report(job, job_token):
             excel_size=excel_size,
             status="COMPLETED"
         )
+        if report_id is None:
+            # report_history es la fuente de verdad (lista + descarga). Si no se
+            # guardó, NO reportar éxito: propagar para marcar FAILED y reintentar.
+            raise RuntimeError("No se pudo guardar report_history; el reporte no quedó registrado.")
         await job.updateProgress(90)
 
         # --- Notificar a los admins ---
@@ -248,28 +258,38 @@ async def main():
     print(f"  Inicio: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"{'='*60}\n")
 
+    connection = {"host": REDIS_HOST, "port": REDIS_PORT}
+    if REDIS_PASSWORD:
+        connection["password"] = REDIS_PASSWORD
+
     worker = Worker(
         QUEUE_NAME,
         process_report,
         {
-            "connection": {
-                "host": REDIS_HOST,
-                "port": REDIS_PORT
-            },
+            "connection": connection,
             "concurrency": 1
         }
     )
 
     print("Escuchando jobs en la cola 'reports'...")
-    print("(Presiona Ctrl+C para detener)\n")
+    print("(SIGTERM o Ctrl+C para detener)\n")
 
-    try:
-        while True:
-            await asyncio.sleep(1)
-    except KeyboardInterrupt:
-        print("\nDeteniendo worker...")
-        await worker.close()
-        print("Worker detenido.")
+    # Cierre ordenado: Docker envía SIGTERM en `stop`/redeploy (NO SIGINT). Sin
+    # capturarlo, el loop moría de golpe y el job en curso quedaba a medias
+    # (fila report_history en PROCESSING + PDF/Excel parcial en storage/reports).
+    loop = asyncio.get_running_loop()
+    stop = asyncio.Event()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            loop.add_signal_handler(sig, stop.set)
+        except NotImplementedError:
+            # Algunas plataformas (p.ej. Windows) no soportan add_signal_handler.
+            signal.signal(sig, lambda *_: stop.set())
+
+    await stop.wait()
+    print("\nDeteniendo worker (señal recibida)...")
+    await worker.close()
+    print("Worker detenido.")
 
 
 if __name__ == "__main__":

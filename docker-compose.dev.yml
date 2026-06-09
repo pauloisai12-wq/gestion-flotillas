@@ -20,6 +20,8 @@ services:
     volumes:
       - ./api:/app
       - /app/node_modules
+      # Compartido con worker-python para servir descargas de reportes también en dev.
+      - ./storage/reports:/app/storage/reports
 
   web:
     build:

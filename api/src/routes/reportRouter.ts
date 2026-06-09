@@ -11,6 +11,7 @@ import {
 } from '../services/reportService';
 import path from 'path';
 import fs from 'fs';
+import { env } from '../config/env';
 
 const reportRouter = Router();
 
@@ -119,9 +120,11 @@ reportRouter.get(
         return;
       }
 
-      // Confinar la descarga al directorio del volumen compartido
-      // (defensa contra path traversal si filePath en BD viniera contaminado)
-      const baseDir = path.resolve(__dirname, '..', '..', '..', 'storage', 'reports');
+      // Confinar la descarga al directorio del volumen compartido con el worker
+      // (defensa contra path traversal si filePath en BD viniera contaminado).
+      // Se usa REPORTS_DIR (config) en vez de __dirname, que apunta mal en el
+      // build prod (dist/routes) y dejaba la descarga rota.
+      const baseDir = path.resolve(env.REPORTS_DIR);
       const safePath = path.resolve(baseDir, path.basename(filePath));
 
       if (!safePath.startsWith(baseDir + path.sep)) {

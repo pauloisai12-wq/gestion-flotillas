@@ -5,7 +5,6 @@ import { z } from 'zod/v4';
 import { login, getUserById } from '../services/authService';
 import { authMiddleware } from '../middlewares/authMiddleware';
 import { rateLimit, getClientIp } from '../middlewares/rateLimit';
-import { Unauthorized } from '../middlewares/errorHandler';
 import { env } from '../config/env';
 
 const authRouter = Router();
@@ -18,12 +17,14 @@ const loginSchema = z.object({
 /**
  * Opciones de la cookie de sesión.
  * httpOnly: la cookie NO es accesible desde JavaScript (defensa contra XSS).
- * sameSite=lax: bloquea cross-site en requests "peligrosos" (POST cross-origin).
+ * sameSite=strict: la cookie NO viaja en NINGUNA petición iniciada por otro
+ *   sitio (cierra CSRF, incl. formularios multipart auto-enviados). El panel y
+ *   la API comparten origen vía el proxy de Next, así que no rompe el flujo.
  * secure: solo se envía sobre HTTPS en producción. En dev (HTTP) se permite.
  */
 const sessionCookieOpts: CookieOptions = {
   httpOnly: true,
-  sameSite: 'lax',
+  sameSite: 'strict',
   secure: env.NODE_ENV === 'production',
   path: '/',
   maxAge: 8 * 60 * 60 * 1000, // 8h, alineado con JWT_EXPIRES_IN por defecto
@@ -40,20 +41,26 @@ authRouter.post(
     windowSec: env.RATE_LIMIT_LOGIN_WINDOW_SEC,
     keyBuilder: (req) => `login:${getClientIp(req)}:${(req.body?.email || '').toLowerCase()}`,
     message: 'Demasiados intentos de inicio de sesión. Espera un minuto.',
+    // Si Redis cae, NO desactivar la protección anti brute-force del login.
+    failClosed: true,
   }),
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const { email, password } = loginSchema.parse(req.body);
+      // safeParse (no throw): si el body no es válido, propaga el ZodError al
+      // errorHandler global, que ya lo traduce a 400.
+      const parsed = loginSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return next(parsed.error);
+      }
+      const { email, password } = parsed.data;
       const result = await login(email, password);
       // Emite la cookie httpOnly de sesión. El token también va en el JSON por
       // compatibilidad con clientes que lo usen como Bearer header (transición).
       res.cookie('token', result.token, sessionCookieOpts);
       res.json({ status: 'ok', message: 'Login exitoso', data: result });
     } catch (error) {
-      // Mensaje genérico para no filtrar si el email existe
-      if ((error as Error).message?.includes('inválid') || (error as Error).message?.includes('desactivado')) {
-        return next(Unauthorized('Credenciales inválidas'));
-      }
+      // authService lanza AppError (Unauthorized) con el mensaje seguro;
+      // el errorHandler global lo traduce al status/JSON correcto.
       next(error);
     }
   },

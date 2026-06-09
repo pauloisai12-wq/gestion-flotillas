@@ -5,6 +5,7 @@ import bcrypt from 'bcrypt';
 import jwt, { type SignOptions } from 'jsonwebtoken';
 import { env } from '../config/env';
 import prisma from '../lib/prisma';
+import { Unauthorized } from '../middlewares/errorHandler';
 
 // Interfaz del payload que se guarda dentro del token JWT
 export interface JwtPayload {
@@ -28,22 +29,25 @@ export interface LoginResponse {
  * Autentica un usuario con email y contraseña.
  * Retorna un token JWT si las credenciales son válidas.
  */
+// Hash bcrypt dummy (mismo coste que los reales), precomputado una vez. Se usa
+// cuando el usuario no existe para que el tiempo de respuesta sea constante y
+// no se pueda enumerar cuentas válidas por timing.
+const DUMMY_HASH = bcrypt.hashSync('timing-equalizer-dummy', env.BCRYPT_ROUNDS);
+
 export async function login(email: string, password: string): Promise<LoginResponse> {
   const user = await prisma.user.findUnique({
     where: { email },
   });
 
-  if (!user) {
-    throw new Error('Credenciales inválidas');
+  // Siempre se paga el coste de bcrypt, exista o no el usuario (timing constante).
+  const passwordValid = await bcrypt.compare(password, user?.passwordHash ?? DUMMY_HASH);
+
+  if (!user || !passwordValid) {
+    throw Unauthorized('Credenciales inválidas');
   }
 
   if (!user.isActive) {
-    throw new Error('Usuario desactivado. Contacte al administrador.');
-  }
-
-  const passwordValid = await bcrypt.compare(password, user.passwordHash);
-  if (!passwordValid) {
-    throw new Error('Credenciales inválidas');
+    throw Unauthorized('Usuario desactivado. Contacte al administrador.');
   }
 
   const payload: JwtPayload = {
@@ -54,6 +58,7 @@ export async function login(email: string, password: string): Promise<LoginRespo
 
   const token = jwt.sign(payload, env.JWT_SECRET, {
     expiresIn: env.JWT_EXPIRES_IN,
+    algorithm: 'HS256',
   } as SignOptions);
 
   return {
@@ -72,7 +77,7 @@ export async function login(email: string, password: string): Promise<LoginRespo
  */
 export function verifyToken(token: string): JwtPayload {
   try {
-    const decoded = jwt.verify(token, env.JWT_SECRET) as JwtPayload;
+    const decoded = jwt.verify(token, env.JWT_SECRET, { algorithms: ['HS256'] }) as JwtPayload;
     return decoded;
   } catch (error) {
     throw new Error('Token inválido o expirado');
@@ -98,7 +103,7 @@ export async function getUserById(userId: number) {
   });
 
   if (!user || !user.isActive) {
-    throw new Error('Usuario no encontrado');
+    throw Unauthorized('Usuario no encontrado');
   }
 
   return user;

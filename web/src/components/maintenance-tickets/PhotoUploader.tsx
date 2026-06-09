@@ -7,7 +7,7 @@
 
 'use client';
 
-import { useRef, useState } from 'react';
+import { useRef, useState, useMemo, useEffect } from 'react';
 import { X, ImagePlus, Loader2, AlertCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useUploadAttachment } from '@/hooks/useMaintenanceTickets';
@@ -41,6 +41,17 @@ export function PhotoUploader(props: Props) {
   const upload = props.mode === 'upload' ? uploadHook : null;
 
   const currentFiles = props.mode === 'collect' ? props.files : [];
+
+  // Previews memoizados: una blob URL estable por archivo, revocada en cleanup
+  // para no fugar object URLs en cada re-render del formulario padre.
+  const previews = useMemo(
+    () => currentFiles.map((file) => ({ file, url: URL.createObjectURL(file) })),
+    [currentFiles],
+  );
+  useEffect(() => {
+    return () => previews.forEach((p) => URL.revokeObjectURL(p.url));
+  }, [previews]);
+
   const totalCount =
     props.mode === 'collect' ? currentFiles.length : props.currentCount;
   const remaining = MAX_FILES - totalCount;
@@ -147,16 +158,16 @@ export function PhotoUploader(props: Props) {
       {/* Preview de archivos pendientes (modo collect) */}
       {props.mode === 'collect' && currentFiles.length > 0 && (
         <ul className="mt-3 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2">
-          {currentFiles.map((f, i) => (
+          {previews.map(({ file: f, url }, i) => (
             <li
               key={`${f.name}-${i}`}
               className="relative aspect-square rounded-md overflow-hidden border border-border bg-muted group"
             >
-              {/* Preview con createObjectURL local — next/image necesita src
-                  servible y dimensiones conocidas, no aplica para File objects. */}
+              {/* Preview con blob URL memoizada (revocada en cleanup) — next/image
+                  necesita src servible y dimensiones conocidas, no aplica a File. */}
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
-                src={URL.createObjectURL(f)}
+                src={url}
                 alt={f.name}
                 className="size-full object-cover"
               />

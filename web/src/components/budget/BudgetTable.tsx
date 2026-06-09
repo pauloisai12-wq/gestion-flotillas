@@ -107,7 +107,11 @@ export function BudgetTable({ kind, title, description, icon: Icon }: BudgetTabl
       const res = await api.post('/budgets/assign', { vehicleId, kind, year, month, baseAmount });
       return res.data;
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['budgets', kind, year, month] }),
+    onSuccess: () => {
+      // Invalida listas + pote mensual (['budgets', 'pool', …]) y el progreso del dashboard
+      qc.invalidateQueries({ queryKey: ['budgets'] });
+      qc.invalidateQueries({ queryKey: ['dashboard'] });
+    },
   });
 
   const distributeMut = useMutation({
@@ -116,7 +120,9 @@ export function BudgetTable({ kind, title, description, icon: Icon }: BudgetTabl
       return res.data;
     },
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['budgets', kind, year, month] });
+      // Invalida listas + pote mensual (['budgets', 'pool', …]) y el progreso del dashboard
+      qc.invalidateQueries({ queryKey: ['budgets'] });
+      qc.invalidateQueries({ queryKey: ['dashboard'] });
       setMassOpen(false);
       setMassAmount('');
     },

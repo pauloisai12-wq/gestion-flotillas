@@ -13,33 +13,64 @@ import {
   OdometerStatus,
 } from '@prisma/client';
 import bcrypt from 'bcrypt';
+import { randomBytes } from 'node:crypto';
 
 const prisma = new PrismaClient(); // DATABASE_URL del .env
 
+// Contraseñas demo: se leen de variables de entorno (SEED_*_PASSWORD). Si no se
+// proveen, se genera una aleatoria fuerte (no se hardcodea ninguna débil) y se
+// imprime UNA sola vez al final. fromEnv=true => no la eco (el operador ya la sabe).
+function resolveSeedPassword(envVar: string): { value: string; fromEnv: boolean } {
+  const provided = process.env[envVar];
+  if (provided && provided.length > 0) return { value: provided, fromEnv: true };
+  return { value: randomBytes(12).toString('base64url'), fromEnv: false };
+}
+
 async function main() {
+  // El seed crea cuentas con contraseñas demo y reactiva usuarios: jamás debe
+  // correr contra producción. Usa `prisma migrate deploy` para desplegar.
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('Seed deshabilitado en producción (crea cuentas demo). Usa migraciones, no el seed.');
+  }
   console.log('🌱 Seed v2 iniciando...');
 
   // ============================================
   // 0. TIPOS DE VEHÍCULO + SECTORES
   // ============================================
   console.log('📦 Tipos de vehículo...');
-  const vehicleTypes = await Promise.all([
-    prisma.vehicleType.create({ data: { name: 'Camión de carga', expectedKmPerLiter: 4.5 } }),
-    prisma.vehicleType.create({ data: { name: 'Camioneta 3.5 ton', expectedKmPerLiter: 8.0 } }),
-    prisma.vehicleType.create({ data: { name: 'Sedán ejecutivo', expectedKmPerLiter: 14.0 } }),
-    prisma.vehicleType.create({ data: { name: 'Van de reparto', expectedKmPerLiter: 10.0 } }),
-    prisma.vehicleType.create({ data: { name: 'Tractocamión', expectedKmPerLiter: 3.0 } }),
-  ]);
+  // upsert por `name` (@unique) -> idempotente: re-correr no duplica ni lanza P2002.
+  const vehicleTypeSeed = [
+    { name: 'Camión de carga', expectedKmPerLiter: 4.5 },
+    { name: 'Camioneta 3.5 ton', expectedKmPerLiter: 8.0 },
+    { name: 'Sedán ejecutivo', expectedKmPerLiter: 14.0 },
+    { name: 'Van de reparto', expectedKmPerLiter: 10.0 },
+    { name: 'Tractocamión', expectedKmPerLiter: 3.0 },
+  ];
+  const vehicleTypes = await Promise.all(
+    vehicleTypeSeed.map((vt) =>
+      prisma.vehicleType.upsert({
+        where: { name: vt.name },
+        update: { expectedKmPerLiter: vt.expectedKmPerLiter },
+        create: vt,
+      }),
+    ),
+  );
   console.log(`   ✅ ${vehicleTypes.length} tipos`);
 
   console.log('🏢 Sectores (catálogo inicial placeholder)...');
-  const sectors = await Promise.all([
-    prisma.sector.create({ data: { code: 'CENTRO', name: 'Zona Centro' } }),
-    prisma.sector.create({ data: { code: 'NORTE', name: 'Zona Norte' } }),
-    prisma.sector.create({ data: { code: 'SUR', name: 'Zona Sur' } }),
-    prisma.sector.create({ data: { code: 'ORIENTE', name: 'Zona Oriente' } }),
-    prisma.sector.create({ data: { code: 'PONIENTE', name: 'Zona Poniente' } }),
-  ]);
+  // upsert por `code` (@unique).
+  const sectorSeed = [
+    { code: 'CENTRO', name: 'Zona Centro' },
+    { code: 'NORTE', name: 'Zona Norte' },
+    { code: 'SUR', name: 'Zona Sur' },
+    { code: 'ORIENTE', name: 'Zona Oriente' },
+    { code: 'PONIENTE', name: 'Zona Poniente' },
+  ];
+  const sectors = await Promise.all(
+    sectorSeed.map((s) =>
+      prisma.sector.upsert({ where: { code: s.code }, update: { name: s.name }, create: s }),
+    ),
+  );
   console.log(`   ✅ ${sectors.length} sectores`);
 
   // ============================================
@@ -78,21 +109,26 @@ async function main() {
       const ecoNum = `ECO-${String(vehicleCount).padStart(4, '0')}`;
       const odometer = 15000 + Math.floor(Math.random() * 165000);
 
-      const vehicle = await prisma.vehicle.create({
-        data: {
-          plate,
-          economicNumber: ecoNum,
-          vehicleTypeId: vType.id,
-          classification: classifications[vehicleCount % 3],
-          sectorId: sectors[vehicleCount % sectors.length].id,
-          brand,
-          model,
-          year,
-          color: ['Blanco', 'Gris', 'Rojo', 'Azul', 'Negro'][i % 5],
-          currentOdometer: odometer,
-          status: 'OPERATIVE',
-          isActive: true,
-        },
+      // upsert por `plate` (@unique). El executorId se asigna más abajo y NO se
+      // incluye aquí, así re-correr no lo pisa.
+      const vehicleData = {
+        plate,
+        economicNumber: ecoNum,
+        vehicleTypeId: vType.id,
+        classification: classifications[vehicleCount % 3],
+        sectorId: sectors[vehicleCount % sectors.length].id,
+        brand,
+        model,
+        year,
+        color: ['Blanco', 'Gris', 'Rojo', 'Azul', 'Negro'][i % 5],
+        currentOdometer: odometer,
+        status: 'OPERATIVE' as const,
+        isActive: true,
+      };
+      const vehicle = await prisma.vehicle.upsert({
+        where: { plate },
+        update: vehicleData,
+        create: vehicleData,
       });
       vehicles.push(vehicle);
     }
@@ -107,25 +143,31 @@ async function main() {
   const now = new Date();
   let docsCreated = 0;
 
-  for (const vehicle of vehicles) {
-    for (const docType of docTypes) {
-      const random = Math.random();
-      let expiresAt: Date;
-      if (random < 0.7) {
-        expiresAt = new Date(now); expiresAt.setDate(expiresAt.getDate() + 31 + Math.floor(Math.random() * 334));
-      } else if (random < 0.9) {
-        expiresAt = new Date(now); expiresAt.setDate(expiresAt.getDate() + 1 + Math.floor(Math.random() * 30));
-      } else {
-        expiresAt = new Date(now); expiresAt.setDate(expiresAt.getDate() - (1 + Math.floor(Math.random() * 60)));
+  // Document no tiene clave única natural -> idempotencia por guardia de conteo:
+  // solo se generan si aún no existe ninguno (re-correr no duplica).
+  if ((await prisma.document.count()) === 0) {
+    for (const vehicle of vehicles) {
+      for (const docType of docTypes) {
+        const random = Math.random();
+        let expiresAt: Date;
+        if (random < 0.7) {
+          expiresAt = new Date(now); expiresAt.setDate(expiresAt.getDate() + 31 + Math.floor(Math.random() * 334));
+        } else if (random < 0.9) {
+          expiresAt = new Date(now); expiresAt.setDate(expiresAt.getDate() + 1 + Math.floor(Math.random() * 30));
+        } else {
+          expiresAt = new Date(now); expiresAt.setDate(expiresAt.getDate() - (1 + Math.floor(Math.random() * 60)));
+        }
+        const issuedAt = new Date(expiresAt); issuedAt.setFullYear(issuedAt.getFullYear() - 1);
+        await prisma.document.create({
+          data: { vehicleId: vehicle.id, type: docType, issuedAt, expiresAt },
+        });
+        docsCreated++;
       }
-      const issuedAt = new Date(expiresAt); issuedAt.setFullYear(issuedAt.getFullYear() - 1);
-      await prisma.document.create({
-        data: { vehicleId: vehicle.id, type: docType, issuedAt, expiresAt },
-      });
-      docsCreated++;
     }
+    console.log(`   ✅ ${docsCreated} documentos`);
+  } else {
+    console.log('   ⏭️  documentos ya existen — omitido (idempotente)');
   }
-  console.log(`   ✅ ${docsCreated} documentos`);
 
   // ============================================
   // 3. OPERADORES (30) con employeeNumber
@@ -140,16 +182,21 @@ async function main() {
     if (i < 3) licExpiry.setDate(licExpiry.getDate() + Math.floor(Math.random() * 30));
     else licExpiry.setMonth(licExpiry.getMonth() + 6 + Math.floor(Math.random() * 24));
 
-    const operator = await prisma.operator.create({
-      data: {
-        employeeNumber: `EMP-${String(i + 1).padStart(5, '0')}`,  // EMP-00001, EMP-00002, ...
-        fullName: `${firstNames[i]} ${lastNames[i]}`,
-        licenseNumber: `LIC-${String(i + 1).padStart(6, '0')}`,
-        licenseType: ['A', 'B', 'C', 'D', 'E'][i % 5],
-        licenseExpiresAt: licExpiry,
-        phone: `55${String(1000 + i).padStart(4, '0')}${String(Math.floor(Math.random() * 9000) + 1000)}`,
-        email: `${firstNames[i].toLowerCase()}.${lastNames[i].toLowerCase()}@flotillas.com`,
-      },
+    // upsert por `employeeNumber` (@unique, determinista EMP-0000X).
+    const employeeNumber = `EMP-${String(i + 1).padStart(5, '0')}`;
+    const opData = {
+      employeeNumber,
+      fullName: `${firstNames[i]} ${lastNames[i]}`,
+      licenseNumber: `LIC-${String(i + 1).padStart(6, '0')}`,
+      licenseType: ['A', 'B', 'C', 'D', 'E'][i % 5],
+      licenseExpiresAt: licExpiry,
+      phone: `55${String(1000 + i).padStart(4, '0')}${String(Math.floor(Math.random() * 9000) + 1000)}`,
+      email: `${firstNames[i].toLowerCase()}.${lastNames[i].toLowerCase()}@flotillas.com`,
+    };
+    const operator = await prisma.operator.upsert({
+      where: { employeeNumber },
+      update: opData,
+      create: opData,
     });
     operators.push(operator);
   }
@@ -159,18 +206,23 @@ async function main() {
   // 4. ASIGNACIONES (primeros 30 vehículos ↔ operadores)
   // ============================================
   console.log('🔗 Asignaciones...');
-  for (let i = 0; i < 30; i++) {
-    await prisma.vehicleAssignment.create({
-      data: {
-        vehicleId: vehicles[i].id,
-        operatorId: operators[i].id,
-        type: i < 20 ? 'FIXED' : 'ROTATIVE',
-        startDate: new Date(now.getFullYear(), 0, 1),
-        endDate: null,
-      },
-    });
+  // VehicleAssignment no tiene clave única natural -> guardia por conteo.
+  if ((await prisma.vehicleAssignment.count()) === 0) {
+    for (let i = 0; i < 30; i++) {
+      await prisma.vehicleAssignment.create({
+        data: {
+          vehicleId: vehicles[i].id,
+          operatorId: operators[i].id,
+          type: i < 20 ? 'FIXED' : 'ROTATIVE',
+          startDate: new Date(now.getFullYear(), 0, 1),
+          endDate: null,
+        },
+      });
+    }
+    console.log('   ✅ 30 asignaciones');
+  } else {
+    console.log('   ⏭️  asignaciones ya existen — omitido (idempotente)');
   }
-  console.log('   ✅ 30 asignaciones');
 
   // ============================================
   // 5. GASOLINERAS — con RFC, razón social, email, phone, address
@@ -192,19 +244,27 @@ async function main() {
 
   const stations = [];
   for (const s of stationsData) {
-    const station = await prisma.approvedStation.create({ data: { ...s, isActive: true } });
+    // upsert por `rfc` (@unique).
+    const station = await prisma.approvedStation.upsert({
+      where: { rfc: s.rfc },
+      update: { ...s, isActive: true },
+      create: { ...s, isActive: true },
+    });
     stations.push(station);
   }
 
-  const unapprovedStation = await prisma.approvedStation.create({
-    data: {
-      rfc: 'XAXX010101000',
-      legalName: 'Gasolinera Independiente No Autorizada',
-      email: 'sinregistro@desconocido.mx',
-      phone: '0000000000',
-      address: 'Desconocida',
-      isActive: false,
-    },
+  const unapprovedData = {
+    rfc: 'XAXX010101000',
+    legalName: 'Gasolinera Independiente No Autorizada',
+    email: 'sinregistro@desconocido.mx',
+    phone: '0000000000',
+    address: 'Desconocida',
+    isActive: false,
+  };
+  const unapprovedStation = await prisma.approvedStation.upsert({
+    where: { rfc: unapprovedData.rfc },
+    update: unapprovedData,
+    create: unapprovedData,
   });
   console.log(`   ✅ ${stations.length + 1} gasolineras`);
 
@@ -226,7 +286,14 @@ async function main() {
   ];
   const workshops = [];
   for (const w of workshopsData) {
-    workshops.push(await prisma.workshop.create({ data: { ...w, isActive: true } }));
+    // upsert por `rfc` (@unique).
+    workshops.push(
+      await prisma.workshop.upsert({
+        where: { rfc: w.rfc },
+        update: { ...w, isActive: true },
+        create: { ...w, isActive: true },
+      }),
+    );
   }
   console.log(`   ✅ ${workshops.length} talleres`);
 
@@ -241,18 +308,22 @@ async function main() {
   const lastYear = thisMonth === 1 ? thisYear - 1 : thisYear;
 
   for (const vehicle of vehicles) {
+    // upsert por la clave compuesta @@unique([vehicleId, kind, year, month]).
     // --- MES ANTERIOR (cerrado, con remanente simulado) ---
     const baseLast = 10000;
     const spentLast = Math.round(baseLast * (0.4 + Math.random() * 0.5) * 100) / 100; // 40-90% gastado
     const remainderLast = Math.max(0, baseLast - spentLast);
 
-    await prisma.vehicleBudget.create({
-      data: {
-        vehicleId: vehicle.id, kind: BudgetKind.FUEL,
-        year: lastYear, month: lastMonth,
-        baseAmount: baseLast, rolloverIn: 0, spentAmount: spentLast,
-        isClosed: true, closedAt: new Date(thisYear, thisMonth - 1, 1, 0, 5),
-      },
+    const lastFuel = {
+      vehicleId: vehicle.id, kind: BudgetKind.FUEL,
+      year: lastYear, month: lastMonth,
+      baseAmount: baseLast, rolloverIn: 0, spentAmount: spentLast,
+      isClosed: true, closedAt: new Date(thisYear, thisMonth - 1, 1, 0, 5),
+    };
+    await prisma.vehicleBudget.upsert({
+      where: { vehicleId_kind_year_month: { vehicleId: vehicle.id, kind: BudgetKind.FUEL, year: lastYear, month: lastMonth } },
+      update: lastFuel,
+      create: lastFuel,
     });
 
     // --- MES ACTUAL — rollover del anterior ya aplicado ---
@@ -264,24 +335,30 @@ async function main() {
     else if (spentPct < 0.9) spent = Math.round(baseNow * (0.75 + Math.random() * 0.15) * 100) / 100;
     else { spent = Math.round(baseNow * (1 + Math.random() * 0.1) * 100) / 100; cutoff = true; }
 
-    await prisma.vehicleBudget.create({
-      data: {
-        vehicleId: vehicle.id, kind: BudgetKind.FUEL,
-        year: thisYear, month: thisMonth,
-        baseAmount: baseNow, rolloverIn: remainderLast,
-        spentAmount: spent, isCutOff: cutoff,
-      },
+    const nowFuel = {
+      vehicleId: vehicle.id, kind: BudgetKind.FUEL,
+      year: thisYear, month: thisMonth,
+      baseAmount: baseNow, rolloverIn: remainderLast,
+      spentAmount: spent, isCutOff: cutoff,
+    };
+    await prisma.vehicleBudget.upsert({
+      where: { vehicleId_kind_year_month: { vehicleId: vehicle.id, kind: BudgetKind.FUEL, year: thisYear, month: thisMonth } },
+      update: nowFuel,
+      create: nowFuel,
     });
 
     // --- MANTENIMIENTO mes actual (independiente) ---
     const maintBase = 5000;
     const maintSpent = Math.round(maintBase * Math.random() * 0.6 * 100) / 100;
-    await prisma.vehicleBudget.create({
-      data: {
-        vehicleId: vehicle.id, kind: BudgetKind.MAINTENANCE,
-        year: thisYear, month: thisMonth,
-        baseAmount: maintBase, rolloverIn: 0, spentAmount: maintSpent,
-      },
+    const nowMaint = {
+      vehicleId: vehicle.id, kind: BudgetKind.MAINTENANCE,
+      year: thisYear, month: thisMonth,
+      baseAmount: maintBase, rolloverIn: 0, spentAmount: maintSpent,
+    };
+    await prisma.vehicleBudget.upsert({
+      where: { vehicleId_kind_year_month: { vehicleId: vehicle.id, kind: BudgetKind.MAINTENANCE, year: thisYear, month: thisMonth } },
+      update: nowMaint,
+      create: nowMaint,
     });
   }
   console.log(`   ✅ ${vehicles.length * 3} registros de presupuesto`);
@@ -292,6 +369,8 @@ async function main() {
   console.log('⛽ Cargas de combustible...');
   let loadsCreated = 0;
 
+  // FuelLoad no tiene clave única natural -> guardia por conteo (no duplicar cargas).
+  if ((await prisma.fuelLoad.count()) === 0) {
   for (let i = 0; i < 200; i++) {
     const vehicleIndex = i % 30;
     const vehicle = vehicles[vehicleIndex];
@@ -342,6 +421,9 @@ async function main() {
     loadsCreated++;
   }
   console.log(`   ✅ ${loadsCreated} cargas`);
+  } else {
+    console.log('   ⏭️  cargas ya existen — omitido (idempotente)');
+  }
 
   // ============================================
   // 9. CATÁLOGO DE SERVICIOS
@@ -354,29 +436,41 @@ async function main() {
     { name: 'Afinación mayor', intervalKm: 30000 },
     { name: 'Revisión de suspensión', intervalKm: 50000 },
   ];
-  for (const vType of vehicleTypes) {
-    for (const service of services) {
-      await prisma.serviceCatalog.create({
-        data: {
-          vehicleTypeId: vType.id,
-          name: service.name,
-          intervalKm: service.intervalKm,
-          description: `${service.name} programado cada ${service.intervalKm.toLocaleString()} km`,
-        },
-      });
+  // ServiceCatalog no tiene clave única natural (vehicleTypeId+name) -> guardia por conteo.
+  if ((await prisma.serviceCatalog.count()) === 0) {
+    for (const vType of vehicleTypes) {
+      for (const service of services) {
+        await prisma.serviceCatalog.create({
+          data: {
+            vehicleTypeId: vType.id,
+            name: service.name,
+            intervalKm: service.intervalKm,
+            description: `${service.name} programado cada ${service.intervalKm.toLocaleString()} km`,
+          },
+        });
+      }
     }
+    console.log('   ✅ 25 servicios');
+  } else {
+    console.log('   ⏭️  catálogo de servicios ya existe — omitido (idempotente)');
   }
-  console.log('   ✅ 25 servicios');
 
   // ============================================
   // 10. USUARIOS — 4 roles nuevos
   // ============================================
   console.log('👤 Usuarios (upsert idempotente)...');
-  const saltRounds = 10;
-  const adminPass = await bcrypt.hash('admin123', saltRounds);
-  const superPass = await bcrypt.hash('super123', saltRounds);
-  const executorPass = await bcrypt.hash('ejecutor123', saltRounds);
-  const workshopPass = await bcrypt.hash('taller123', saltRounds);
+  // Coste bcrypt desde env (mismo mínimo que producción). Contraseñas demo desde
+  // env (SEED_*_PASSWORD); si faltan, se generan aleatorias y se imprimen UNA vez
+  // al final. Sin literales débiles hardcodeados.
+  const saltRounds = Number(process.env.BCRYPT_ROUNDS) || 12;
+  const adminCred = resolveSeedPassword('SEED_ADMIN_PASSWORD');
+  const superCred = resolveSeedPassword('SEED_SUPER_PASSWORD');
+  const executorCred = resolveSeedPassword('SEED_EXECUTOR_PASSWORD');
+  const workshopCred = resolveSeedPassword('SEED_WORKSHOP_PASSWORD');
+  const adminPass = await bcrypt.hash(adminCred.value, saltRounds);
+  const superPass = await bcrypt.hash(superCred.value, saltRounds);
+  const executorPass = await bcrypt.hash(executorCred.value, saltRounds);
+  const workshopPass = await bcrypt.hash(workshopCred.value, saltRounds);
 
   const admin = await prisma.user.upsert({
     where: { email: 'admin@flotillas.com' },
@@ -476,37 +570,54 @@ async function main() {
     'Cambio de llanta delantera izquierda tras ponchadura.',
     'Revisión visual: todo en orden.',
   ];
-  for (let i = 0; i < 5; i++) {
-    for (let j = 0; j < 2; j++) {
-      const ago = new Date(now); ago.setDate(ago.getDate() - (i * 10 + j * 5));
-      await prisma.vehicleNote.create({
-        data: {
-          vehicleId: vehicles[i].id,
-          content: sampleNotes[(i + j) % sampleNotes.length],
-          createdBy: j % 2 === 0 ? admin.id : supVeh.id,
-          createdAt: ago,
-          updatedAt: ago,
-        },
-      });
+  // VehicleNote no tiene clave única natural -> guardia por conteo.
+  if ((await prisma.vehicleNote.count()) === 0) {
+    for (let i = 0; i < 5; i++) {
+      for (let j = 0; j < 2; j++) {
+        const ago = new Date(now); ago.setDate(ago.getDate() - (i * 10 + j * 5));
+        await prisma.vehicleNote.create({
+          data: {
+            vehicleId: vehicles[i].id,
+            content: sampleNotes[(i + j) % sampleNotes.length],
+            createdBy: j % 2 === 0 ? admin.id : supVeh.id,
+            createdAt: ago,
+            updatedAt: ago,
+          },
+        });
+      }
     }
+    console.log('   ✅ 10 notas de bitácora');
+  } else {
+    console.log('   ⏭️  notas ya existen — omitido (idempotente)');
   }
-  console.log('   ✅ 10 notas de bitácora');
 
   console.log('');
   console.log('========================================');
   console.log('🎉 Seed v2 completado');
   console.log('========================================');
   console.log('');
-  console.log('Usuarios:');
-  console.log('  admin@flotillas.com           / admin123     (ADMIN)');
-  console.log('  vehiculos@flotillas.com       / super123     (SUPERVISOR_VEHICLES)');
-  console.log('  gasolina@flotillas.com        / super123     (SUPERVISOR_FUEL)');
-  console.log('  mantenimiento@flotillas.com   / super123     (SUPERVISOR_MAINTENANCE)');
-  console.log('  ejecutor1@flotillas.com       / ejecutor123  (EXECUTOR — 5 vehículos)');
-  console.log('  ejecutor2@flotillas.com       / ejecutor123  (EXECUTOR — 5 vehículos)');
-  console.log('  taller1@flotillas.com         / taller123    (WORKSHOP)');
-  console.log('  taller2@flotillas.com         / taller123    (WORKSHOP)');
-  console.log('  taller3@flotillas.com         / taller123    (WORKSHOP)');
+  console.log('Usuarios (las contraseñas generadas se muestran UNA sola vez):');
+  const accounts: { email: string; role: string; cred: { value: string; fromEnv: boolean } }[] = [
+    { email: 'admin@flotillas.com', role: 'ADMIN', cred: adminCred },
+    { email: 'vehiculos@flotillas.com', role: 'SUPERVISOR_VEHICLES', cred: superCred },
+    { email: 'gasolina@flotillas.com', role: 'SUPERVISOR_FUEL', cred: superCred },
+    { email: 'mantenimiento@flotillas.com', role: 'SUPERVISOR_MAINTENANCE', cred: superCred },
+    { email: 'ejecutor1@flotillas.com', role: 'EXECUTOR (5 vehículos)', cred: executorCred },
+    { email: 'ejecutor2@flotillas.com', role: 'EXECUTOR (5 vehículos)', cred: executorCred },
+    { email: 'taller1@flotillas.com', role: 'WORKSHOP', cred: workshopCred },
+    { email: 'taller2@flotillas.com', role: 'WORKSHOP', cred: workshopCred },
+    { email: 'taller3@flotillas.com', role: 'WORKSHOP', cred: workshopCred },
+  ];
+  for (const a of accounts) {
+    const shown = a.cred.fromEnv ? '«definida por SEED_*_PASSWORD»' : a.cred.value;
+    console.log(`  ${a.email.padEnd(30)} ${shown.padEnd(32)} (${a.role})`);
+  }
+  if ([adminCred, superCred, executorCred, workshopCred].some((c) => !c.fromEnv)) {
+    console.log('');
+    console.log('  ⚠ Contraseñas generadas al azar (arriba). Guárdalas ahora: NO se vuelven a');
+    console.log('    mostrar. Para fijarlas, define SEED_ADMIN_PASSWORD / SEED_SUPER_PASSWORD /');
+    console.log('    SEED_EXECUTOR_PASSWORD / SEED_WORKSHOP_PASSWORD antes de sembrar.');
+  }
   console.log('');
   console.log('Portal público (sin login):');
   console.log('  http://localhost:3000/cargas/registro-rapido');

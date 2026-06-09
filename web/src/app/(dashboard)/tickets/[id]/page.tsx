@@ -51,9 +51,10 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? '';
 
 export default function TicketDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id: idStr } = use(params);
-  const id = parseInt(idStr, 10);
+  const id = Number.parseInt(idStr, 10);
+  const validId = Number.isInteger(id) && id > 0 ? id : null;
   const { user } = useAuth();
-  const { data: ticket, isLoading } = useTicket(id);
+  const { data: ticket, isLoading, isError } = useTicket(validId);
 
   // Selección de quote ganadora — lifted state porque ApprovePanel y BudgetVsQuotesCard la comparten.
   const [selectedQuote, setSelectedQuote] = useState<number | null>(null);
@@ -66,6 +67,19 @@ export default function TicketDetailPage({ params }: { params: Promise<{ id: str
     isAdmin && isAwaitingDecision ? id : null,
   );
 
+  // id no numérico en la URL: no dejar la página en spinner eterno.
+  if (validId === null) {
+    return (
+      <div className="p-6 text-center text-sm text-muted-foreground">Ticket inválido.</div>
+    );
+  }
+  if (isError) {
+    return (
+      <div className="p-6 text-center text-sm text-destructive">
+        No se pudo cargar el ticket. Intenta de nuevo.
+      </div>
+    );
+  }
   if (isLoading || !ticket) {
     return (
       <div className="p-6 flex items-center justify-center gap-2 text-muted-foreground text-sm">
@@ -229,6 +243,13 @@ function AdminActions({
   ticketId: number;
   selectedQuote: number | null;
 }) {
+  // Ganador robusto: el objeto poblado puede no venir; cae a buscar por id en las cotizaciones
+  const winner =
+    ticket.selectedQuote ??
+    (ticket.selectedQuoteId
+      ? (ticket.quotes ?? []).find((q) => q.id === ticket.selectedQuoteId)
+      : undefined);
+
   if (ticket.status === 'PENDING_ADMIN_APPROVAL') {
     return (
       <div className="border border-border rounded-lg p-4 bg-card space-y-3">
@@ -285,10 +306,10 @@ function AdminActions({
       <p className="text-xs text-muted-foreground">
         El ticket ya no requiere acción del admin. Las próximas transiciones las hace el taller ganador.
       </p>
-      {ticket.selectedQuote && (
+      {winner && (
         <div className="mt-2 pt-2 border-t border-border text-xs">
           <span className="text-muted-foreground">Ganador:</span>{' '}
-          <span className="font-medium">{ticket.selectedQuote.workshop?.legalName}</span>
+          <span className="font-medium">{winner.workshop?.legalName}</span>
         </div>
       )}
     </div>

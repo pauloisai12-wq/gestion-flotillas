@@ -3,6 +3,7 @@
 // Calcula próximos servicios y genera alertas basadas en kilometraje.
 
 import prisma from '../lib/prisma';
+import { NotFound } from '../middlewares/errorHandler';
 
 interface UpcomingService {
   serviceId: number;
@@ -33,70 +34,65 @@ export async function getUpcomingServices(vehicleId: number): Promise<UpcomingSe
     },
   });
 
-  if (!vehicle) throw new Error('Vehículo no encontrado');
+  if (!vehicle) throw NotFound('Vehículo');
 
-  // Obtener servicios del catálogo para ese tipo de vehículo
-  const catalogServices = await prisma.serviceCatalog.findMany({
-    where: { vehicleTypeId: vehicle.vehicleTypeId },
-    orderBy: { intervalKm: 'asc' },
-  });
+  // Servicios del catálogo del tipo + último mantenimiento por servicio en UNA
+  // sola query (LEFT JOIN LATERAL), en vez de N+1 findFirst por servicio.
+  // (Mismo patrón que getAllPendingServices.)
+  type Row = {
+    service_id: number;
+    service_name: string;
+    interval_km: number;
+    last_km: number | null;
+    last_date: Date | null;
+  };
+  const rows = await prisma.$queryRaw<Row[]>`
+    SELECT
+      sc.id AS service_id,
+      sc.name AS service_name,
+      sc."intervalKm" AS interval_km,
+      mr.odometer AS last_km,
+      mr."serviceDate" AS last_date
+    FROM service_catalog sc
+    LEFT JOIN LATERAL (
+      SELECT odometer, "serviceDate"
+      FROM maintenance_records
+      WHERE "vehicleId" = ${vehicleId} AND "serviceId" = sc.id
+      ORDER BY "serviceDate" DESC
+      LIMIT 1
+    ) mr ON true
+    WHERE sc."vehicleTypeId" = ${vehicle.vehicleTypeId}
+    ORDER BY sc."intervalKm" ASC
+  `;
 
-  const results: UpcomingService[] = [];
+  const results: UpcomingService[] = rows.map((row) => {
+    const lastKm = row.last_km ?? 0;
+    const lastDate = row.last_date ? new Date(row.last_date).toISOString() : null;
+    const intervalKm = Number(row.interval_km);
 
-  for (const service of catalogServices) {
-    // Buscar el último mantenimiento de este servicio para este vehículo
-    const lastMaintenance = await prisma.maintenanceRecord.findFirst({
-      where: {
-        vehicleId,
-        serviceId: service.id,
-      },
-      orderBy: { serviceDate: 'desc' },
-      select: {
-        odometer: true,
-        serviceDate: true,
-      },
-    });
-
-    const lastKm = lastMaintenance?.odometer ?? 0;
-    const lastDate = lastMaintenance
-      ? lastMaintenance.serviceDate.toISOString()
-      : null;
-
-    // Próximo servicio = último km + intervalo
-    const nextServiceKm = lastKm + service.intervalKm;
-
-    // Km recorridos desde el último servicio
+    const nextServiceKm = lastKm + intervalKm;
     const kmSinceLast = vehicle.currentOdometer - lastKm;
-
-    // Progreso: qué porcentaje del intervalo se ha recorrido
-    const progressPercent = Math.round((kmSinceLast / service.intervalKm) * 100);
-
-    // Km restantes (negativo = vencido)
+    const progressPercent = Math.round((kmSinceLast / intervalKm) * 100);
     const remainingKm = nextServiceKm - vehicle.currentOdometer;
 
-    // Estado
     let status: 'OK' | 'WARNING' | 'OVERDUE';
-    if (progressPercent >= 100) {
-      status = 'OVERDUE';
-    } else if (progressPercent >= 80) {
-      status = 'WARNING';
-    } else {
-      status = 'OK';
-    }
+    if (progressPercent >= 100) status = 'OVERDUE';
+    else if (progressPercent >= 80) status = 'WARNING';
+    else status = 'OK';
 
-    results.push({
-      serviceId: service.id,
-      name: service.name,
-      intervalKm: service.intervalKm,
-      lastMaintenanceKm: lastMaintenance ? lastKm : null,
+    return {
+      serviceId: Number(row.service_id),
+      name: row.service_name,
+      intervalKm,
+      lastMaintenanceKm: row.last_km != null ? lastKm : null,
       lastMaintenanceDate: lastDate,
       nextServiceKm,
       currentOdometer: vehicle.currentOdometer,
       progressPercent,
       status,
       remainingKm,
-    });
-  }
+    };
+  });
 
   // Ordenar por urgencia: primero los vencidos, luego los más cercanos
   results.sort((a, b) => a.remainingKm - b.remainingKm);
@@ -146,6 +142,10 @@ export async function getAllPendingServices() {
       LIMIT 1
     ) mr ON true
     WHERE v."isActive" = true
+      -- Filtra en SQL los pendientes (>=80% del intervalo): progreso >= 80%
+      -- equivale a (odómetro actual - último) >= 0.8 * intervalo. Evita traer
+      -- toda la flota×catálogo a memoria para descartarla en JS.
+      AND (v."currentOdometer" - COALESCE(mr.odometer, 0)) >= 0.8 * NULLIF(sc."intervalKm", 0)
   `;
 
   const allPending: Array<
@@ -156,7 +156,8 @@ export async function getAllPendingServices() {
     const lastKm = row.last_km ?? 0;
     const kmSinceLast = row.current_odometer - lastKm;
     const progressPercent = Math.round((kmSinceLast / row.interval_km) * 100);
-    if (progressPercent < 80) continue; // descartamos los OK aquí mismo
+    // El filtro >=80% ya se aplicó en SQL; recalculamos progressPercent solo
+    // para el valor mostrado.
 
     const nextServiceKm = lastKm + row.interval_km;
     const remainingKm = nextServiceKm - row.current_odometer;

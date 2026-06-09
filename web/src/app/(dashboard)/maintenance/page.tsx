@@ -122,8 +122,8 @@ function PendingTab() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {services.map((s, idx) => (
-                <TableRow key={idx}>
+              {services.map((s) => (
+                <TableRow key={`${s.vehicleId}-${s.serviceId}`}>
                   <TableCell className="font-medium">
                     {s.economicNumber}
                     <span className="text-xs text-muted-foreground ml-1">({s.plate})</span>

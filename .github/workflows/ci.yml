@@ -21,6 +21,8 @@ jobs:
       REDIS_URL: redis://localhost:6379
       JWT_SECRET: ci-dummy-secret-de-mas-de-32-caracteres-para-zod-validation
       NODE_ENV: test
+      # Captcha apagado: refleja el despliegue interno (§6.1) y evita exigir secret.
+      TURNSTILE_ENABLED: "false"
     steps:
       - uses: actions/checkout@v4
 
@@ -74,6 +76,8 @@ jobs:
         env:
           # En CI no hay backend, pero el build de Next no requiere API en runtime
           NEXT_PUBLIC_API_URL: http://localhost:3001
+          # Captcha apagado en el build (refleja el despliegue interno, §6.1).
+          NEXT_PUBLIC_TURNSTILE_ENABLED: "false"
 
   worker:
     name: Worker Python — import check

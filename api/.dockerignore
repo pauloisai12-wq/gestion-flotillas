@@ -1,3 +1,25 @@
+# Contexto de build de la API. El build hace `npm ci` fresco dentro de Docker
+# (node:20-alpine): nada de node_modules/dist del host (binarios nativos como
+# bcrypt son por-plataforma) ni secretos deben colarse.
+
+# Dependencias y artefactos compilados
 node_modules
 dist
+
+# Secretos / entorno — NUNCA al contexto de build
 .env
+.env.*
+
+# Logs y temporales
+*.log
+npm-debug.log*
+*.tsbuildinfo
+
+# Bases de datos locales de Prisma y cobertura (NO excluir prisma/ — el build
+# necesita schema.prisma + migrations para `prisma generate` y la imagen prod)
+prisma/*.db
+coverage
+
+# VCS / editor
+.git
+.gitignore

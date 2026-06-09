@@ -6,6 +6,7 @@
 import { Request, Response, NextFunction } from 'express';
 import prisma from '../lib/prisma';
 import { VehicleStatus } from '@prisma/client';
+import { logger } from '../lib/logger';
 
 export async function checkVehicleOperable(
   req: Request,
@@ -14,7 +15,6 @@ export async function checkVehicleOperable(
 ): Promise<void> {
   // Buscar vehicleId en body (POST) o en params (rutas como /vehicles/:vehicleId/...)
   const vehicleId = req.body.vehicleId || req.params.vehicleId;
-console.log('🛡️ GUARD - vehicleId:', vehicleId, 'tipo:', typeof vehicleId);
 
   if (!vehicleId) {
     // Si no hay vehicleId en la petición, dejar pasar (no aplica este guard)
@@ -67,7 +67,7 @@ console.log('🛡️ GUARD - vehicleId:', vehicleId, 'tipo:', typeof vehicleId);
 
     next();
   } catch (error) {
-    console.error('Error en vehicleGuard:', error);
+    logger.error({ err: error }, 'Error en vehicleGuard');
     res.status(500).json({ error: 'Error al verificar estado del vehículo' });
   }
 }

@@ -5,6 +5,7 @@ import { PrismaClient } from '@prisma/client';
 import type { ITXClientDenyList } from '@prisma/client/runtime/library';
 import { getAuditContext } from './auditContext';
 import { env } from '../config/env';
+import { logger } from './logger';
 
 const AUDITED_MODELS = new Set([
   'Vehicle',
@@ -64,8 +65,10 @@ const prisma = basePrisma.$extends({
                 requestId: ctx?.requestId,
               },
             });
-          } catch {
-            // Si el audit falla NO debe romper la operación principal
+          } catch (auditErr) {
+            // Si el audit falla NO debe romper la operación principal (fail-open),
+            // pero sí lo registramos para no perder fallos del trail de auditoría.
+            logger.error({ err: auditErr, model, operation }, 'No se pudo escribir AuditLog');
           }
         }
 

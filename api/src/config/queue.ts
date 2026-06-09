@@ -2,18 +2,27 @@
 // Configuración central de BullMQ — conexión a Redis
 // Todos los jobs y workers del sistema usan esta configuración
 
-import { Queue, Worker, type ConnectionOptions } from 'bullmq';
+import { Queue, Worker, type ConnectionOptions, type Job } from 'bullmq';
 import { env } from './env';
 import { logger } from '../lib/logger';
 
-// Parseamos REDIS_URL (única fuente de verdad — validada en env.ts) para BullMQ
-// Soporta: redis://host:port, redis://host (puerto default 6379)
-function parseRedisUrl(url: string): { host: string; port: number } {
+// Parseamos REDIS_URL (única fuente de verdad — validada en env.ts) para BullMQ.
+// Soporta: redis://[:password@]host[:port] (puerto default 6379).
+// IMPORTANTE: se extraen también username/password — si Redis corre con
+// --requirepass y no se propagaran aquí, BullMQ no podría autenticarse.
+function parseRedisUrl(url: string): {
+  host: string;
+  port: number;
+  username?: string;
+  password?: string;
+} {
   try {
     const parsed = new URL(url);
     return {
       host: parsed.hostname || 'localhost',
       port: parsed.port ? Number(parsed.port) : 6379,
+      username: parsed.username ? decodeURIComponent(parsed.username) : undefined,
+      password: parsed.password ? decodeURIComponent(parsed.password) : undefined,
     };
   } catch {
     logger.warn({ url }, 'REDIS_URL inválida, usando defaults');
@@ -29,7 +38,17 @@ export const redisConnection: ConnectionOptions = parseRedisUrl(env.REDIS_URL);
  * Ejemplo: la cola "compliance" tendrá el job de revisar documentos vencidos.
  */
 export function createQueue(name: string): Queue {
-  return new Queue(name, { connection: redisConnection });
+  return new Queue(name, {
+    connection: redisConnection,
+    defaultJobOptions: {
+      attempts: 3,
+      backoff: { type: 'exponential', delay: 5000 },
+      removeOnComplete: { age: 86400, count: 1000 },
+      // Tope por edad Y por cantidad: sin `count`, una racha de fallos (p.ej. el
+      // worker Python caído) acumula jobs en Redis sin límite hasta los 7 días.
+      removeOnFail: { age: 604800, count: 200 },
+    },
+  });
 }
 
 /**
@@ -39,8 +58,7 @@ export function createQueue(name: string): Queue {
  */
 export function createWorker(
   name: string,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  processor: (job: any) => Promise<void>
+  processor: (job: Job) => Promise<void>
 ): Worker {
   const worker = new Worker(name, processor, { connection: redisConnection });
 

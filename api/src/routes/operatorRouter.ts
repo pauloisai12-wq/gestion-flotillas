@@ -3,11 +3,11 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { operatorSchema } from '../validators/operatorValidator';
 import * as operatorService from '../services/operatorService';
-import { roleMiddleware } from '../middlewares/roleMiddleware';
+import { roleMiddleware, RoleGroups } from '../middlewares/roleMiddleware';
 
 const router = Router();
 
-router.get('/', async (req: Request, res: Response, next: NextFunction) => {
+router.get('/', roleMiddleware(RoleGroups.VEHICLE_READERS), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const query = {
       page: req.query.page ? parseInt(req.query.page as string) : 1,
@@ -21,7 +21,7 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
     }
 });
 
-router.get('/:id', async (req: Request, res: Response, next: NextFunction) => {
+router.get('/:id', roleMiddleware(RoleGroups.VEHICLE_READERS), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: 'ID inválido' });

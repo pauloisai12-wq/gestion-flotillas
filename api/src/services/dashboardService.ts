@@ -180,9 +180,14 @@ export async function getBudgetProgress(filters: DashboardFilters = {}) {
     return result.map(formatBudgetRow);
   }
 
+  // Fallback con filtros. vehicle_budgets es el modelo unificado: tiene su
+  // propio kind/year/month y baseAmount+rolloverIn (NO existe assignedAmount ni
+  // un join a fuel_budgets). Replicamos la vista mv_budget_progress:
+  // kind='FUEL', mes/año actuales, assigned = baseAmount + rolloverIn.
   const conds: Prisma.Sql[] = [
-    Prisma.sql`fb.month = EXTRACT(MONTH FROM NOW())::int`,
-    Prisma.sql`fb.year = EXTRACT(YEAR FROM NOW())::int`,
+    Prisma.sql`vb.kind = 'FUEL'`,
+    Prisma.sql`vb.month = EXTRACT(MONTH FROM NOW())::int`,
+    Prisma.sql`vb.year = EXTRACT(YEAR FROM NOW())::int`,
   ];
   if (filters.vehicleTypeId) conds.push(Prisma.sql`v."vehicleTypeId" = ${Number(filters.vehicleTypeId)}`);
 
@@ -191,12 +196,12 @@ export async function getBudgetProgress(filters: DashboardFilters = {}) {
   const result = await prisma.$queryRaw<any[]>`
     SELECT vb.id AS vehicle_budget_id, vb."vehicleId" AS vehicle_id,
       v.plate, v."economicNumber" AS eco,
-      vb."assignedAmount" AS assigned, vb."spentAmount" AS spent,
-      CASE WHEN vb."assignedAmount" > 0 THEN ROUND((vb."spentAmount" / vb."assignedAmount" * 100)::numeric, 1) ELSE 0 END AS pct_used,
+      (vb."baseAmount" + vb."rolloverIn") AS assigned, vb."spentAmount" AS spent,
+      CASE WHEN (vb."baseAmount" + vb."rolloverIn") > 0
+        THEN ROUND((vb."spentAmount" / (vb."baseAmount" + vb."rolloverIn") * 100)::numeric, 1) ELSE 0 END AS pct_used,
       vb."isCutOff" AS is_cut_off
     FROM vehicle_budgets vb
     JOIN vehicles v ON v.id = vb."vehicleId"
-    JOIN fuel_budgets fb ON fb.id = vb."budgetId"
     WHERE ${where}
     ORDER BY pct_used DESC
   `;

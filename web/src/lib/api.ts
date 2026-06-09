@@ -17,12 +17,30 @@ const api = axios.create({
   withCredentials: true,
 });
 
-// Redirigir al login si la API responde 401. La cookie es httpOnly y solo
-// el backend puede limpiarla — aquí basta con sacar al usuario de la sesión.
+// Redirigir al login si la API responde 401 (sesión expirada en una página
+// protegida). La cookie es httpOnly y solo el backend puede limpiarla.
+//
+// IMPORTANTE: NO redirigir si ya estamos en una ruta PÚBLICA (/login, /cargas).
+// El AuthProvider sondea /auth/me al cargar y, sin sesión, ese probe responde
+// 401 de forma esperada; redirigir aquí provoca un BUCLE de recargas
+// (window.location.href recarga -> vuelve a sondear -> 401 -> recarga -> ...).
+function isPublicPath(pathname: string): boolean {
+  return (
+    pathname === '/login' ||
+    pathname.startsWith('/login/') ||
+    pathname === '/cargas' ||
+    pathname.startsWith('/cargas/')
+  );
+}
+
 api.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response?.status === 401 && typeof window !== 'undefined') {
+    if (
+      error.response?.status === 401 &&
+      typeof window !== 'undefined' &&
+      !isPublicPath(window.location.pathname)
+    ) {
       window.location.href = '/login';
     }
     return Promise.reject(error);
