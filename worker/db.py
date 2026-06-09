@@ -13,10 +13,15 @@ from contextlib import contextmanager
 # Silenciar el UserWarning de pandas respecto a SQLAlchemy
 warnings.filterwarnings('ignore', category=UserWarning, module='pandas')
 
-DATABASE_URL = os.environ.get(
-    "DATABASE_URL",
-    "postgresql://postgres:postgres@localhost:5433/flotillas"
-)
+DATABASE_URL = os.environ.get("DATABASE_URL")
+if not DATABASE_URL:
+    # Sin fallback a localhost: dentro del contenedor el host es el servicio
+    # `postgres` (lo inyecta docker-compose). Fallar explícito evita conexiones
+    # silenciosas a una BD equivocada si la variable no se propagó.
+    raise RuntimeError(
+        "DATABASE_URL es obligatorio "
+        "(p.ej. postgresql://user:pass@postgres:5432/flotillas)"
+    )
 
 # Tamaño del pool. Mín 1 conexión (uso bajo en idle), máx 5 (suficiente para
 # generación concurrente de reportes — el worker tiene concurrency=1, pero

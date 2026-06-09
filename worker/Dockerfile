@@ -28,5 +28,12 @@ RUN mkdir -p /app/storage/reports
 # Copiar código
 COPY . .
 
+# Ejecutar como usuario no-root (defensa en profundidad). El worker solo necesita
+# escribir en /app/storage/reports; le damos la propiedad para que el volumen con
+# nombre (reports_data) herede ese owner al montarse vacío la primera vez.
+RUN groupadd -r appuser && useradd -r -g appuser appuser \
+    && chown -R appuser:appuser /app/storage
+USER appuser
+
 # Comando: ejecutar el worker que escucha jobs de BullMQ
 CMD ["python", "main.py"]

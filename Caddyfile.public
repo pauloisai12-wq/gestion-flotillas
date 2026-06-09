@@ -19,13 +19,16 @@
 qa.aztechcomposites.com {
 	encode zstd gzip
 
-	# Cabeceras de seguridad para las respuestas del web (HTML de Next). Helmet en
-	# la API solo cubre /api; este bloque endurece lo que sirve Caddy directamente.
+	# Refuerzo de seguridad en el borde. Next ya emite estas cabeceras en su HTML
+	# (web/next.config.ts), pero las fijamos también aquí por si una respuesta la
+	# sirve Caddy directo (errores/redirects) y para ocultar el header Server.
+	# Los valores DEBEN coincidir con los de Next (X-Frame-Options: DENY) para no
+	# degradarlos al sobrescribir.
 	header {
 		Strict-Transport-Security "max-age=31536000; includeSubDomains"
 		X-Content-Type-Options "nosniff"
 		Referrer-Policy "strict-origin-when-cross-origin"
-		X-Frame-Options "SAMEORIGIN"
+		X-Frame-Options "DENY"
 		-Server
 	}
 

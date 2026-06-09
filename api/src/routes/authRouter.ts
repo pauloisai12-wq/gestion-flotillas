@@ -46,7 +46,13 @@ authRouter.post(
   }),
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const { email, password } = loginSchema.parse(req.body);
+      // safeParse (no throw): si el body no es válido, propaga el ZodError al
+      // errorHandler global, que ya lo traduce a 400.
+      const parsed = loginSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return next(parsed.error);
+      }
+      const { email, password } = parsed.data;
       const result = await login(email, password);
       // Emite la cookie httpOnly de sesión. El token también va en el JSON por
       // compatibilidad con clientes que lo usen como Bearer header (transición).

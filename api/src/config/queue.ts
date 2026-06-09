@@ -44,7 +44,9 @@ export function createQueue(name: string): Queue {
       attempts: 3,
       backoff: { type: 'exponential', delay: 5000 },
       removeOnComplete: { age: 86400, count: 1000 },
-      removeOnFail: { age: 604800 },
+      // Tope por edad Y por cantidad: sin `count`, una racha de fallos (p.ej. el
+      // worker Python caído) acumula jobs en Redis sin límite hasta los 7 días.
+      removeOnFail: { age: 604800, count: 200 },
     },
   });
 }

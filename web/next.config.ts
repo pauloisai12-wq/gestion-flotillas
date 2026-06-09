@@ -4,6 +4,15 @@ import withBundleAnalyzer from "@next/bundle-analyzer";
 
 const API_TARGET = process.env.API_PROXY_TARGET || "http://localhost:3001";
 
+// En builds de producción API_PROXY_TARGET debe apuntar al servicio `api` (se
+// hornea en los rewrites). El fallback a localhost solo sirve para `next dev`
+// fuera de Docker; en prod sin la var, la app proxearía a localhost (roto).
+if (process.env.NODE_ENV === "production" && !process.env.API_PROXY_TARGET) {
+  throw new Error(
+    "API_PROXY_TARGET es obligatorio en builds de producción (p.ej. http://api:3001).",
+  );
+}
+
 const nextConfig: NextConfig = {
   // Compresión gzip en respuestas SSR/HTML. Crítico para ngrok.
   compress: true,

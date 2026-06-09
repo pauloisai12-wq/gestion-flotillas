@@ -37,6 +37,20 @@ services:
     mem_limit: 768m
     cpus: "1.0"
     logging: *log
+    # Tuning para VPS chico (~2 GB). AJUSTA a la RAM real: shared_buffers≈25% RAM,
+    # effective_cache_size≈50-75% RAM. max_connections holgado para Prisma(15)+worker(5).
+    command:
+      - "postgres"
+      - "-c"
+      - "shared_buffers=256MB"
+      - "-c"
+      - "effective_cache_size=768MB"
+      - "-c"
+      - "work_mem=8MB"
+      - "-c"
+      - "maintenance_work_mem=64MB"
+      - "-c"
+      - "max_connections=50"
 
   # === REDIS (volumen con nombre del base) ===
   redis:

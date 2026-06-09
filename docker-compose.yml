@@ -73,7 +73,11 @@ services:
       # de las credenciales de Postgres/Redis (mismo patrón que worker-python, abajo).
       # Así basta con definir POSTGRES_*/REDIS_PASSWORD; defínelas explícitas solo si
       # apuntas a una BD/Redis externos. La password va embebida (literal) en la URL.
-      DATABASE_URL: ${DATABASE_URL:-postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}}
+      # connection_limit acota el pool de Prisma (default = cpus*2+1, que con BullMQ
+      # + cron jobs + healthchecks puede agotar conexiones). Si defines DATABASE_URL
+      # explícito en .env, inclúyelo tú (?connection_limit=15). El worker usa su
+      # propia URL SIN este parámetro (psycopg2 no lo entiende).
+      DATABASE_URL: ${DATABASE_URL:-postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?connection_limit=15}
       REDIS_URL: ${REDIS_URL:-redis://:${REDIS_PASSWORD}@redis:6379}
       JWT_SECRET: ${JWT_SECRET}
       # NODE_ENV debe declararse EXPLÍCITAMENTE en .env (sin fallback silencioso).
