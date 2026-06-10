@@ -1,0 +1,26 @@
+{
+  "mcpServers": {
+    "postgres-audit": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": [
+        "postgres-mcp",
+        "--access-mode=restricted"
+      ],
+      "env": {
+        "DATABASE_URI": "postgresql://ro_user:PASS@localhost:5432/flotillas"
+      }
+    },
+    "context7": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@context7/mcp-server"
+      ],
+      "env": {
+        "CONTEXT7_API_KEY": "TU_KEY"
+      }
+    }
+  }
+}

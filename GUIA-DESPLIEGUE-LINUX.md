@@ -158,7 +158,7 @@ falta o es débil. **Build-time** = horneada en la imagen `web` (cambiarla exige
 
 ## 5. Pre-flight: bloqueadores verificados que impiden el arranque
 
-> La auditoría `AUDITORIA-STAGING.md` (4 críticos + ~21 advertencias) figura **remediada en código al
+> La auditoría de seguridad de mayo 2026 (4 críticos + ~21 advertencias) figura **remediada en código al
 > 2026-05-29**. Lo que queda son **puertas de configuración operacional** (el `.env`) y algunas trampas
 > de documentación. Todos los puntos abajo fueron confirmados leyendo el código.
 

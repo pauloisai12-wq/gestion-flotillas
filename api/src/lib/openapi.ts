@@ -6,7 +6,7 @@
 // código real.
 //
 // Cobertura actual: ESQUELETO — incluye auth/login y vehicles GET/POST
-// como ejemplo. Para extender a los ~50 endpoints restantes ver PENDING.md.
+// como ejemplo; quedan ~50 endpoints por documentar siguiendo este patrón.
 
 import { OpenAPIRegistry, OpenApiGeneratorV31, extendZodWithOpenApi } from '@asteasolutions/zod-to-openapi';
 import { z } from 'zod';
@@ -155,8 +155,7 @@ export function generateOpenApiDocument() {
       version: '1.0.0',
       description:
         'API REST del sistema de gestión de flotillas vehiculares.\n\n' +
-        '**Cobertura actual:** esqueleto inicial (~5 de ~50 endpoints). ' +
-        'Ver `PENDING.md` para el plan de cobertura completa.',
+        '**Cobertura actual:** esqueleto inicial (~5 de ~50 endpoints).',
     },
     servers: [
       { url: 'http://localhost:3001', description: 'Local' },

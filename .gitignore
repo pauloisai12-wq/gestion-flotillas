@@ -7,7 +7,6 @@ node_modules/
 .env
 .env.*
 !.env.example
-!.env.staging.example
 !.env.public.example
 
 # CA interna de Caddy exportada (root.crt) — se distribuye a los revisores fuera
@@ -49,6 +48,3 @@ storage/reports/*
 
 # Logs
 *.log
-
-# Transcripciones crudas de sesiones (pesadas + contienen tokens)
-docs/sesiones/*.jsonl
