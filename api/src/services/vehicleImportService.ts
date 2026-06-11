@@ -181,6 +181,7 @@ function detectHeaderRow(matrix: any[][]): number {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function safeCreate(db: Tx, data: any, rowNumber: number, warnings: ImportResult['warnings']): Promise<any> {
   let attempt = 0;
+  let lastConflict = '';
   // En PostgreSQL, un INSERT que viola un unique constraint (P2002) aborta TODA
   // la transacción: cualquier comando posterior en la misma tx falla con
   // 25P02 ("current transaction is aborted, commands ignored..."). Para poder
@@ -202,6 +203,7 @@ async function safeCreate(db: Tx, data: any, rowNumber: number, warnings: Import
       const err = e as any;
       if (err.code !== 'P2002' || !err.meta?.target) throw e;
       const target: string[] = Array.isArray(err.meta.target) ? err.meta.target : [err.meta.target];
+      lastConflict = target.join(', ');
       const suffix = `-DUP-${rowNumber}${attempt > 1 ? `-${attempt}` : ''}`;
 
       if (target.includes('vin') && data.vin) {
@@ -224,7 +226,7 @@ async function safeCreate(db: Tx, data: any, rowNumber: number, warnings: Import
       }
     }
   }
-  throw new Error(`No se pudo crear tras múltiples intentos (fila ${rowNumber})`);
+  throw new Error(`No se pudo crear tras múltiples intentos (fila ${rowNumber}; último conflicto en: ${lastConflict || 'desconocido'})`);
 }
 
 /**
@@ -234,6 +236,7 @@ async function safeCreate(db: Tx, data: any, rowNumber: number, warnings: Import
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function safeUpdate(db: Tx, id: number, data: any, rowNumber: number, warnings: ImportResult['warnings']): Promise<any> {
   let attempt = 0;
+  let lastConflict = '';
   // Mismo motivo que safeCreate: un UPDATE que genera duplicado (P2002) aborta la
   // transacción en Postgres (25P02). El SAVEPOINT permite reintentar con el campo
   // desambiguado sin perder la transacción de la fila.
@@ -250,6 +253,7 @@ async function safeUpdate(db: Tx, id: number, data: any, rowNumber: number, warn
       const err = e as any;
       if (err.code !== 'P2002' || !err.meta?.target) throw e;
       const target: string[] = Array.isArray(err.meta.target) ? err.meta.target : [err.meta.target];
+      lastConflict = target.join(', ');
       const suffix = `-DUP-${rowNumber}${attempt > 1 ? `-${attempt}` : ''}`;
 
       if (target.includes('vin') && data.vin) {
@@ -268,7 +272,7 @@ async function safeUpdate(db: Tx, id: number, data: any, rowNumber: number, warn
       }
     }
   }
-  throw new Error(`No se pudo actualizar tras múltiples intentos (fila ${rowNumber})`);
+  throw new Error(`No se pudo actualizar tras múltiples intentos (fila ${rowNumber}; último conflicto en: ${lastConflict || 'desconocido'})`);
 }
 
 export async function importVehiclesFromBuffer(buffer: Buffer): Promise<ImportResult> {
@@ -405,15 +409,36 @@ export async function importVehiclesFromBuffer(buffer: Buffer): Promise<ImportRe
         ...(vehicleTypeId ? { vehicleTypeId } : {}),
       };
 
-      // Upsert por economicNumber primero (más confiable que la placa, que cambia).
+      // Upsert IDEMPOTENTE: busca un vehículo existente por cualquiera de las claves
+      // únicas que vamos a escribir, en orden de confiabilidad. `data.economicNumber`
+      // y `data.plate` incluyen el placeholder por posición (`SIN ECO/PLACA FILA-N`)
+      // cuando la fila no los trae, de modo que re-subir el MISMO archivo actualiza
+      // la fila en lugar de recrearla. Antes solo se buscaba por economicNumber REAL,
+      // así que toda fila sin económico se recreaba en cada importación → duplicados
+      // y choques P2002 que agotaban los reintentos -DUP- ("No se pudo crear...").
       // La LECTURA y la resolución del tipo de respaldo van FUERA de la tx
       // (la caché de tipos es compartida entre filas, no debe revertirse).
-      const existing = economicNumber
-        ? await prisma.vehicle.findUnique({ where: { economicNumber } })
+      let existing = data.economicNumber
+        ? await prisma.vehicle.findUnique({ where: { economicNumber: data.economicNumber } })
         : null;
+      if (!existing && data.expedientNumber)
+        existing = await prisma.vehicle.findUnique({ where: { expedientNumber: data.expedientNumber } });
+      if (!existing && data.plate)
+        existing = await prisma.vehicle.findUnique({ where: { plate: data.plate } });
+      if (!existing && data.vin)
+        existing = await prisma.vehicle.findUnique({ where: { vin: data.vin } });
 
       if (existing) {
         if (!vehicleTypeId) delete data.vehicleTypeId;
+        // No pisar un identificador REAL existente con un placeholder por posición:
+        // si la fila no traía económico/placa (se generó `SIN ECO/PLACA FILA-N`) y
+        // el vehículo encontrado —p. ej. por placa/VIN— ya tiene uno real, se conserva.
+        if (data.economicNumber?.startsWith('SIN ECO FILA-') && !existing.economicNumber.startsWith('SIN ECO FILA-')) {
+          delete data.economicNumber;
+        }
+        if (data.plate?.startsWith('SIN PLACA FILA-') && !existing.plate.startsWith('SIN PLACA FILA-')) {
+          delete data.plate;
+        }
       } else if (!vehicleTypeId) {
         const fallback = typeByName.get('sin clasificar')
           || (await prisma.vehicleType.create({ data: { name: 'Sin clasificar', expectedKmPerLiter: 8.0 } })).id;
