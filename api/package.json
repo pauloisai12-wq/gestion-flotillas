@@ -6,7 +6,8 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
-    "bootstrap:admin": "node dist/scripts/bootstrap-admin.js"
+    "bootstrap:admin": "node dist/scripts/bootstrap-admin.js",
+    "user:create": "node dist/scripts/create-user.js"
   },
   "prisma": {
     "seed": "npx tsx prisma/seed.ts"
