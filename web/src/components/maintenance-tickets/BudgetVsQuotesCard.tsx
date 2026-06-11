@@ -21,6 +21,7 @@
 
 import { Check, X, FileText, AlertTriangle, Loader2, MinusCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { formatDate, formatNumber } from '@/lib/formatters';
 import type { BudgetContext } from '@/hooks/useMaintenanceTickets';
 
 interface Props {
@@ -30,7 +31,7 @@ interface Props {
 }
 
 function fmtCurrency(n: number): string {
-  return n.toLocaleString('es-MX', { style: 'currency', currency: 'MXN' });
+  return formatNumber(n, { style: 'currency', currency: 'MXN' });
 }
 
 export function BudgetVsQuotesCard({ context, selectedQuoteId, onSelect }: Props) {
@@ -52,7 +53,7 @@ export function BudgetVsQuotesCard({ context, selectedQuoteId, onSelect }: Props
             <div className="font-semibold mt-0.5">
               {context.ticket.vehicle.economicNumber} ·{' '}
               <span className="text-muted-foreground font-normal text-sm">
-                {new Date().toLocaleDateString('es-MX', { month: 'long', year: 'numeric' })}
+                {formatDate(new Date(), { month: 'long', year: 'numeric' })}
               </span>
             </div>
           </div>

@@ -2,6 +2,8 @@
 
 import { useState } from 'react';
 import { useCurrentBudget, useCreateBudget, useDistributeEvenly } from '@/hooks/useBudgets';
+import { toast } from '@/components/ui/toast';
+import { formatCurrency } from '@/lib/formatters';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
@@ -35,7 +37,7 @@ export default function BudgetPage() {
     e.preventDefault();
     const amount = parseFloat(newAmount);
     if (isNaN(amount) || amount <= 0) {
-      alert('Ingrese un monto valido');
+      toast.error('Ingrese un monto valido');
       return;
     }
     try {
@@ -48,18 +50,18 @@ export default function BudgetPage() {
       setShowCreateForm(false);
     } catch (error: unknown) {
       const err = error as { response?: { data?: { error?: string } } };
-      alert(err.response?.data?.error || 'Error al crear presupuesto');
+      toast.error(err.response?.data?.error || 'Error al crear presupuesto');
     }
   }
 
   async function handleDistributeEvenly() {
     if (!budget) return;
-    if (!confirm('Esto distribuira $' + budget.globalAmount.toLocaleString() + ' equitativamente entre todos los vehiculos activos. Continuar?')) return;
+    if (!confirm('Esto distribuira ' + formatCurrency(budget.globalAmount) + ' equitativamente entre todos los vehiculos activos. Continuar?')) return;
     try {
       await distributeEvenly.mutateAsync(budget.id);
     } catch (error: unknown) {
       const err = error as { response?: { data?: { error?: string } } };
-      alert(err.response?.data?.error || 'Error al distribuir');
+      toast.error(err.response?.data?.error || 'Error al distribuir');
     }
   }
 
@@ -132,13 +134,13 @@ export default function BudgetPage() {
             {/* Presupuesto global */}
             <div className="rounded-md border p-4">
               <p className="text-sm text-muted-foreground">Presupuesto global</p>
-              <p className="text-2xl font-bold">${budget.globalAmount.toLocaleString()}</p>
+              <p className="text-2xl font-bold">{formatCurrency(budget.globalAmount)}</p>
             </div>
 
             {/* Gasto acumulado */}
             <div className="rounded-md border p-4">
               <p className="text-sm text-muted-foreground">Gasto acumulado</p>
-              <p className="text-2xl font-bold">${budget.spentAmount.toLocaleString()}</p>
+              <p className="text-2xl font-bold">{formatCurrency(budget.spentAmount)}</p>
               <div className="mt-2 w-full bg-gray-200 rounded-full h-3">
                 <div
                   className={
@@ -209,14 +211,14 @@ export default function BudgetPage() {
                         <TableCell>{vb.vehicle.plate}</TableCell>
                         <TableCell>{vb.vehicle.vehicleType.name}</TableCell>
                         <TableCell className="text-right">
-                          ${vb.assignedAmount.toLocaleString()}
+                          {formatCurrency(vb.assignedAmount)}
                         </TableCell>
                         <TableCell className="text-right">
-                          ${vb.spentAmount.toLocaleString()}
+                          {formatCurrency(vb.spentAmount)}
                         </TableCell>
                         <TableCell className="text-right">
                           <span className={remaining <= 0 ? 'text-destructive font-bold' : ''}>
-                            ${remaining.toLocaleString()}
+                            {formatCurrency(remaining)}
                           </span>
                         </TableCell>
                         <TableCell>

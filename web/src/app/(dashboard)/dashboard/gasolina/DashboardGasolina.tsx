@@ -9,6 +9,7 @@
 import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import api from '@/lib/api';
+import { formatCurrency, formatNumber } from '@/lib/formatters';
 import { useDashboardSummaryFiltered, useFuelTrend } from '@/hooks/useDashboardAnalytics';
 import { DashboardGreeting } from '@/components/dashboard/DashboardGreeting';
 import { KpiCard } from '@/components/ui/kpi-card';
@@ -95,17 +96,17 @@ export default function DashboardGasolina() {
             <>
               <KpiCard
                 label="Gasto del mes"
-                value={'$' + Math.round((summary.spentThisMonth || summary.monthlySpent || 0) / 1000).toLocaleString('es-MX')}
+                value={formatCurrency(Math.round((summary.spentThisMonth || summary.monthlySpent || 0) / 1000))}
                 unit="k MXN" hint={pct + '% del presupuesto'}
                 icon={Wallet} spark={sparkSpent}
               />
               <KpiCard
-                label="Litros" value={(summary.litersThisMonth || summary.monthlyLiters || 0).toLocaleString('es-MX', { maximumFractionDigits: 0 })}
+                label="Litros" value={formatNumber(summary.litersThisMonth || summary.monthlyLiters || 0, { maximumFractionDigits: 0 })}
                 unit="L" hint={`${summary.avgKmPerLiter || summary.monthlyAvgKml || 0} km/l`}
                 icon={Droplet}
               />
               <KpiCard
-                label="Cargas" value={(summary.fuelLoadsThisMonth || summary.monthlyLoads || 0).toLocaleString('es-MX')}
+                label="Cargas" value={formatNumber(summary.fuelLoadsThisMonth || summary.monthlyLoads || 0)}
                 hint="registradas" icon={Fuel}
               />
               <KpiCard
@@ -143,7 +144,7 @@ export default function DashboardGasolina() {
                     />
                   </div>
                   <p className="text-xs text-muted-foreground mt-1.5">
-                    Rollover aplicado: ${budgetStats.rollover.toLocaleString('es-MX')}
+                    Rollover aplicado: {formatCurrency(budgetStats.rollover)}
                   </p>
                 </div>
                 <div className="grid grid-cols-3 gap-2 pt-3 border-t border-border/50">
@@ -203,11 +204,11 @@ export default function DashboardGasolina() {
                       <TableCell className="font-mono">#{l.id}</TableCell>
                       <TableCell className="font-mono font-medium">{l.vehicle?.economicNumber}</TableCell>
                       <TableCell className="text-sm">{l.operatorNameRaw || l.operator?.fullName || l.operatorEmployeeRaw}</TableCell>
-                      <TableCell className="font-mono tabular-nums">${Number(l.amount).toLocaleString('es-MX')}</TableCell>
+                      <TableCell className="font-mono tabular-nums">{formatCurrency(l.amount)}</TableCell>
                       <TableCell className="font-mono tabular-nums">
                         {l.odometerStatus === 'NF'
                           ? <Badge variant="inactive">NF</Badge>
-                          : (l.odometer?.toLocaleString('es-MX') ?? '—') + ' km'}
+                          : formatNumber(l.odometer) + ' km'}
                       </TableCell>
                     </TableRow>
                   ))}

@@ -1,6 +1,4 @@
-// Archivo: web/src/components/ui/data-table.tsx
-// Propósito: Componente genérico de tabla con sorting, búsqueda y paginación servidor
-// NUEVO archivo
+// Componente genérico de tabla con sorting, búsqueda y paginación servidor
 
 'use client';
 

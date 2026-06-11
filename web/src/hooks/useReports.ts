@@ -1,8 +1,8 @@
-// Archivo: /flotillas/web/src/hooks/useReports.ts
-// ARCHIVO NUEVO — Hooks para reportes
+// Hooks para reportes
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import api from '@/lib/api';
+import { toast } from '@/components/ui/toast';
 
 // Tipos
 interface Report {
@@ -84,6 +84,6 @@ export async function downloadReport(reportId: number, type: 'pdf' | 'excel') {
   } catch {
     // El interceptor de api.ts ya redirige a /login en 401; para otros errores
     // avisamos en vez de bajar un archivo corrupto.
-    alert('No se pudo descargar el reporte. Intenta de nuevo.');
+    toast.error('No se pudo descargar el reporte. Intenta de nuevo.');
   }
 }

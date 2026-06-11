@@ -8,6 +8,8 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import DocumentFormDialog from '@/components/documents/DocumentFormDialog';
 import { VehicleNotesSection } from '@/components/vehicles/VehicleNotesSection';
+import { toast } from '@/components/ui/toast';
+import { formatDate, formatNumber } from '@/lib/formatters';
 
 function getDocTrafficLight(expiresAt: string) {
   const now = new Date();
@@ -47,7 +49,7 @@ export default function VehicleDetailPage({ params }: { params: Promise<{ id: st
       await deleteMutation.mutateAsync(doc.id);
     } catch (err: unknown) {
       const e = err as { response?: { data?: { error?: string } } };
-      alert(e.response?.data?.error || 'Error al eliminar');
+      toast.error(e.response?.data?.error || 'Error al eliminar');
     }
   }
 
@@ -122,7 +124,7 @@ export default function VehicleDetailPage({ params }: { params: Promise<{ id: st
           </div>
           <div>
             <span className="text-muted-foreground">Odometro</span>
-            <p className="font-medium">{vehicle.currentOdometer?.toLocaleString()} km</p>
+            <p className="font-medium">{formatNumber(vehicle.currentOdometer)} km</p>
           </div>
           <div>
             <span className="text-muted-foreground">VIN</span>
@@ -155,7 +157,7 @@ export default function VehicleDetailPage({ params }: { params: Promise<{ id: st
                   <div className="flex-1">
                     <p className="font-medium">{doc.typeLabel}</p>
                     <p className="text-xs text-muted-foreground">
-                      Vence: {new Date(doc.expiresAt).toLocaleDateString('es-MX')}
+                      Vence: {formatDate(doc.expiresAt)}
                     </p>
                     {doc.fileName && (
                       <a 
@@ -204,7 +206,7 @@ export default function VehicleDetailPage({ params }: { params: Promise<{ id: st
                   <p className="text-xs text-muted-foreground">Licencia: {a.operator?.licenseNumber}</p>
                 </div>
                 <div className="text-right text-xs text-muted-foreground">
-                  <p>{new Date(a.startDate).toLocaleDateString('es-MX')}</p>
+                  <p>{formatDate(a.startDate)}</p>
                   <p>{a.endDate ? 'Finalizada' : 'Vigente'}</p>
                 </div>
               </div>

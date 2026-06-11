@@ -10,6 +10,7 @@ import { SkeletonTable } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/ui/empty-state';
 import { PageHeader } from '@/components/ui/page-header';
 import WorkshopFormDialog from '@/components/workshops/WorkshopFormDialog';
+import { toast } from '@/components/ui/toast';
 import { Building2, Plus } from 'lucide-react';
 
 export default function WorkshopsPage() {
@@ -23,7 +24,7 @@ export default function WorkshopsPage() {
     try { await deleteMut.mutateAsync(w.id); }
     catch (e) {
       const err = e as { response?: { data?: { error?: string } } };
-      alert(err.response?.data?.error || 'Error');
+      toast.error(err.response?.data?.error || 'Error');
     }
   }
 

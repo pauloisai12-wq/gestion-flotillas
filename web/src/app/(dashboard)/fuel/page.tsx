@@ -7,13 +7,14 @@ import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import DataTable from '@/components/ui/data-table';
 import FuelLoadFormDialog from '@/components/Fuel/FuelLoadFormDialog';
+import { formatCurrency, formatDate, formatNumber } from '@/lib/formatters';
 import { type ColumnDef } from '@tanstack/react-table';
 
 const columns: ColumnDef<FuelLoad, unknown>[] = [
   {
     accessorKey: 'loadDate',
     header: 'Fecha',
-    cell: ({ row }) => new Date(row.original.loadDate).toLocaleDateString('es-MX'),
+    cell: ({ row }) => formatDate(row.original.loadDate),
   },
   {
     id: 'vehicle',
@@ -43,7 +44,7 @@ const columns: ColumnDef<FuelLoad, unknown>[] = [
     header: 'Monto',
     cell: ({ row }) => (
       <span className="text-right block font-mono tabular-nums">
-        {'$' + Number(row.original.amount).toLocaleString('es-MX', { minimumFractionDigits: 2 })}
+        {formatCurrency(row.original.amount, { minimumFractionDigits: 2 })}
       </span>
     ),
   },
@@ -52,7 +53,7 @@ const columns: ColumnDef<FuelLoad, unknown>[] = [
     header: 'Odómetro',
     cell: ({ row }) => (
       <span className="text-right block font-mono tabular-nums">
-        {row.original.odometerStatus === 'NF' ? 'NF' : (row.original.odometer?.toLocaleString() ?? '—') + ' km'}
+        {row.original.odometerStatus === 'NF' ? 'NF' : formatNumber(row.original.odometer) + ' km'}
       </span>
     ),
   },

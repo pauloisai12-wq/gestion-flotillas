@@ -1,6 +1,4 @@
-// Archivo: web/src/lib/exportCsv.ts
-// Propósito: Utilidad para exportar datos de tablas a archivo CSV
-// NUEVO archivo
+// Utilidad para exportar datos de tablas a archivo CSV
 
 interface CsvColumn<T = unknown> {
   header: string;

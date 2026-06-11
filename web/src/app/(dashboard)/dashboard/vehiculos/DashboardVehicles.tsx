@@ -20,6 +20,7 @@ import DocsStatusChart from '@/components/charts/DocsStatusChart';
 import { Truck, ShieldAlert, FileText, CheckCircle2, Search } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import Link from 'next/link';
+import { formatNumber } from '@/lib/formatters';
 
 const classificationLabel: Record<string, string> = {
   POLICIAL: 'Policial', ESTATAL: 'Estatal', VIAL: 'Vial',
@@ -62,17 +63,17 @@ export default function DashboardVehicles() {
           ) : (
             <>
               <KpiCard
-                label="Total unidades" value={summary.totalVehicles.toLocaleString('es-MX')}
+                label="Total unidades" value={formatNumber(summary.totalVehicles)}
                 hint="registradas" icon={Truck} href="/vehicles"
               />
               <KpiCard
                 label="Operativas"
-                value={summary.operativeVehicles.toLocaleString('es-MX')}
+                value={formatNumber(summary.operativeVehicles)}
                 unit={`${Math.round((summary.operativeVehicles / summary.totalVehicles) * 100)}%`}
                 hint="de la flota" icon={CheckCircle2}
               />
               <KpiCard
-                label="Bloqueadas" value={summary.blockedVehicles.toLocaleString('es-MX')}
+                label="Bloqueadas" value={formatNumber(summary.blockedVehicles)}
                 hint={summary.blockedVehicles > 0 ? 'Requieren atención' : 'Ninguna'}
                 icon={ShieldAlert}
                 delta={summary.blockedVehicles > 0 ? { value: String(summary.blockedVehicles), trend: 'up', meaning: 'bad' } : undefined}
@@ -80,7 +81,7 @@ export default function DashboardVehicles() {
               />
               <KpiCard
                 label="Docs. con alerta"
-                value={(summary.docsExpired + summary.docsExpiring).toLocaleString('es-MX')}
+                value={formatNumber(summary.docsExpired + summary.docsExpiring)}
                 hint={`${summary.docsExpired} venc. · ${summary.docsExpiring} próx.`}
                 icon={FileText}
                 delta={summary.docsExpired > 0 ? { value: String(summary.docsExpired), trend: 'up', meaning: 'bad' } : undefined}
@@ -209,7 +210,7 @@ export default function DashboardVehicles() {
                         {classificationLabel[v.classification] || v.classification}
                       </TableCell>
                       <TableCell className="font-mono tabular-nums">
-                        {Number(v.currentOdometer || 0).toLocaleString('es-MX')} km
+                        {formatNumber(v.currentOdometer || 0)} km
                       </TableCell>
                       <TableCell>
                         {v.status === 'BLOCKED'

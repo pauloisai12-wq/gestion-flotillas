@@ -1,5 +1,4 @@
-// Archivo: /flotillas/web/src/hooks/useDocuments.ts
-// NUEVO: Hook para documentos vehiculares
+// Hook para documentos vehiculares
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import api from '@/lib/api';
 

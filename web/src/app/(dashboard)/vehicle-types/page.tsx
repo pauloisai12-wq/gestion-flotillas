@@ -1,5 +1,3 @@
-// Archivo: /flotillas/web/src/app/(dashboard)/vehicle-types/page.tsx
-// REEMPLAZA: Página completa de tipos de vehículo con tabla y CRUD
 'use client';
 
 import { useState } from 'react';
@@ -18,6 +16,7 @@ import {
 } from '@/components/ui/table';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { toast } from '@/components/ui/toast';
 import VehicleTypeFormDialog from '@/components/vehicle-types/VehicleTypeFormDialog';
 
 export default function VehicleTypesPage() {
@@ -45,7 +44,7 @@ export default function VehicleTypesPage() {
       await deleteMutation.mutateAsync(type.id);
     } catch (err: unknown) {
       const error = err as { response?: { data?: { error?: string } } };
-      alert(error.response?.data?.error || 'Error al eliminar');
+      toast.error(error.response?.data?.error || 'Error al eliminar');
     }
   }
 

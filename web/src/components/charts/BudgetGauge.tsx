@@ -5,6 +5,7 @@ import { useBudgetProgress, DashboardFilters } from '@/hooks/useDashboardAnalyti
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { SkeletonChart } from '@/components/ui/skeleton';
 import { tokens } from '@/lib/css-tokens';
+import { formatCurrency } from '@/lib/formatters';
 
 export default function BudgetGauge({ filters = {} }: { filters?: DashboardFilters }) {
   const { data, isLoading } = useBudgetProgress(filters);
@@ -51,7 +52,7 @@ export default function BudgetGauge({ filters = {} }: { filters?: DashboardFilte
       <CardContent>
         <EChartWrapper option={option} height="280px" />
         <p className="text-center text-xs text-muted-foreground font-mono tabular-nums">
-          ${totalSpent.toLocaleString('es-MX', { minimumFractionDigits: 2 })} de ${totalAssigned.toLocaleString('es-MX', { minimumFractionDigits: 2 })}
+          {formatCurrency(totalSpent, { minimumFractionDigits: 2 })} de {formatCurrency(totalAssigned, { minimumFractionDigits: 2 })}
         </p>
       </CardContent>
     </Card>

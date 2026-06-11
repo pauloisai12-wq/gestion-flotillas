@@ -17,6 +17,7 @@ import {
   type ExecutorStatus,
 } from '@/hooks/useMaintenanceTickets';
 import { Truck, Plus, Loader2, ChevronRight, Gauge } from 'lucide-react';
+import { formatDate, formatNumber } from '@/lib/formatters';
 
 const FILTERS: { value: 'ALL' | ExecutorStatus; label: string }[] = [
   { value: 'ALL', label: 'Todas' },
@@ -112,7 +113,7 @@ export function ExecutorTicketsView() {
                       </p>
                       <div className="text-[11px] text-muted-foreground mt-1.5">
                         📅{' '}
-                        {new Date(t.createdAt).toLocaleDateString('es-MX', {
+                        {formatDate(t.createdAt, {
                           day: '2-digit',
                           month: 'short',
                           year: 'numeric',
@@ -173,7 +174,7 @@ export function ExecutorTicketsView() {
                     </span>
                     <span className="flex items-center gap-1">
                       <Gauge className="size-3" />
-                      {v.currentOdometer.toLocaleString('es-MX')} km
+                      {formatNumber(v.currentOdometer)} km
                     </span>
                   </div>
                 </div>

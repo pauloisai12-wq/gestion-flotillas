@@ -10,6 +10,8 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import DataTable from '@/components/ui/data-table';
 import OperatorFormDialog from '@/components/operators/OperatorFormDialog';
+import { toast } from '@/components/ui/toast';
+import { formatDate } from '@/lib/formatters';
 import { type ColumnDef } from '@tanstack/react-table';
 
 function getLicenseStatus(expiresAt: string): { label: string; variant: 'default' | 'destructive' | 'secondary' } {
@@ -35,7 +37,7 @@ export default function OperatorsPage() {
       await deleteMutation.mutateAsync(op.id);
     } catch (err: unknown) {
       const error = err as { response?: { data?: { error?: string } } };
-      alert(error.response?.data?.error || 'Error al eliminar');
+      toast.error(error.response?.data?.error || 'Error al eliminar');
     }
   }
 
@@ -60,7 +62,7 @@ export default function OperatorsPage() {
         const licStatus = getLicenseStatus(row.original.licenseExpiresAt);
         return (
           <div className="flex items-center gap-2">
-            {new Date(row.original.licenseExpiresAt).toLocaleDateString('es-MX')}
+            {formatDate(row.original.licenseExpiresAt)}
             <Badge variant={licStatus.variant}>{licStatus.label}</Badge>
           </div>
         );

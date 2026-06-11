@@ -14,6 +14,7 @@ import { SkeletonKpi } from '@/components/ui/skeleton';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { AlertTriangle, Truck, ShieldAlert, FileText, Fuel, Wallet } from 'lucide-react';
+import { formatCurrency, formatNumber } from '@/lib/formatters';
 
 export default function DashboardGlobal() {
   const [filters, setFilters] = useState<DashboardFilters>({});
@@ -62,34 +63,34 @@ export default function DashboardGlobal() {
               ) : (
                 <>
                   <KpiCard
-                    label="Operativos" value={data.operativeVehicles.toLocaleString('es-MX')}
+                    label="Operativos" value={formatNumber(data.operativeVehicles)}
                     unit={`/${data.totalVehicles}`} hint="unidades" icon={Truck} href="/vehicles"
                   />
                   <KpiCard
-                    label="Bloqueados" value={data.blockedVehicles.toLocaleString('es-MX')}
+                    label="Bloqueados" value={formatNumber(data.blockedVehicles)}
                     hint={data.blockedVehicles > 0 ? 'Requieren atención' : 'Todo en orden'} icon={ShieldAlert}
                     delta={data.blockedVehicles > 0 ? { value: '+' + data.blockedVehicles, trend: 'up', meaning: 'bad' } : undefined}
                     href="/vehicles?filter=blocked"
                   />
                   <KpiCard
-                    label="Docs. por vencer" value={data.docsExpiring.toLocaleString('es-MX')}
+                    label="Docs. por vencer" value={formatNumber(data.docsExpiring)}
                     hint="< 30 días" icon={FileText} href="/vehicles?filter=expiring"
                   />
                   <KpiCard
-                    label="Docs. vencidos" value={data.docsExpired.toLocaleString('es-MX')}
+                    label="Docs. vencidos" value={formatNumber(data.docsExpired)}
                     hint={data.docsExpired > 0 ? 'Acción inmediata' : 'Ninguno'} icon={AlertTriangle}
                     delta={data.docsExpired > 0 ? { value: '+' + data.docsExpired, trend: 'up', meaning: 'bad' } : undefined}
                     href="/vehicles?filter=expired"
                   />
                   <KpiCard
                     label="Cargas del mes"
-                    value={(data.fuelLoadsThisMonth || data.monthlyLoads || 0).toLocaleString('es-MX')}
-                    unit={(data.litersThisMonth || data.monthlyLiters || 0).toLocaleString('es-MX', { maximumFractionDigits: 0 }) + ' L'}
+                    value={formatNumber(data.fuelLoadsThisMonth || data.monthlyLoads || 0)}
+                    unit={formatNumber(data.litersThisMonth || data.monthlyLiters || 0, { maximumFractionDigits: 0 }) + ' L'}
                     icon={Fuel} spark={sparkLoads.length > 1 ? sparkLoads : undefined} href="/fuel"
                   />
                   <KpiCard
                     label="Gasto del mes"
-                    value={'$' + Math.round((data.spentThisMonth || data.monthlySpent || 0) / 1000).toLocaleString('es-MX')}
+                    value={formatCurrency(Math.round((data.spentThisMonth || data.monthlySpent || 0) / 1000))}
                     unit="k MXN"
                     hint={(data.avgKmPerLiter || data.monthlyAvgKml || 0) + ' km/l promedio'}
                     icon={Wallet} spark={sparkSpent}

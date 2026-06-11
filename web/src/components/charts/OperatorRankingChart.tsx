@@ -7,6 +7,7 @@ import { SkeletonChart } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/ui/empty-state';
 import { User } from 'lucide-react';
 import { tokens } from '@/lib/css-tokens';
+import { formatCurrency } from '@/lib/formatters';
 
 interface OperatorItem {
   operatorName: string;
@@ -44,7 +45,7 @@ export default function OperatorRankingChart({ filters = {} }: { filters?: Dashb
         return '<b>' + item.operatorName + '</b><br/>'
           + 'Rendimiento: ' + item.avgKml + ' km/l<br/>'
           + 'Cargas: ' + item.loadCount + '<br/>'
-          + 'Gasto: $' + Number(item.totalSpent).toLocaleString('es-MX', { minimumFractionDigits: 2 });
+          + 'Gasto: ' + formatCurrency(item.totalSpent, { minimumFractionDigits: 2 });
       },
     },
     grid: { top: 10, right: 30, bottom: 30, left: 120 },

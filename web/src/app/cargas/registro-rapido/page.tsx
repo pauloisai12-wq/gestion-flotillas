@@ -1,12 +1,13 @@
 'use client';
 
-import { useState, useEffect, useMemo, FormEvent } from 'react';
+import { useState, useEffect, useMemo, useCallback, FormEvent } from 'react';
 import axios from 'axios';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { AlertTriangle, CheckCircle2, Fuel, Search, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { formatCurrency } from '@/lib/formatters';
 import TurnstileWidget from '@/components/TurnstileWidget';
 
 const API = process.env.NEXT_PUBLIC_API_URL || '';
@@ -27,6 +28,7 @@ type VerifyResponse = {
 export default function RegistroRapidoPage() {
   const [csrfToken, setCsrfToken] = useState<string>('');
   const [stations, setStations] = useState<Station[]>([]);
+  const [loadError, setLoadError] = useState('');
 
   // Form state
   const [employeeNumber, setEmployeeNumber] = useState('');
@@ -51,11 +53,25 @@ export default function RegistroRapidoPage() {
   const [turnstileKey, setTurnstileKey] = useState(0);
   const turnstileRequired = TURNSTILE_ENABLED && !!TURNSTILE_SITE_KEY;
 
-  // Carga inicial: CSRF token + gasolineras
-  useEffect(() => {
-    axios.get(`${API}/api/public/session-token`).then((r) => setCsrfToken(r.data.csrfToken));
-    axios.get(`${API}/api/public/stations`).then((r) => setStations(r.data.data));
+  // Carga inicial: CSRF token + gasolineras. Sin .catch sería un fallo
+  // silencioso: el form quedaría sin token/estaciones y el submit moriría.
+  const loadInitialData = useCallback(async () => {
+    setLoadError('');
+    try {
+      const [tokenRes, stationsRes] = await Promise.all([
+        axios.get(`${API}/api/public/session-token`),
+        axios.get(`${API}/api/public/stations`),
+      ]);
+      setCsrfToken(tokenRes.data.csrfToken);
+      setStations(stationsRes.data.data);
+    } catch {
+      setLoadError('No se pudo cargar el formulario. Revisa tu conexión y reintenta.');
+    }
   }, []);
+
+  useEffect(() => {
+    loadInitialData();
+  }, [loadInitialData]);
 
   async function handleVerify() {
     if (!employeeNumber.trim() || !economicNumber.trim()) return;
@@ -137,7 +153,7 @@ export default function RegistroRapidoPage() {
           {success.available != null && (
             <div className="mt-5 rounded-md bg-muted/40 px-4 py-3 text-left">
               <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Presupuesto restante</p>
-              <p className="font-mono text-lg font-semibold tabular-nums">${success.available.toLocaleString('es-MX')}</p>
+              <p className="font-mono text-lg font-semibold tabular-nums">{formatCurrency(success.available)}</p>
             </div>
           )}
           <Button
@@ -147,7 +163,9 @@ export default function RegistroRapidoPage() {
               setAmount(''); setLiters(''); setOdometer(''); setOdometerNF(false);
               setStationId('');
               setTurnstileToken(''); setTurnstileKey((k) => k + 1);
-              axios.get(`${API}/api/public/session-token`).then((r) => setCsrfToken(r.data.csrfToken));
+              // El token CSRF es de un solo uso: renovarlo; si falla, el
+              // banner de carga lo informa en el formulario.
+              loadInitialData();
             }}
           >
             Registrar otra carga
@@ -171,6 +189,16 @@ export default function RegistroRapidoPage() {
       </header>
 
       <main className="mx-auto max-w-xl px-4 py-8 space-y-5">
+        {loadError && (
+          <div className="flex items-start gap-2 rounded-md bg-destructive/10 border border-destructive/20 text-destructive px-3 py-2.5 text-sm">
+            <AlertTriangle className="size-4 mt-0.5 shrink-0" />
+            <span className="flex-1">{loadError}</span>
+            <button type="button" onClick={loadInitialData} className="font-medium underline underline-offset-2">
+              Reintentar
+            </button>
+          </div>
+        )}
+
         {/* PASO 1 — identificación */}
         <Card className="p-5">
           <h2 className="text-sm font-semibold tracking-tight mb-1">1. Identifícate</h2>
@@ -245,14 +273,14 @@ export default function RegistroRapidoPage() {
                 )}>
                   <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Presupuesto disponible</div>
                   <div className="font-mono text-xl font-semibold tabular-nums">
-                    ${(verifyData.budget.available ?? 0).toLocaleString('es-MX')}
+                    {formatCurrency(verifyData.budget.available ?? 0)}
                   </div>
                   <div className="text-xs text-muted-foreground mt-1 space-y-0.5">
-                    <div>Base: ${verifyData.budget.base.toLocaleString('es-MX')}</div>
+                    <div>Base: {formatCurrency(verifyData.budget.base)}</div>
                     {verifyData.budget.rollover > 0 && (
-                      <div>Remanente del mes anterior: ${verifyData.budget.rollover.toLocaleString('es-MX')}</div>
+                      <div>Remanente del mes anterior: {formatCurrency(verifyData.budget.rollover)}</div>
                     )}
-                    <div>Gastado: ${verifyData.budget.spent.toLocaleString('es-MX')}</div>
+                    <div>Gastado: {formatCurrency(verifyData.budget.spent)}</div>
                   </div>
                 </div>
               )}
@@ -311,7 +339,7 @@ export default function RegistroRapidoPage() {
                 {exceeds && (
                   <div className="mt-1.5 flex items-center gap-1.5 text-xs text-destructive">
                     <AlertTriangle className="size-3" />
-                    Excede presupuesto disponible (${(available ?? 0).toLocaleString('es-MX')})
+                    Excede presupuesto disponible ({formatCurrency(available ?? 0)})
                   </div>
                 )}
               </div>

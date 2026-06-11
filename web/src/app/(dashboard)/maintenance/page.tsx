@@ -19,6 +19,8 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { toast } from '@/components/ui/toast';
+import { formatCurrency, formatDate, formatNumber } from '@/lib/formatters';
 
 type TabType = 'pending' | 'history' | 'catalog';
 
@@ -129,12 +131,12 @@ function PendingTab() {
                     <span className="text-xs text-muted-foreground ml-1">({s.plate})</span>
                   </TableCell>
                   <TableCell>{s.serviceName}</TableCell>
-                  <TableCell className="text-right">{s.intervalKm.toLocaleString()} km</TableCell>
-                  <TableCell className="text-right">{s.nextServiceKm.toLocaleString()} km</TableCell>
-                  <TableCell className="text-right">{s.currentOdometer.toLocaleString()} km</TableCell>
+                  <TableCell className="text-right">{formatNumber(s.intervalKm)} km</TableCell>
+                  <TableCell className="text-right">{formatNumber(s.nextServiceKm)} km</TableCell>
+                  <TableCell className="text-right">{formatNumber(s.currentOdometer)} km</TableCell>
                   <TableCell className="text-right">
                     <span className={s.remainingKm <= 0 ? 'text-destructive font-bold' : ''}>
-                      {s.remainingKm.toLocaleString()} km
+                      {formatNumber(s.remainingKm)} km
                     </span>
                   </TableCell>
                   <TableCell>
@@ -170,6 +172,39 @@ function PendingTab() {
   );
 }
 
+// Acepta solo rutas relativas que empiecen por '/' (no '//') o URLs absolutas
+// http(s). Cualquier otro esquema (javascript:, data:, etc.) devuelve null.
+function safeHref(url: string): string | null {
+  if (url.startsWith('/')) {
+    return url.startsWith('//') ? null : url;
+  }
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? url : null;
+  } catch {
+    return null;
+  }
+}
+
+function EvidenceLink({ url }: { url?: string | null }) {
+  const href = url ? safeHref(`${process.env.NEXT_PUBLIC_API_URL || ''}${url}`) : null;
+
+  if (!href) {
+    return <span className="text-muted-foreground text-sm">-</span>;
+  }
+
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="text-primary hover:underline text-sm font-medium"
+    >
+      Ver archivo
+    </a>
+  );
+}
+
 function HistoryTab({ page, setPage }: { page: number; setPage: (p: number) => void }) {
   const { data, isLoading } = useMaintenanceRecords({ page });
 
@@ -202,28 +237,17 @@ function HistoryTab({ page, setPage }: { page: number; setPage: (p: number) => v
               <TableBody>
                 {records.map((r) => (
                   <TableRow key={r.id}>
-                    <TableCell>{new Date(r.serviceDate).toLocaleDateString('es-MX')}</TableCell>
+                    <TableCell>{formatDate(r.serviceDate)}</TableCell>
                     <TableCell className="font-medium">{r.vehicle.economicNumber}</TableCell>
                     <TableCell>{r.service.serviceName}</TableCell>
-                    <TableCell className="text-right">{r.odometer.toLocaleString()} km</TableCell>
-                    <TableCell className="text-right">${r.cost.toLocaleString()}</TableCell>
+                    <TableCell className="text-right">{formatNumber(r.odometer)} km</TableCell>
+                    <TableCell className="text-right">{formatCurrency(r.cost)}</TableCell>
                     <TableCell>
                       <div className="text-sm">{r.provider}</div>
                       <div className="text-xs text-muted-foreground">{r.workshop}</div>
                     </TableCell>
                     <TableCell>
-                      {r.evidenceUrl ? (
-                        <a 
-                          href={`${process.env.NEXT_PUBLIC_API_URL || ''}${r.evidenceUrl}`}
-                          target="_blank" 
-                          rel="noopener noreferrer"
-                          className="text-primary hover:underline text-sm font-medium"
-                        >
-                          Ver archivo
-                        </a>
-                      ) : (
-                        <span className="text-muted-foreground text-sm">-</span>
-                      )}
+                      <EvidenceLink url={r.evidenceUrl} />
                     </TableCell>
                   </TableRow>
                 ))}
@@ -295,7 +319,7 @@ function CatalogTab() {
               {items.map((s) => (
                 <TableRow key={s.id}>
                   <TableCell className="font-medium">{s.serviceName}</TableCell>
-                  <TableCell className="text-right">{s.intervalKm.toLocaleString()} km</TableCell>
+                  <TableCell className="text-right">{formatNumber(s.intervalKm)} km</TableCell>
                   <TableCell className="text-muted-foreground">{s.description || '-'}</TableCell>
                 </TableRow>
               ))}
@@ -337,7 +361,7 @@ function MaintenanceForm({ onClose }: { onClose: () => void }) {
       onClose();
     } catch (error: unknown) {
       const err = error as { response?: { data?: { error?: string } } };
-      alert(err.response?.data?.error || 'Error al registrar mantenimiento');
+      toast.error(err.response?.data?.error || 'Error al registrar mantenimiento');
     }
   }
 
@@ -379,7 +403,7 @@ function MaintenanceForm({ onClose }: { onClose: () => void }) {
             </option>
             {(services || []).map((s) => (
               <option key={s.id} value={s.id}>
-                {s.serviceName} (cada {s.intervalKm.toLocaleString()} km)
+                {s.serviceName} (cada {formatNumber(s.intervalKm)} km)
               </option>
             ))}
           </select>

@@ -4,6 +4,7 @@
 'use client';
 
 import { useDashboardSummary } from '@/hooks/useDashboard';
+import { formatNumber } from '@/lib/formatters';
 import { cn } from '@/lib/utils';
 
 interface PillProps {
@@ -35,7 +36,7 @@ function Pill({ count, label, color, pulse }: PillProps) {
     <div className="flex items-center gap-1.5">
       <span className={cn('size-1.5 rounded-full', c.dot, pulse && count > 0 && 'animate-pulse')} />
       <span className={cn('text-xs font-mono tabular-nums font-medium', count > 0 ? c.text : 'text-muted-foreground')}>
-        {count.toLocaleString('es-MX')}
+        {formatNumber(count)}
       </span>
       <span className="text-xs text-muted-foreground hidden md:inline">{label}</span>
     </div>

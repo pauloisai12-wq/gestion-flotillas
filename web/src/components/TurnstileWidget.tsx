@@ -19,24 +19,29 @@ declare global {
 
 const SCRIPT_SRC = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
 
+// Promesa singleton: todos los montajes comparten la misma carga del script,
+// sin acumular listeners sobre el <script> en remontajes rápidos.
+let scriptPromise: Promise<void> | null = null;
+
 function loadTurnstileScript(): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (typeof window === 'undefined') return resolve();
-    if (window.turnstile) return resolve();
-    const existing = document.querySelector<HTMLScriptElement>(`script[src="${SCRIPT_SRC}"]`);
-    if (existing) {
-      existing.addEventListener('load', () => resolve());
-      existing.addEventListener('error', () => reject(new Error('No se pudo cargar Turnstile')));
-      return;
-    }
-    const s = document.createElement('script');
-    s.src = SCRIPT_SRC;
-    s.async = true;
-    s.defer = true;
-    s.onload = () => resolve();
-    s.onerror = () => reject(new Error('No se pudo cargar Turnstile'));
-    document.head.appendChild(s);
-  });
+  if (typeof window === 'undefined' || window.turnstile) return Promise.resolve();
+  if (!scriptPromise) {
+    scriptPromise = new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = SCRIPT_SRC;
+      s.async = true;
+      s.defer = true;
+      s.onload = () => resolve();
+      s.onerror = () => {
+        // Deja reintentar en el siguiente montaje si la carga falló.
+        scriptPromise = null;
+        s.remove();
+        reject(new Error('No se pudo cargar Turnstile'));
+      };
+      document.head.appendChild(s);
+    });
+  }
+  return scriptPromise;
 }
 
 export default function TurnstileWidget({

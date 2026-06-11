@@ -17,6 +17,8 @@ import { KpiCard } from '@/components/ui/kpi-card';
 import { Wallet, TrendingUp, Search, Save, X, Zap } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { useVehicles } from '@/hooks/useVehicles';
+import { toast } from '@/components/ui/toast';
+import { formatCurrency, formatDate } from '@/lib/formatters';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Budget = any;
@@ -204,11 +206,11 @@ export function BudgetTable({ kind, title, description, icon: Icon }: BudgetTabl
       setEditingId(null);
       setEditValue('');
     } catch (e) {
-      alert('Error: ' + (e as Error).message);
+      toast.error('Error: ' + (e as Error).message);
     }
   }
 
-  const monthName = new Date(year, month - 1).toLocaleDateString('es-MX', { month: 'long', year: 'numeric' });
+  const monthName = formatDate(new Date(year, month - 1), { month: 'long', year: 'numeric' });
   const pct = stats && (stats.base + stats.rollover) > 0
     ? Math.round((stats.spent / (stats.base + stats.rollover)) * 100)
     : 0;
@@ -237,7 +239,7 @@ export function BudgetTable({ kind, title, description, icon: Icon }: BudgetTabl
                   </div>
                   <div className="flex items-baseline gap-2 mt-1">
                     <span className="font-mono text-3xl font-semibold tabular-nums text-foreground">
-                      ${pool.totalPool.toLocaleString('es-MX')}
+                      {formatCurrency(pool.totalPool)}
                     </span>
                     <span className="text-sm text-muted-foreground">pote total</span>
                   </div>
@@ -256,14 +258,14 @@ export function BudgetTable({ kind, title, description, icon: Icon }: BudgetTabl
                   <div
                     className="bg-primary transition-all"
                     style={{ width: `${pool.pctAssigned}%` }}
-                    title={`Asignado: $${pool.assigned.toLocaleString('es-MX')}`}
+                    title={`Asignado: ${formatCurrency(pool.assigned)}`}
                   />
                 </div>
                 <div className="grid grid-cols-3 gap-3 pt-2">
                   <div>
                     <div className="text-[10px] uppercase tracking-wider text-muted-foreground">Asignado</div>
                     <div className="font-mono text-sm font-semibold tabular-nums text-primary">
-                      ${pool.assigned.toLocaleString('es-MX')}
+                      {formatCurrency(pool.assigned)}
                     </div>
                     <div className="text-[10px] text-muted-foreground">
                       {pool.pctAssigned}% del pote · {pool.unitsCount} unidades
@@ -272,7 +274,7 @@ export function BudgetTable({ kind, title, description, icon: Icon }: BudgetTabl
                   <div>
                     <div className="text-[10px] uppercase tracking-wider text-muted-foreground">Sin asignar</div>
                     <div className={`font-mono text-sm font-semibold tabular-nums ${pool.unassigned > 0 ? 'text-warning' : 'text-success'}`}>
-                      ${pool.unassigned.toLocaleString('es-MX')}
+                      {formatCurrency(pool.unassigned)}
                     </div>
                     <div className="text-[10px] text-muted-foreground">
                       {pool.unassigned > 0 ? 'Pendiente de repartir' : 'Todo repartido'}
@@ -281,10 +283,10 @@ export function BudgetTable({ kind, title, description, icon: Icon }: BudgetTabl
                   <div>
                     <div className="text-[10px] uppercase tracking-wider text-muted-foreground">Gastado</div>
                     <div className="font-mono text-sm font-semibold tabular-nums text-foreground">
-                      ${pool.spent.toLocaleString('es-MX')}
+                      {formatCurrency(pool.spent)}
                     </div>
                     <div className="text-[10px] text-muted-foreground">
-                      + ${pool.rollover.toLocaleString('es-MX')} rollover
+                      + {formatCurrency(pool.rollover)} rollover
                     </div>
                   </div>
                 </div>
@@ -320,7 +322,7 @@ export function BudgetTable({ kind, title, description, icon: Icon }: BudgetTabl
         >
           {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => (
             <option key={m} value={m}>
-              {new Date(2000, m - 1).toLocaleDateString('es-MX', { month: 'long' })}
+              {formatDate(new Date(2000, m - 1), { month: 'long' })}
             </option>
           ))}
         </select>
@@ -420,17 +422,17 @@ export function BudgetTable({ kind, title, description, icon: Icon }: BudgetTabl
                             autoFocus
                           />
                         ) : (
-                          '$' + b.baseAmount.toLocaleString('es-MX')
+                          formatCurrency(b.baseAmount)
                         )}
                       </TableCell>
                       <TableCell className="text-right font-mono tabular-nums text-muted-foreground">
-                        {b.rolloverIn > 0 ? '+$' + b.rolloverIn.toLocaleString('es-MX') : '—'}
+                        {b.rolloverIn > 0 ? '+' + formatCurrency(b.rolloverIn) : '—'}
                       </TableCell>
                       <TableCell className="text-right font-mono tabular-nums">
-                        ${b.spentAmount.toLocaleString('es-MX')}
+                        {formatCurrency(b.spentAmount)}
                       </TableCell>
                       <TableCell className={`text-right font-mono tabular-nums font-semibold ${b.available < 0 ? 'text-destructive' : ''}`}>
-                        ${b.available.toLocaleString('es-MX')}
+                        {formatCurrency(b.available)}
                       </TableCell>
                       <TableCell>
                         <div className="flex items-center gap-2">
@@ -549,11 +551,11 @@ export function BudgetTable({ kind, title, description, icon: Icon }: BudgetTabl
                   <div className="mt-2 rounded-md bg-primary-subtle border border-primary/20 px-3 py-2 text-xs space-y-0.5">
                     <div className="flex justify-between font-mono tabular-nums">
                       <span className="text-muted-foreground">Por vehículo:</span>
-                      <span className="font-semibold">${perVeh.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                      <span className="font-semibold">{formatCurrency(perVeh, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                     </div>
                     <div className="flex justify-between font-mono tabular-nums">
                       <span className="text-muted-foreground">Total ({count} veh.):</span>
-                      <span className="font-semibold">${total.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                      <span className="font-semibold">{formatCurrency(total, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                     </div>
                   </div>
                 );
@@ -607,7 +609,7 @@ export function BudgetTable({ kind, title, description, icon: Icon }: BudgetTabl
               {pool?.assigned && pool.assigned > 0 && (
                 <p className="text-xs mt-1.5">
                   <span className="text-muted-foreground">Ya asignado: </span>
-                  <span className="font-mono tabular-nums font-medium">${pool.assigned.toLocaleString('es-MX')}</span>
+                  <span className="font-mono tabular-nums font-medium">{formatCurrency(pool.assigned)}</span>
                   {Number(poolAmount) < pool.assigned && Number(poolAmount) > 0 && (
                     <span className="text-destructive ml-2">⚠ El nuevo pote es menor que lo ya asignado</span>
                   )}

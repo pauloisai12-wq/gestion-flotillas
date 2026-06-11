@@ -3,10 +3,11 @@
 
 import { FileText, Download, Award, MinusCircle, Clock } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { formatDateTime, formatNumber } from '@/lib/formatters';
 import type { TicketQuote } from '@/hooks/useMaintenanceTickets';
 
 function fmtCurrency(n: number): string {
-  return n.toLocaleString('es-MX', { style: 'currency', currency: 'MXN' });
+  return formatNumber(n, { style: 'currency', currency: 'MXN' });
 }
 
 export function QuoteCard({
@@ -61,7 +62,7 @@ export function QuoteCard({
           )}
           <div className="text-[10px] text-muted-foreground mt-2">
             Enviada{' '}
-            {new Date(quote.submittedAt!).toLocaleString('es-MX', {
+            {formatDateTime(quote.submittedAt!, {
               dateStyle: 'short',
               timeStyle: 'short',
             })}

@@ -1,11 +1,9 @@
-// Archivo: /flotillas/web/src/app/layout.tsx
-// REEMPLAZA: Archivo existente completo
-
 import type { Metadata } from 'next';
 import './globals.css';
 import { QueryProvider } from '@/lib/QueryProvider';
 import { AuthProvider } from '@/contexts/AuthContext';
 import { ThemeProvider } from '@/components/theme-provider';
+import { Toaster } from '@/components/ui/toast';
 import { Inter, JetBrains_Mono } from "next/font/google";
 import { cn } from "@/lib/utils";
 
@@ -45,6 +43,7 @@ export default function RootLayout({
           <QueryProvider>
             <AuthProvider>
               {children}
+              <Toaster />
             </AuthProvider>
           </QueryProvider>
         </ThemeProvider>

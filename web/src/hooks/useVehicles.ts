@@ -1,5 +1,4 @@
-// Archivo: /flotillas/web/src/hooks/useVehicles.ts
-// NUEVO: Hook para operaciones CRUD de vehículos
+// Hook para operaciones CRUD de vehículos
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import api from '@/lib/api';
 

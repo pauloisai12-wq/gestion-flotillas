@@ -1,8 +1,7 @@
-// Archivo: /flotillas/web/src/components/documents/DocumentFormDialog.tsx
-// NUEVO: Modal para crear/editar documento vehicular con upload
 'use client';
 
 import { useRef } from 'react';
+import { toast } from '@/components/ui/toast';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog';
@@ -56,12 +55,12 @@ export default function DocumentFormDialog({ open, onClose, vehicleId, document 
     const issuedAt = fd.get('issuedAt') as string;
     const expiresAt = fd.get('expiresAt') as string;
 
-    if (!type) { alert('Seleccione un tipo de documento'); return; }
-    if (!issuedAt) { alert('La fecha de emisión es obligatoria'); return; }
-    if (!expiresAt) { alert('La fecha de vencimiento es obligatoria'); return; }
+    if (!type) { toast.error('Seleccione un tipo de documento'); return; }
+    if (!issuedAt) { toast.error('La fecha de emisión es obligatoria'); return; }
+    if (!expiresAt) { toast.error('La fecha de vencimiento es obligatoria'); return; }
 
     if (new Date(expiresAt) <= new Date(issuedAt)) {
-      alert('La fecha de vencimiento debe ser posterior a la de emisión');
+      toast.error('La fecha de vencimiento debe ser posterior a la de emisión');
       return;
     }
 
@@ -80,7 +79,7 @@ export default function DocumentFormDialog({ open, onClose, vehicleId, document 
       onClose();
     } catch (err: unknown) {
       const error = err as { response?: { data?: { error?: string } } };
-      alert(error.response?.data?.error || 'Error al guardar');
+      toast.error(error.response?.data?.error || 'Error al guardar');
     }
   }
 

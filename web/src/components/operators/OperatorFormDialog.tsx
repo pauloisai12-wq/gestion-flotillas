@@ -1,8 +1,7 @@
-// Archivo: /flotillas/web/src/components/operators/OperatorFormDialog.tsx
-// NUEVO: Modal para crear/editar operador
 'use client';
 
 import { useRef } from 'react';
+import { toast } from '@/components/ui/toast';
 import {
   Dialog,
   DialogContent,
@@ -47,7 +46,7 @@ export default function OperatorFormDialog({ open, onClose, operator }: Props) {
     };
 
     if (!input.fullName || !input.licenseNumber || !input.licenseType || !input.licenseExpiresAt) {
-      alert('Nombre, licencia, tipo y vigencia son obligatorios');
+      toast.error('Nombre, licencia, tipo y vigencia son obligatorios');
       return;
     }
 
@@ -60,7 +59,7 @@ export default function OperatorFormDialog({ open, onClose, operator }: Props) {
       onClose();
     } catch (err: unknown) {
       const error = err as { response?: { data?: { error?: string } } };
-      alert(error.response?.data?.error || 'Error al guardar');
+      toast.error(error.response?.data?.error || 'Error al guardar');
     }
   }
 

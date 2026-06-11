@@ -11,6 +11,7 @@ import {
   CATEGORY_LABELS,
   type TicketQuote,
 } from '@/hooks/useMaintenanceTickets';
+import { formatCurrency } from '@/lib/formatters';
 import { Loader2, ChevronRight, FileUp, Hourglass, Wrench, PackageCheck, Ban } from 'lucide-react';
 
 type Bucket =
@@ -54,7 +55,7 @@ const SECTIONS: SectionMeta[] = [
 
 function money(amount: TicketQuote['amount']): string | null {
   if (amount == null) return null;
-  return Number(amount).toLocaleString('es-MX', { style: 'currency', currency: 'MXN' });
+  return formatCurrency(amount, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 export function WorkshopTicketsView() {

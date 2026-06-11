@@ -7,6 +7,7 @@ import Link from 'next/link';
 import { TicketStatusBadge } from './TicketStatusBadge';
 import { CATEGORY_LABELS } from '@/hooks/useMaintenanceTickets';
 import type { MaintenanceTicket } from '@/hooks/useMaintenanceTickets';
+import { formatDate } from '@/lib/formatters';
 import { ChevronRight } from 'lucide-react';
 
 export function TicketList({ tickets }: { tickets: MaintenanceTicket[] }) {
@@ -45,7 +46,7 @@ export function TicketList({ tickets }: { tickets: MaintenanceTicket[] }) {
                 <p className="text-sm text-muted-foreground line-clamp-1 mt-1">{t.description}</p>
                 <div className="flex items-center gap-3 text-[11px] text-muted-foreground mt-1.5">
                   {t.requestedBy && <span>👤 {t.requestedBy.fullName}</span>}
-                  <span>📅 {new Date(t.createdAt).toLocaleDateString('es-MX', { day: '2-digit', month: 'short' })}</span>
+                  <span>📅 {formatDate(t.createdAt, { day: '2-digit', month: 'short' })}</span>
                   {quotes.length > 0 && (
                     <span>
                       💰 {submitted}/{quotes.length} cotizaciones

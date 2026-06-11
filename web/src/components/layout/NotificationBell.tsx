@@ -5,6 +5,7 @@ import { useUnreadCount, useNotifications, useMarkAsRead, useMarkAllAsRead } fro
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Bell } from 'lucide-react';
+import { formatDate } from '@/lib/formatters';
 
 export default function NotificationBell() {
   const [open, setOpen] = useState(false);
@@ -111,7 +112,7 @@ export default function NotificationBell() {
                         </p>
                       </div>
                       <span className="text-xs text-muted-foreground flex-shrink-0">
-                        {new Date(n.createdAt).toLocaleDateString('es-MX', {
+                        {formatDate(n.createdAt, {
                           day: 'numeric',
                           month: 'short',
                           hour: '2-digit',

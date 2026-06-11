@@ -1,5 +1,4 @@
-// Archivo: web/src/hooks/useDashboardAnalytics.ts
-// Propósito: Hooks con soporte de filtros globales del dashboard
+// Hooks con soporte de filtros globales del dashboard
 
 import { useQuery } from '@tanstack/react-query';
 import api from '@/lib/api';

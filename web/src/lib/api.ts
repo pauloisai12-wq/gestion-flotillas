@@ -48,3 +48,27 @@ api.interceptors.response.use(
 );
 
 export default api;
+
+// Forma estándar del payload de error que devuelve la API.
+export interface ApiErrorData {
+  message?: string;
+  error?: string;
+  retryAfter?: number;
+}
+
+// Extrae status/payload/código de un error desconocido usando el type guard
+// real de axios, en vez de castings manuales repetidos en cada componente.
+export function getApiError(err: unknown): {
+  status?: number;
+  data?: ApiErrorData;
+  code?: string;
+} {
+  if (axios.isAxiosError(err)) {
+    return {
+      status: err.response?.status,
+      data: err.response?.data as ApiErrorData | undefined,
+      code: err.code,
+    };
+  }
+  return {};
+}

@@ -5,6 +5,7 @@ import { ArrowLeft } from 'lucide-react';
 import { TicketStatusBadge } from './TicketStatusBadge';
 import type { MaintenanceTicket } from '@/hooks/useMaintenanceTickets';
 import { CATEGORY_LABELS } from '@/hooks/useMaintenanceTickets';
+import { formatDateTime } from '@/lib/formatters';
 
 export function TicketDetailHeader({ ticket }: { ticket: MaintenanceTicket }) {
   return (
@@ -34,7 +35,7 @@ export function TicketDetailHeader({ ticket }: { ticket: MaintenanceTicket }) {
           {ticket.requestedBy && (
             <p className="text-xs text-muted-foreground mt-1">
               Levantado por <span className="font-medium">{ticket.requestedBy.fullName}</span> ·{' '}
-              {new Date(ticket.createdAt).toLocaleString('es-MX', { dateStyle: 'medium', timeStyle: 'short' })}
+              {formatDateTime(ticket.createdAt, { dateStyle: 'medium', timeStyle: 'short' })}
             </p>
           )}
         </div>

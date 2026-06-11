@@ -1,4 +1,3 @@
-// /web/src/app/(dashboard)/tickets/[id]/page.tsx
 // Detalle de ticket — UI cambia según rol del usuario.
 //
 // ADMIN / SUPERVISOR_MAINTENANCE:
@@ -31,6 +30,7 @@ import { QuoteDeclineDialog } from '@/components/maintenance-tickets/QuoteDeclin
 import { StartRepairButton, CompleteRepairForm } from '@/components/maintenance-tickets/RepairActions';
 import { useVehicle } from '@/hooks/useVehicles';
 import { Button } from '@/components/ui/button';
+import { formatNumber, formatDateTime } from '@/lib/formatters';
 import {
   Loader2,
   XCircle,
@@ -127,7 +127,7 @@ export default function TicketDetailPage({ params }: { params: Promise<{ id: str
                   <div>
                     <dt className="text-muted-foreground">Odómetro reportado</dt>
                     <dd className="font-medium tabular-nums">
-                      {ticket.reportedOdometer.toLocaleString('es-MX')} km
+                      {formatNumber(ticket.reportedOdometer)} km
                     </dd>
                   </div>
                 )}
@@ -177,7 +177,7 @@ export default function TicketDetailPage({ params }: { params: Promise<{ id: str
                       </p>
                       {ticket.rejectedAt && (
                         <p className="text-xs text-rose-700 dark:text-rose-300 mt-1">
-                          {new Date(ticket.rejectedAt).toLocaleString('es-MX', {
+                          {formatDateTime(ticket.rejectedAt, {
                             dateStyle: 'medium',
                             timeStyle: 'short',
                           })}
@@ -200,7 +200,7 @@ export default function TicketDetailPage({ params }: { params: Promise<{ id: str
                 {ticket.approvedAt && (
                   <p className="text-xs text-muted-foreground mt-2">
                     Aprobado{' '}
-                    {new Date(ticket.approvedAt).toLocaleString('es-MX', {
+                    {formatDateTime(ticket.approvedAt, {
                       dateStyle: 'medium',
                       timeStyle: 'short',
                     })}

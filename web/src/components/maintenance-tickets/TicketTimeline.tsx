@@ -2,6 +2,7 @@
 // Marca cada hito con su fecha; los pendientes se muestran apagados.
 
 import { cn } from '@/lib/utils';
+import { formatDate } from '@/lib/formatters';
 import { Clock, CheckCircle2, XCircle, Inbox, Wrench, PackageCheck } from 'lucide-react';
 import type { MaintenanceTicket } from '@/hooks/useMaintenanceTickets';
 
@@ -86,7 +87,7 @@ export function TicketTimeline({ ticket }: { ticket: MaintenanceTicket }) {
                 </div>
                 {step.date && (
                   <div className="text-[10px] text-muted-foreground mt-0.5">
-                    {new Date(step.date).toLocaleDateString('es-MX', { day: '2-digit', month: 'short' })}
+                    {formatDate(step.date, { day: '2-digit', month: 'short' })}
                   </div>
                 )}
               </div>

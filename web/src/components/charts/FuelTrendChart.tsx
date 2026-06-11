@@ -8,6 +8,7 @@ import { SkeletonChart } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/ui/empty-state';
 import { TrendingUp } from 'lucide-react';
 import { tokens } from '@/lib/css-tokens';
+import { formatCurrency, formatNumber } from '@/lib/formatters';
 
 interface TrendItem {
   month: string;
@@ -40,8 +41,8 @@ export default function FuelTrendChart({ filters = {} }: { filters?: DashboardFi
           let text = '<b>' + month + '</b>';
           for (const p of params) {
             const value = p.seriesName === 'Gasto ($)'
-              ? '$' + Number(p.value).toLocaleString('es-MX', { minimumFractionDigits: 2 })
-              : Number(p.value).toLocaleString('es-MX') + ' L';
+              ? formatCurrency(p.value, { minimumFractionDigits: 2 })
+              : formatNumber(p.value) + ' L';
             text += '<br/>' + p.marker + ' ' + p.seriesName + ': ' + value;
           }
           return text;
@@ -59,7 +60,7 @@ export default function FuelTrendChart({ filters = {} }: { filters?: DashboardFi
         {
           type: 'value' as const,
           name: 'Litros',
-          axisLabel: { formatter: (v: number) => v.toLocaleString() + ' L' },
+          axisLabel: { formatter: (v: number) => formatNumber(v) + ' L' },
         },
       ],
       series: [

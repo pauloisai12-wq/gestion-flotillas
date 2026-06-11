@@ -12,6 +12,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { SkeletonTable } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { toast } from '@/components/ui/toast';
 import { Building2, Plus, AlertTriangle } from 'lucide-react';
 
 interface Sector {
@@ -98,7 +99,7 @@ export default function SectorsPage() {
   async function handleDelete(s: Sector) {
     if (!confirm(`¿Desactivar sector "${s.name}"?`)) return;
     try { await deleteMut.mutateAsync(s.id); }
-    catch (e) { alert('Error: ' + (e as Error).message); }
+    catch (e) { toast.error('Error: ' + (e as Error).message); }
   }
 
   return (

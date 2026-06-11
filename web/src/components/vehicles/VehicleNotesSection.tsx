@@ -10,6 +10,8 @@ import {
 } from '@/hooks/useVehicleNotes';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { toast } from '@/components/ui/toast';
+import { formatDateTime } from '@/lib/formatters';
 import { Pencil, Trash2, Check, X, MessageSquare, User as UserIcon, Clock } from 'lucide-react';
 
 export function VehicleNotesSection({ vehicleId }: { vehicleId: number }) {
@@ -29,7 +31,7 @@ export function VehicleNotesSection({ vehicleId }: { vehicleId: number }) {
       await createNote.mutateAsync(draft.trim());
       setDraft('');
     } catch (e) {
-      alert('Error: ' + (e as Error).message);
+      toast.error('Error: ' + (e as Error).message);
     }
   }
 
@@ -45,7 +47,7 @@ export function VehicleNotesSection({ vehicleId }: { vehicleId: number }) {
       setEditingId(null);
       setEditContent('');
     } catch (e) {
-      alert('Error: ' + (e as Error).message);
+      toast.error('Error: ' + (e as Error).message);
     }
   }
 
@@ -54,7 +56,7 @@ export function VehicleNotesSection({ vehicleId }: { vehicleId: number }) {
     try {
       await deleteNote.mutateAsync(noteId);
     } catch (e) {
-      alert('Error: ' + (e as Error).message);
+      toast.error('Error: ' + (e as Error).message);
     }
   }
 
@@ -147,7 +149,7 @@ export function VehicleNotesSection({ vehicleId }: { vehicleId: number }) {
                         </span>
                         <span className="flex items-center gap-1">
                           <Clock className="size-3" />
-                          {new Date(note.createdAt).toLocaleString('es-MX', { dateStyle: 'short', timeStyle: 'short' })}
+                          {formatDateTime(note.createdAt, { dateStyle: 'short', timeStyle: 'short' })}
                         </span>
                         {note.updatedAt !== note.createdAt && note.editor && (
                           <span className="text-[10px] italic">

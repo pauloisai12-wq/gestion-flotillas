@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useStartRepair, useCompleteRepair } from '@/hooks/useMaintenanceTickets';
 import { useServiceCatalog } from '@/hooks/useMaintenance';
+import { formatNumber } from '@/lib/formatters';
 import { Wrench, CheckCircle2, AlertCircle, Loader2, PackageCheck } from 'lucide-react';
 
 export function StartRepairButton({ ticketId }: { ticketId: number }) {
@@ -115,7 +116,7 @@ export function CompleteRepairForm({
             <option value="">— Selecciona —</option>
             {(services ?? []).map((s) => (
               <option key={s.id} value={s.id}>
-                {s.serviceName} {s.intervalKm ? `· cada ${s.intervalKm.toLocaleString('es-MX')} km` : ''}
+                {s.serviceName} {s.intervalKm ? `· cada ${formatNumber(s.intervalKm)} km` : ''}
               </option>
             ))}
           </select>

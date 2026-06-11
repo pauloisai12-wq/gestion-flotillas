@@ -1,5 +1,4 @@
-// Archivo: /flotillas/web/src/hooks/useOperators.ts
-// NUEVO: Hook para operaciones CRUD de operadores
+// Hook para operaciones CRUD de operadores
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import api from '@/lib/api';
 

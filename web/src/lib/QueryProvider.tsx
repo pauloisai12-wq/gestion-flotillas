@@ -1,5 +1,3 @@
-// Archivo: /flotillas/web/src/lib/QueryProvider.tsx
-// REEMPLAZA: Archivo nuevo
 
 'use client';
 

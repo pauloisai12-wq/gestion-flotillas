@@ -1,8 +1,7 @@
-// Archivo: /flotillas/web/src/components/vehicle-types/VehicleTypeFormDialog.tsx
-// NUEVO: Modal para crear/editar tipo de vehículo (compatible React 19)
 'use client';
 
 import { useRef } from 'react';
+import { toast } from '@/components/ui/toast';
 import {
   Dialog,
   DialogContent,
@@ -40,12 +39,12 @@ export default function VehicleTypeFormDialog({ open, onClose, vehicleType }: Pr
     const kmPerLiter = parseFloat(formData.get('expectedKmPerLiter') as string);
 
     if (!name) {
-      alert('El nombre es obligatorio');
+      toast.error('El nombre es obligatorio');
       return;
     }
 
     if (isNaN(kmPerLiter) || kmPerLiter <= 0) {
-      alert('El rendimiento debe ser un número mayor a 0');
+      toast.error('El rendimiento debe ser un número mayor a 0');
       return;
     }
 
@@ -65,7 +64,7 @@ export default function VehicleTypeFormDialog({ open, onClose, vehicleType }: Pr
       const error = err as { response?: { data?: { error?: string; details?: { message: string }[] } } };
       const message =
         error.response?.data?.error || error.response?.data?.details?.[0]?.message || 'Error al guardar';
-      alert(message);
+      toast.error(message);
     }
   }
 

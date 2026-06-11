@@ -1,5 +1,3 @@
-// Archivo: /flotillas/web/src/contexts/AuthContext.tsx
-// REEMPLAZA: Archivo existente completo
 
 'use client';
 

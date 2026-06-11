@@ -10,6 +10,7 @@ import { SkeletonChart } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/ui/empty-state';
 import { FileText } from 'lucide-react';
 import { tokens } from '@/lib/css-tokens';
+import { formatNumber } from '@/lib/formatters';
 
 interface Segment {
   name: string;
@@ -164,7 +165,7 @@ export default function DocsStatusChart() {
                     transition: 'filter 150ms ease',
                   }}
                 >
-                  <title>{`${arc.name}: ${arc.value.toLocaleString('es-MX')} (${visibleTotal > 0 ? ((arc.value / visibleTotal) * 100).toFixed(1) : 0}%)`}</title>
+                  <title>{`${arc.name}: ${formatNumber(arc.value)} (${visibleTotal > 0 ? ((arc.value / visibleTotal) * 100).toFixed(1) : 0}%)`}</title>
                 </path>
               );
               // Suprimir warning de variable no usada
@@ -175,7 +176,7 @@ export default function DocsStatusChart() {
           {/* Número central */}
           <div className="pointer-events-none absolute inset-x-0 top-[42%] -translate-y-1/2 flex flex-col items-center">
             <span className="font-mono text-3xl font-semibold tabular-nums text-foreground leading-none">
-              {(hoverIdx !== null ? segments[hoverIdx].value : visibleTotal).toLocaleString('es-MX')}
+              {formatNumber(hoverIdx !== null ? segments[hoverIdx].value : visibleTotal)}
             </span>
             <span className="text-[10px] uppercase tracking-[0.15em] text-muted-foreground mt-1.5">
               {hoverIdx !== null ? segments[hoverIdx].name : 'Documentos'}

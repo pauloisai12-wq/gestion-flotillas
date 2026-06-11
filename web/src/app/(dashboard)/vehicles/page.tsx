@@ -10,6 +10,7 @@ import VehicleFormDialog from '@/components/vehicles/VehicleFormDialog';
 import VehicleImportDialog from '@/components/vehicles/VehicleImportDialog';
 import { type ColumnDef } from '@tanstack/react-table';
 import { exportToCsv } from '@/lib/exportCsv';
+import { formatNumber } from '@/lib/formatters';
 import { Upload } from 'lucide-react';
 
 function getWorstDocStatus(documents: { expiresAt: string }[]): 'RED' | 'YELLOW' | 'GREEN' | 'NONE' {
@@ -53,7 +54,7 @@ const columns: ColumnDef<Vehicle, unknown>[] = [
     header: 'Odómetro',
     cell: ({ row }) => (
       <span className="text-right block">
-        {row.original.currentOdometer.toLocaleString()} km
+        {formatNumber(row.original.currentOdometer)} km
       </span>
     ),
   },

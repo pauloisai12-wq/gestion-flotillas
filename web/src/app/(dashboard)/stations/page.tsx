@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import DataTable from '@/components/ui/data-table';
 import StationFormDialog from '@/components/stations/StationFormDialog';
+import { toast } from '@/components/ui/toast';
 import { type ColumnDef } from '@tanstack/react-table';
 
 export default function StationsPage() {
@@ -21,7 +22,7 @@ export default function StationsPage() {
       await deleteMutation.mutateAsync(s.id);
     } catch (err: unknown) {
       const error = err as { response?: { data?: { error?: string } } };
-      alert(error.response?.data?.error || 'Error al eliminar');
+      toast.error(error.response?.data?.error || 'Error al eliminar');
     }
   }
 

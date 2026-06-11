@@ -1,5 +1,3 @@
-// Archivo: /flotillas/web/src/app/(dashboard)/reports/page.tsx
-// REEMPLAZA: Archivo existente (era un placeholder)
 'use client';
 
 import { useState } from 'react';
@@ -17,6 +15,8 @@ import { Label } from '@/components/ui/label';
 import { PageHeader } from '@/components/ui/page-header';
 import { EmptyState } from '@/components/ui/empty-state';
 import { SkeletonTable } from '@/components/ui/skeleton';
+import { toast } from '@/components/ui/toast';
+import { formatDate } from '@/lib/formatters';
 import { FileBarChart } from 'lucide-react';
 
 const MONTH_NAMES: Record<number, string> = {
@@ -30,18 +30,6 @@ function formatBytes(bytes: number | null): string {
   if (bytes < 1024) return bytes + ' B';
   if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
   return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
-}
-
-function formatDate(dateStr: string | null): string {
-  if (!dateStr) return '-';
-  const d = new Date(dateStr);
-  return d.toLocaleDateString('es-MX', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
 }
 
 export default function ReportsPage() {
@@ -62,11 +50,11 @@ export default function ReportsPage() {
         {
           onSuccess: () => {
             setShowDialog(false);
-            alert('Reporte encolado. Se notificará al completarse.');
+            toast.success('Reporte encolado. Se notificará al completarse.');
           },
           onError: (error: unknown) => {
             const e = error as { response?: { data?: { error?: string } }; message?: string };
-            alert('Error: ' + (e.response?.data?.error || e.message || 'desconocido'));
+            toast.error('Error: ' + (e.response?.data?.error || e.message || 'desconocido'));
           },
         }
       );
@@ -142,7 +130,13 @@ export default function ReportsPage() {
 
                     {/* Fecha */}
                     <td className="px-4 py-3 text-muted-foreground">
-                      {formatDate(report.completedAt || report.startedAt)}
+                      {formatDate(report.completedAt || report.startedAt, {
+                        day: '2-digit',
+                        month: '2-digit',
+                        year: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })}
                     </td>
 
                     {/* Descargar PDF */}

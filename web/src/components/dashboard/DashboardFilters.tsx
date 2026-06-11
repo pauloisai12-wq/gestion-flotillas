@@ -1,6 +1,4 @@
-// Archivo: web/src/components/dashboard/DashboardFilters.tsx
-// Propósito: Barra de filtros globales del dashboard
-// NUEVO archivo
+// Barra de filtros globales del dashboard
 
 'use client';
 

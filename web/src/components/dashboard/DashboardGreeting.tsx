@@ -6,6 +6,7 @@ import { useEffect, useState } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { RefreshCw } from 'lucide-react';
+import { formatDateTime } from '@/lib/formatters';
 
 function getGreeting(hour: number): string {
   if (hour < 12) return 'Buenos días';
@@ -20,7 +21,7 @@ function formatRelative(date: Date | null, now: number): string {
   if (seconds < 60) return `hace ${seconds}s`;
   const minutes = Math.floor(seconds / 60);
   if (minutes < 60) return `hace ${minutes} min`;
-  return date.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' });
+  return formatDateTime(date, { hour: '2-digit', minute: '2-digit' });
 }
 
 export interface DashboardGreetingProps {

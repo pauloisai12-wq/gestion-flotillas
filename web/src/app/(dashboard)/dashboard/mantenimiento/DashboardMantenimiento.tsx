@@ -8,6 +8,7 @@
 
 import { useQuery } from '@tanstack/react-query';
 import api from '@/lib/api';
+import { formatCurrency, formatDate, formatNumber } from '@/lib/formatters';
 import { DashboardGreeting } from '@/components/dashboard/DashboardGreeting';
 import { KpiCard } from '@/components/ui/kpi-card';
 import { SkeletonKpi, SkeletonTable } from '@/components/ui/skeleton';
@@ -89,13 +90,13 @@ export default function DashboardMantenimiento() {
           ) : (
             <>
               <KpiCard
-                label="Servicios vencidos" value={overdue.length.toLocaleString('es-MX')}
+                label="Servicios vencidos" value={formatNumber(overdue.length)}
                 hint={overdue.length > 0 ? 'Atención inmediata' : 'Al día'}
                 icon={AlertTriangle}
                 delta={overdue.length > 0 ? { value: String(overdue.length), trend: 'up', meaning: 'bad' } : undefined}
               />
               <KpiCard
-                label="Próximos (≥80%)" value={warning.length.toLocaleString('es-MX')}
+                label="Próximos (≥80%)" value={formatNumber(warning.length)}
                 hint="a programar" icon={Clock}
                 delta={warning.length > 0 ? { value: String(warning.length), trend: 'up', meaning: 'bad' } : undefined}
               />
@@ -147,10 +148,10 @@ export default function DashboardMantenimiento() {
                       <TableCell className="font-mono font-medium">{p.economicNumber}</TableCell>
                       <TableCell className="text-sm">{p.name || p.serviceName}</TableCell>
                       <TableCell className="font-mono tabular-nums text-destructive">
-                        {Math.abs(p.remainingKm).toLocaleString('es-MX')} km
+                        {formatNumber(Math.abs(p.remainingKm))} km
                       </TableCell>
                       <TableCell className="font-mono tabular-nums">
-                        {Number(p.currentOdometer).toLocaleString('es-MX')} km
+                        {formatNumber(p.currentOdometer)} km
                       </TableCell>
                     </TableRow>
                   ))}
@@ -213,7 +214,7 @@ export default function DashboardMantenimiento() {
                   {recent.slice(0, 15).map((r: AnyRec) => (
                     <TableRow key={r.id}>
                       <TableCell className="font-mono text-xs">
-                        {new Date(r.serviceDate).toLocaleDateString('es-MX', { day: '2-digit', month: 'short' })}
+                        {formatDate(r.serviceDate, { day: '2-digit', month: 'short' })}
                       </TableCell>
                       <TableCell className="font-mono font-medium">{r.vehicle?.economicNumber}</TableCell>
                       <TableCell className="text-sm">{r.service?.name}</TableCell>
@@ -221,7 +222,7 @@ export default function DashboardMantenimiento() {
                         {r.workshopRef?.legalName || r.workshopRaw || r.workshop || '—'}
                       </TableCell>
                       <TableCell className="text-right font-mono tabular-nums">
-                        ${Number(r.cost).toLocaleString('es-MX')}
+                        {formatCurrency(r.cost)}
                       </TableCell>
                     </TableRow>
                   ))}

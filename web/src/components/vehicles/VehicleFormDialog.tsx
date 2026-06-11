@@ -1,8 +1,7 @@
-// Archivo: /flotillas/web/src/components/vehicles/VehicleFormDialog.tsx
-// NUEVO: Modal para crear/editar vehículo
 'use client';
 
 import { useRef } from 'react';
+import { toast } from '@/components/ui/toast';
 import {
   Dialog,
   DialogContent,
@@ -53,17 +52,17 @@ export default function VehicleFormDialog({ open, onClose, vehicle }: Props) {
 
     // Validación básica
     if (!input.plate || !input.economicNumber || !input.brand || !input.model) {
-      alert('Placa, número económico, marca y modelo son obligatorios');
+      toast.error('Placa, número económico, marca y modelo son obligatorios');
       return;
     }
 
     if (isNaN(input.vehicleTypeId) || input.vehicleTypeId <= 0) {
-      alert('Debe seleccionar un tipo de vehículo');
+      toast.error('Debe seleccionar un tipo de vehículo');
       return;
     }
 
     if (isNaN(input.year) || input.year < 1990) {
-      alert('El año debe ser un número válido (mínimo 1990)');
+      toast.error('El año debe ser un número válido (mínimo 1990)');
       return;
     }
 
@@ -76,7 +75,7 @@ export default function VehicleFormDialog({ open, onClose, vehicle }: Props) {
       onClose();
     } catch (err: unknown) {
       const error = err as { response?: { data?: { error?: string } } };
-      alert(error.response?.data?.error || 'Error al guardar');
+      toast.error(error.response?.data?.error || 'Error al guardar');
     }
   }
 

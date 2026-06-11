@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
+import { getApiError } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card } from '@/components/ui/card';
@@ -22,20 +23,13 @@ export default function LoginPage() {
     try {
       await login(email, password);
     } catch (err: unknown) {
-      const errorObj = err as {
-        response?: {
-          status?: number;
-          data?: { message?: string; error?: string; retryAfter?: number };
-        };
-        code?: string;
-      };
-      const status = errorObj.response?.status;
-      const backendMessage = errorObj.response?.data?.message ?? errorObj.response?.data?.error;
+      const { status, data, code } = getApiError(err);
+      const backendMessage = data?.message ?? data?.error;
 
       // Mapeo explícito por status — evita mostrar el mismo "credenciales
       // inválidas" cuando el problema real es rate-limit u otra cosa.
       if (status === 429) {
-        const retry = errorObj.response?.data?.retryAfter;
+        const retry = data?.retryAfter;
         setError(
           retry
             ? `Demasiados intentos. Espera ${retry} segundos antes de reintentar.`
@@ -45,7 +39,7 @@ export default function LoginPage() {
         setError('Credenciales inválidas. Verifica correo y contraseña.');
       } else if (status === 403) {
         setError(backendMessage || 'Cuenta bloqueada. Contacta al administrador.');
-      } else if (!status || errorObj.code === 'ERR_NETWORK') {
+      } else if (!status || code === 'ERR_NETWORK') {
         setError('No se pudo contactar al servidor. Revisa tu conexión.');
       } else {
         setError(backendMessage || `Error al iniciar sesión (HTTP ${status})`);
