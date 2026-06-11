@@ -181,10 +181,22 @@ function detectHeaderRow(matrix: any[][]): number {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function safeCreate(db: Tx, data: any, rowNumber: number, warnings: ImportResult['warnings']): Promise<any> {
   let attempt = 0;
+  // En PostgreSQL, un INSERT que viola un unique constraint (P2002) aborta TODA
+  // la transacción: cualquier comando posterior en la misma tx falla con
+  // 25P02 ("current transaction is aborted, commands ignored..."). Para poder
+  // reintentar con el dato desambiguado marcamos un SAVEPOINT y hacemos
+  // ROLLBACK a él tras cada fallo; eso limpia el estado abortado sin descartar
+  // la transacción de la fila completa (la asignación/nota siguen siendo atómicas).
+  await db.$executeRawUnsafe('SAVEPOINT sp_vehicle');
   while (attempt < 6) {
     try {
-      return await db.vehicle.create({ data });
+      const created = await db.vehicle.create({ data });
+      await db.$executeRawUnsafe('RELEASE SAVEPOINT sp_vehicle');
+      return created;
     } catch (e) {
+      // Volver al savepoint deja la tx en estado válido para el siguiente intento
+      // (o para que un throw posterior la revierta limpiamente).
+      await db.$executeRawUnsafe('ROLLBACK TO SAVEPOINT sp_vehicle');
       attempt++;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const err = e as any;
@@ -222,10 +234,17 @@ async function safeCreate(db: Tx, data: any, rowNumber: number, warnings: Import
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function safeUpdate(db: Tx, id: number, data: any, rowNumber: number, warnings: ImportResult['warnings']): Promise<any> {
   let attempt = 0;
+  // Mismo motivo que safeCreate: un UPDATE que genera duplicado (P2002) aborta la
+  // transacción en Postgres (25P02). El SAVEPOINT permite reintentar con el campo
+  // desambiguado sin perder la transacción de la fila.
+  await db.$executeRawUnsafe('SAVEPOINT sp_vehicle');
   while (attempt < 6) {
     try {
-      return await db.vehicle.update({ where: { id }, data });
+      const updated = await db.vehicle.update({ where: { id }, data });
+      await db.$executeRawUnsafe('RELEASE SAVEPOINT sp_vehicle');
+      return updated;
     } catch (e) {
+      await db.$executeRawUnsafe('ROLLBACK TO SAVEPOINT sp_vehicle');
       attempt++;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const err = e as any;
