@@ -1,10 +1,12 @@
-// /api/src/routes/authRouter.ts — login con rate limit + manejo de errores estándar
+// Auth router — login con rate limit + manejo de errores estándar
 
 import { Router, Request, Response, NextFunction, CookieOptions } from 'express';
 import { z } from 'zod/v4';
-import { login, getUserById } from '../services/authService';
-import { authMiddleware } from '../middlewares/authMiddleware';
+import { login, getUserById, blacklistToken } from '../services/authService';
+import { authMiddleware, tokenFromRequest } from '../middlewares/authMiddleware';
 import { rateLimit, getClientIp } from '../middlewares/rateLimit';
+import { ah } from '../lib/asyncHandler';
+import { logger } from '../lib/logger';
 import { env } from '../config/env';
 
 const authRouter = Router();
@@ -79,12 +81,23 @@ authRouter.get('/me', authMiddleware, async (req: Request, res: Response, next: 
 });
 
 /**
- * POST /api/auth/logout — limpia la cookie de sesión en el cliente.
- * (Para invalidación real del JWT necesitaríamos blacklist en Redis, fuera de scope.)
+ * POST /api/auth/logout — invalida el JWT (blacklist en Redis hasta su
+ * expiración) y limpia la cookie de sesión en el cliente.
  */
-authRouter.post('/logout', authMiddleware, (_req: Request, res: Response): void => {
-  res.clearCookie('token', { ...sessionCookieOpts, maxAge: undefined });
-  res.json({ status: 'ok', message: 'Sesión cerrada' });
-});
+authRouter.post(
+  '/logout',
+  authMiddleware,
+  ah(async (req: Request, res: Response): Promise<void> => {
+    try {
+      const token = tokenFromRequest(req);
+      if (token) await blacklistToken(token);
+    } catch (err) {
+      // Fail-open: si Redis/extracción fallan, el logout sigue limpiando la cookie.
+      logger.warn({ err: (err as Error).message }, 'No se pudo invalidar el token en logout');
+    }
+    res.clearCookie('token', { ...sessionCookieOpts, maxAge: undefined });
+    res.json({ status: 'ok', message: 'Sesión cerrada' });
+  }),
+);
 
 export default authRouter;

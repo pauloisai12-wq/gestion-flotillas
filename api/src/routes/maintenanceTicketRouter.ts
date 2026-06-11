@@ -1,4 +1,3 @@
-// /api/src/routes/maintenanceTicketRouter.ts
 // Endpoints del flujo de tickets de mantenimiento.
 //
 // Montado en /api/maintenance-tickets (ver index.ts).
@@ -19,7 +18,15 @@ import {
   approveTicketSchema,
   completeRepairSchema,
   listTicketsQuerySchema,
+  CreateTicketInput,
+  RejectTicketInput,
+  AssignWorkshopsInput,
+  ApproveTicketInput,
+  CompleteRepairInput,
+  ListTicketsQuery,
 } from '../validators/maintenanceTicketValidator';
+import { validateBody, validateQuery } from '../middlewares/validate';
+import { parseId } from '../lib/http';
 
 const router = Router();
 
@@ -49,17 +56,8 @@ const photoUpload = multer({
 });
 
 // ═══════════════════════════════════════════════════════════════
-// Helper: id parser + manejo uniforme de errores de dominio
+// Helper: manejo uniforme de errores de dominio
 // ═══════════════════════════════════════════════════════════════
-function parseIdParam(req: Request, res: Response, param = 'id'): number | null {
-  const id = parseInt(req.params[param], 10);
-  if (isNaN(id) || id <= 0) {
-    res.status(400).json({ error: 'ID inválido' });
-    return null;
-  }
-  return id;
-}
-
 function handleTicketError(err: unknown, res: Response, next?: NextFunction) {
   if (err instanceof TicketError) {
     const statusMap: Record<TicketError['code'], number> = {
@@ -83,18 +81,12 @@ function handleTicketError(err: unknown, res: Response, next?: NextFunction) {
 router.get(
   '/',
   requireRole([...RoleGroups.ANY_AUTH, 'WORKSHOP']),
+  validateQuery(listTicketsQuerySchema),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const parsed = listTicketsQuerySchema.safeParse(req.query);
-      if (!parsed.success) {
-        return res.status(400).json({
-          error: 'Filtros inválidos',
-          details: parsed.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })),
-        });
-      }
       const result = await ticketService.listTickets(
         { userId: req.user!.userId, role: req.user!.role },
-        parsed.data,
+        req.query as unknown as ListTicketsQuery,
       );
       res.json(result);
     } catch (err) {
@@ -108,8 +100,7 @@ router.get(
   requireRole([...RoleGroups.ANY_AUTH, 'WORKSHOP']),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const id = parseIdParam(req, res);
-      if (id === null) return;
+      const id = parseId(req);
       const ticket = await ticketService.getTicketById(id, {
         userId: req.user!.userId,
         role: req.user!.role,
@@ -128,16 +119,10 @@ router.get(
 router.post(
   '/',
   requireRole(RoleGroups.TICKET_CREATORS),
+  validateBody(createTicketSchema),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const parsed = createTicketSchema.safeParse(req.body);
-      if (!parsed.success) {
-        return res.status(400).json({
-          error: 'Datos inválidos',
-          details: parsed.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })),
-        });
-      }
-      const ticket = await ticketService.createTicket(req.user!.userId, parsed.data);
+      const ticket = await ticketService.createTicket(req.user!.userId, req.body as CreateTicketInput);
       res.status(201).json(ticket);
     } catch (err) {
       handleTicketError(err, res, next);
@@ -151,8 +136,7 @@ router.post(
   photoUpload.single('photo'),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const id = parseIdParam(req, res);
-      if (id === null) return;
+      const id = parseId(req);
       if (!req.file) return res.status(400).json({ error: 'Falta el archivo en campo "photo"' });
 
       const attachment = await ticketService.addAttachment(id, req.user!.userId, {
@@ -175,18 +159,12 @@ router.post(
 router.post(
   '/:id/reject',
   requireRole(RoleGroups.TICKET_ADMINS),
+  validateBody(rejectTicketSchema),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const id = parseIdParam(req, res);
-      if (id === null) return;
-      const parsed = rejectTicketSchema.safeParse(req.body);
-      if (!parsed.success) {
-        return res.status(400).json({
-          error: 'Datos inválidos',
-          details: parsed.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })),
-        });
-      }
-      const ticket = await ticketService.rejectTicket(id, req.user!.userId, parsed.data.rejectionReason);
+      const id = parseId(req);
+      const { rejectionReason } = req.body as RejectTicketInput;
+      const ticket = await ticketService.rejectTicket(id, req.user!.userId, rejectionReason);
       res.json(ticket);
     } catch (err) {
       handleTicketError(err, res, next);
@@ -197,18 +175,11 @@ router.post(
 router.post(
   '/:id/assign-workshops',
   requireRole(RoleGroups.TICKET_ADMINS),
+  validateBody(assignWorkshopsSchema),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const id = parseIdParam(req, res);
-      if (id === null) return;
-      const parsed = assignWorkshopsSchema.safeParse(req.body);
-      if (!parsed.success) {
-        return res.status(400).json({
-          error: 'Datos inválidos',
-          details: parsed.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })),
-        });
-      }
-      const ticket = await ticketService.assignWorkshops(id, req.user!.userId, parsed.data);
+      const id = parseId(req);
+      const ticket = await ticketService.assignWorkshops(id, req.user!.userId, req.body as AssignWorkshopsInput);
       res.json(ticket);
     } catch (err) {
       handleTicketError(err, res, next);
@@ -219,18 +190,11 @@ router.post(
 router.post(
   '/:id/approve',
   requireRole(RoleGroups.TICKET_ADMINS),
+  validateBody(approveTicketSchema),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const id = parseIdParam(req, res);
-      if (id === null) return;
-      const parsed = approveTicketSchema.safeParse(req.body);
-      if (!parsed.success) {
-        return res.status(400).json({
-          error: 'Datos inválidos',
-          details: parsed.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })),
-        });
-      }
-      const ticket = await ticketService.approveTicket(id, req.user!.userId, parsed.data);
+      const id = parseId(req);
+      const ticket = await ticketService.approveTicket(id, req.user!.userId, req.body as ApproveTicketInput);
       res.json(ticket);
     } catch (err) {
       handleTicketError(err, res, next);
@@ -243,8 +207,7 @@ router.get(
   requireRole(RoleGroups.TICKET_ADMINS),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const id = parseIdParam(req, res);
-      if (id === null) return;
+      const id = parseId(req);
       const ctx = await ticketService.getBudgetContext(id);
       res.json(ctx);
     } catch (err) {
@@ -262,8 +225,7 @@ router.post(
   requireRole(RoleGroups.WORKSHOP_ONLY),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const id = parseIdParam(req, res);
-      if (id === null) return;
+      const id = parseId(req);
       const ticket = await ticketService.startRepair(id, req.user!.userId);
       res.json(ticket);
     } catch (err) {
@@ -275,18 +237,11 @@ router.post(
 router.post(
   '/:id/complete-repair',
   requireRole(RoleGroups.WORKSHOP_ONLY),
+  validateBody(completeRepairSchema),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const id = parseIdParam(req, res);
-      if (id === null) return;
-      const parsed = completeRepairSchema.safeParse(req.body);
-      if (!parsed.success) {
-        return res.status(400).json({
-          error: 'Datos inválidos',
-          details: parsed.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })),
-        });
-      }
-      const ticket = await ticketService.completeRepair(id, req.user!.userId, parsed.data);
+      const id = parseId(req);
+      const ticket = await ticketService.completeRepair(id, req.user!.userId, req.body as CompleteRepairInput);
       res.json(ticket);
     } catch (err) {
       handleTicketError(err, res, next);

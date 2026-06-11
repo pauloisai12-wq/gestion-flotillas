@@ -1,5 +1,4 @@
-// Archivo: /flotillas/api/src/validators/documentValidator.ts
-// NUEVO: Validación para documentos vehiculares
+// Validación para documentos vehiculares
 import { z } from 'zod/v4';
 
 export const documentSchema = z.object({

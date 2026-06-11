@@ -1,5 +1,4 @@
-// Archivo: /flotillas/api/src/services/vehicleService.ts
-// NUEVO: Operaciones CRUD de vehículos contra la base de datos
+// Operaciones CRUD de vehículos contra la base de datos
 import prisma from '../lib/prisma';
 import { VehicleInput } from '../validators/vehicleValidator';
 import { NotFound, Conflict, BadRequest } from '../middlewares/errorHandler';

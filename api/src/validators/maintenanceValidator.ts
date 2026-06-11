@@ -1,4 +1,3 @@
-// api/src/validators/maintenanceValidator.ts
 // Validaciones v2 — usa workshop FK + texto libre opcional + odómetro NF
 
 import { z } from 'zod/v4';
@@ -29,3 +28,13 @@ export const maintenanceSchema = z
   );
 
 export type MaintenanceInput = z.infer<typeof maintenanceSchema>;
+
+// Listado paginado de registros: paginación + filtros opcionales
+export const listMaintenanceQuerySchema = z.object({
+  page: z.coerce.number().int().positive().default(1),
+  limit: z.coerce.number().int().positive().max(100).default(20),
+  vehicleId: z.coerce.number().int().positive().optional(),
+  serviceId: z.coerce.number().int().positive().optional(),
+});
+
+export type ListMaintenanceQuery = z.infer<typeof listMaintenanceQuerySchema>;

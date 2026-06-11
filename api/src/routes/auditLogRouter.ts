@@ -1,4 +1,4 @@
-// /api/src/routes/auditLogRouter.ts — admin-only audit log
+// Bitácora de auditoría — solo admin
 
 import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod/v4';

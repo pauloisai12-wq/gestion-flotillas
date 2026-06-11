@@ -23,6 +23,8 @@ export async function getAll(vehicleTypeId?: number) {
         select: { id: true, name: true },
       },
     },
+    // Tope de seguridad (catálogo acotado); mismo criterio que workshop/sector.
+    take: 500,
   });
 }
 

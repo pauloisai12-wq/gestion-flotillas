@@ -1,5 +1,4 @@
-// Archivo: /flotillas/api/src/services/vehicleTypeService.ts
-// NUEVO: Operaciones CRUD de tipos de vehículo contra la base de datos
+// Operaciones CRUD de tipos de vehículo contra la base de datos
 import prisma from '../lib/prisma';
 import { VehicleTypeInput } from '../validators/vehicleTypeValidator';
 import { NotFound, Conflict } from '../middlewares/errorHandler';

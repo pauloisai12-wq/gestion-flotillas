@@ -9,6 +9,8 @@ export async function getAllStations() {
   return prisma.approvedStation.findMany({
     orderBy: { legalName: 'asc' },
     include: { _count: { select: { fuelLoads: true } } },
+    // Tope de seguridad (catálogo acotado); mismo criterio que workshop/sector.
+    take: 500,
   });
 }
 

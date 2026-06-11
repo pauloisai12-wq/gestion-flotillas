@@ -1,5 +1,4 @@
-// Archivo: /flotillas/api/src/services/operatorService.ts
-// NUEVO: Operaciones CRUD de operadores
+// Operaciones CRUD de operadores
 import prisma from '../lib/prisma';
 import { OperatorInput } from '../validators/operatorValidator';
 import { NotFound, Conflict } from '../middlewares/errorHandler';

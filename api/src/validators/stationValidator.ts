@@ -1,4 +1,3 @@
-// Archivo: /api/src/validators/stationValidator.ts
 // Validación de gasolineras — v2 con RFC + contacto fiscal
 
 import { z } from 'zod/v4';

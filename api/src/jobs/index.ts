@@ -1,4 +1,3 @@
-// Archivo: /flotillas/api/src/jobs/index.ts
 // Punto central donde se registran TODOS los jobs programados del sistema.
 
 import { createQueue, createWorker } from '../config/queue';

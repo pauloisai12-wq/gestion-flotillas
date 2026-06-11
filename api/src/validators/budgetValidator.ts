@@ -38,6 +38,14 @@ export const closeMonthSchema = z.object({
   kind: kind.optional(), // si no se pasa, cierra ambos
 });
 
+/** Declarar/actualizar el pote mensual (PUT /monthly-pool) */
+export const monthlyPoolSchema = z.object({
+  kind,
+  ...monthYear,
+  totalAmount: z.number().min(0),
+  notes: z.string().max(500).optional().nullable(),
+});
+
 /** Query filtros de listado */
 export const listBudgetsQuerySchema = z.object({
   kind: kind.optional(),
@@ -49,3 +57,4 @@ export const listBudgetsQuerySchema = z.object({
 export type AssignBudgetInput = z.infer<typeof assignBudgetSchema>;
 export type DistributeBudgetInput = z.infer<typeof distributeBudgetSchema>;
 export type CloseMonthInput = z.infer<typeof closeMonthSchema>;
+export type MonthlyPoolInput = z.infer<typeof monthlyPoolSchema>;

@@ -32,6 +32,20 @@ export const fuelLoadSchema = baseFuelLoad.refine(
 
 export type FuelLoadInput = z.infer<typeof fuelLoadSchema>;
 
+/** Query del listado de cargas — filtros opcionales; page/limit los normaliza parsePagination. */
+export const fuelLoadQuerySchema = z.object({
+  page: z.coerce.number().optional(),
+  limit: z.coerce.number().optional(),
+  vehicleId: z.coerce.number().int().positive().optional(),
+  operatorId: z.coerce.number().int().positive().optional(),
+  stationId: z.coerce.number().int().positive().optional(),
+  status: z.enum(['APPROVED', 'PENDING_REVIEW', 'REJECTED']).optional(),
+  dateFrom: z.string().optional(),
+  dateTo: z.string().optional(),
+});
+
+export type FuelLoadQueryInput = z.infer<typeof fuelLoadQuerySchema>;
+
 /** Schema del portal público — mismo, pero añade economicNumber (el operador teclea su unidad) */
 export const publicFuelLoadSchema = baseFuelLoad
   .extend({

@@ -1,9 +1,8 @@
-// Archivo: /flotillas/api/src/routes/reportRouter.ts
-// ARCHIVO NUEVO — Endpoints de reportes
+// Endpoints de reportes
 
-import { Router, Request, Response, NextFunction } from 'express';
+import { Router, Request, Response } from 'express';
 import { roleMiddleware } from '../middlewares/roleMiddleware';
-import { generateReportSchema } from '../validators/reportValidator';
+import { generateReportSchema, GenerateReportInput } from '../validators/reportValidator';
 import {
   requestReportGeneration,
   getReportHistory,
@@ -12,6 +11,9 @@ import {
 import path from 'path';
 import fs from 'fs';
 import { env } from '../config/env';
+import { ah } from '../lib/asyncHandler';
+import { validateBody } from '../middlewares/validate';
+import { parseId, parsePagination, ensureFound } from '../lib/http';
 
 const reportRouter = Router();
 
@@ -19,129 +21,94 @@ const reportRouter = Router();
 reportRouter.post(
   '/generate',
   roleMiddleware(['ADMIN']),
-  async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const parsed = generateReportSchema.safeParse(req.body);
-      if (!parsed.success) {
-        res.status(400).json({
-          error: 'Datos inválidos',
-          details: parsed.error.issues,
-        });
-        return;
-      }
+  validateBody(generateReportSchema),
+  ah(async (req: Request, res: Response) => {
+    const { month, year } = req.body as GenerateReportInput;
+    const requestedBy = req.user?.email || 'admin';
 
-      const { month, year } = parsed.data;
-      const requestedBy = req.user?.email || 'admin';
-
-      const result = await requestReportGeneration(month, year, requestedBy);
-      res.status(202).json({ data: result });
-    } catch (error) {
-      next(error);
-      }
-  }
+    const result = await requestReportGeneration(month, year, requestedBy);
+    res.status(202).json({ data: result });
+  })
 );
 
 // GET /api/reports — Historial de reportes (ADMIN)
 reportRouter.get(
   '/',
   roleMiddleware(['ADMIN']),
-  async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const page = parseInt(req.query.page as string) || 1;
-      const limit = parseInt(req.query.limit as string) || 20;
+  ah(async (req: Request, res: Response) => {
+    const { page, limit } = parsePagination(req);
 
-      const result = await getReportHistory(page, limit);
-      res.json(result);
-    } catch (error) {
-      next(error);
-      }
-  }
+    const result = await getReportHistory(page, limit);
+    res.json(result);
+  })
 );
 
 // GET /api/reports/:id — Detalle de un reporte (ADMIN)
 reportRouter.get(
   '/:id',
   roleMiddleware(['ADMIN']),
-  async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const id = parseInt(req.params.id);
-      const report = await getReportById(id);
+  ah(async (req: Request, res: Response) => {
+    const id = parseId(req);
+    const report = ensureFound(await getReportById(id), 'Reporte');
 
-      if (!report) {
-        res.status(404).json({ error: 'Reporte no encontrado' });
-        return;
-      }
-
-      res.json({ data: report });
-    } catch (error) {
-      next(error);
-      }
-  }
+    res.json({ data: report });
+  })
 );
 
 // GET /api/reports/:id/download/:type — Descargar PDF o Excel (ADMIN)
 reportRouter.get(
   '/:id/download/:type',
   roleMiddleware(['ADMIN']),
-  async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const id = parseInt(req.params.id);
-      const fileType = req.params.type; // 'pdf' o 'excel'
+  ah(async (req: Request, res: Response) => {
+    const id = parseId(req);
+    const fileType = req.params.type; // 'pdf' o 'excel'
 
-      const report = await getReportById(id);
+    const report = ensureFound(await getReportById(id), 'Reporte');
 
-      if (!report) {
-        res.status(404).json({ error: 'Reporte no encontrado' });
-        return;
-      }
+    if (report.status !== 'COMPLETED') {
+      res.status(400).json({ error: 'El reporte aún no está listo' });
+      return;
+    }
 
-      if (report.status !== 'COMPLETED') {
-        res.status(400).json({ error: 'El reporte aún no está listo' });
-        return;
-      }
+    // Determinar ruta del archivo
+    let filePath: string | null = null;
+    let fileName: string;
 
-      // Determinar ruta del archivo
-      let filePath: string | null = null;
-      let fileName: string;
+    if (fileType === 'pdf') {
+      filePath = report.pdfPath;
+      fileName = 'reporte_mensual_' + report.year + '_' + String(report.month).padStart(2, '0') + '.pdf';
+    } else if (fileType === 'excel') {
+      filePath = report.excelPath;
+      fileName = 'reporte_mensual_' + report.year + '_' + String(report.month).padStart(2, '0') + '.xlsx';
+    } else {
+      res.status(400).json({ error: 'Tipo debe ser "pdf" o "excel"' });
+      return;
+    }
 
-      if (fileType === 'pdf') {
-        filePath = report.pdfPath;
-        fileName = 'reporte_mensual_' + report.year + '_' + String(report.month).padStart(2, '0') + '.pdf';
-      } else if (fileType === 'excel') {
-        filePath = report.excelPath;
-        fileName = 'reporte_mensual_' + report.year + '_' + String(report.month).padStart(2, '0') + '.xlsx';
-      } else {
-        res.status(400).json({ error: 'Tipo debe ser "pdf" o "excel"' });
-        return;
-      }
+    if (!filePath) {
+      res.status(404).json({ error: 'Archivo no disponible' });
+      return;
+    }
 
-      if (!filePath) {
-        res.status(404).json({ error: 'Archivo no disponible' });
-        return;
-      }
+    // Confinar la descarga al directorio del volumen compartido con el worker
+    // (defensa contra path traversal si filePath en BD viniera contaminado).
+    // Se usa REPORTS_DIR (config) en vez de __dirname, que apunta mal en el
+    // build prod (dist/routes) y dejaba la descarga rota.
+    const baseDir = path.resolve(env.REPORTS_DIR);
+    const safePath = path.resolve(baseDir, path.basename(filePath));
 
-      // Confinar la descarga al directorio del volumen compartido con el worker
-      // (defensa contra path traversal si filePath en BD viniera contaminado).
-      // Se usa REPORTS_DIR (config) en vez de __dirname, que apunta mal en el
-      // build prod (dist/routes) y dejaba la descarga rota.
-      const baseDir = path.resolve(env.REPORTS_DIR);
-      const safePath = path.resolve(baseDir, path.basename(filePath));
+    if (!safePath.startsWith(baseDir + path.sep)) {
+      res.status(403).json({ error: 'Ruta no permitida' });
+      return;
+    }
 
-      if (!safePath.startsWith(baseDir + path.sep)) {
-        res.status(403).json({ error: 'Ruta no permitida' });
-        return;
-      }
+    if (!fs.existsSync(safePath)) {
+      res.status(404).json({ error: 'Archivo no encontrado en disco' });
+      return;
+    }
 
-      if (!fs.existsSync(safePath)) {
-        res.status(404).json({ error: 'Archivo no encontrado en disco' });
-        return;
-      }
-
-      res.download(safePath, fileName);
-    } catch (error) {
-      next(error);
-      }
-  }
+    res.download(safePath, fileName);
+  })
 );
 
 export default reportRouter;

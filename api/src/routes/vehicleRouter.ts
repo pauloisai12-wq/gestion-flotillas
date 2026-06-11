@@ -1,9 +1,11 @@
-// Archivo: /flotillas/api/src/routes/vehicleRouter.ts
-// NUEVO: Endpoints REST para vehículos
-import { Router, Request, Response, NextFunction } from 'express';
-import { vehicleSchema } from '../validators/vehicleValidator';
+// Endpoints REST para vehículos
+import { Router, Request, Response } from 'express';
+import { vehicleSchema, VehicleInput } from '../validators/vehicleValidator';
 import * as vehicleService from '../services/vehicleService';
 import { roleMiddleware, RoleGroups, Roles } from '../middlewares/roleMiddleware';
+import { ah } from '../lib/asyncHandler';
+import { validateBody } from '../middlewares/validate';
+import { parseId, parsePagination } from '../lib/http';
 
 const router = Router();
 
@@ -12,11 +14,14 @@ const router = Router();
  * Lista paginada con filtros. Acceso: lectores de flota + EXECUTOR (acotado a
  * SUS vehículos). WORKSHOP (taller externo) queda excluido.
  */
-router.get('/', roleMiddleware([...RoleGroups.VEHICLE_READERS, Roles.EXECUTOR]), async (req: Request, res: Response, next: NextFunction) => {
-  try {
+router.get(
+  '/',
+  roleMiddleware([...RoleGroups.VEHICLE_READERS, Roles.EXECUTOR]),
+  ah(async (req: Request, res: Response) => {
+    const { page, limit } = parsePagination(req);
     const query = {
-      page: req.query.page ? parseInt(req.query.page as string) : 1,
-      limit: req.query.limit ? parseInt(req.query.limit as string) : 20,
+      page,
+      limit,
       search: req.query.search as string | undefined,
       vehicleTypeId: req.query.vehicleTypeId
         ? parseInt(req.query.vehicleTypeId as string)
@@ -35,28 +40,23 @@ router.get('/', roleMiddleware([...RoleGroups.VEHICLE_READERS, Roles.EXECUTOR]),
 
     const result = await vehicleService.getAllVehicles(query);
     res.json(result);
-  } catch (error) {
-    next(error);
-    }
-});
+  }),
+);
 
 /**
  * GET /api/vehicles/:id
  * Detalle de un vehículo con relaciones. Acceso: lectores de flota
  * (excluye EXECUTOR/WORKSHOP, que no necesitan el detalle global).
  */
-router.get('/:id', roleMiddleware(RoleGroups.VEHICLE_READERS), async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const id = parseInt(req.params.id);
-    if (isNaN(id)) {
-      return res.status(400).json({ error: 'ID inválido' });
-    }
+router.get(
+  '/:id',
+  roleMiddleware(RoleGroups.VEHICLE_READERS),
+  ah(async (req: Request, res: Response) => {
+    const id = parseId(req);
     const vehicle = await vehicleService.getVehicleById(id);
     res.json(vehicle);
-  } catch (error) {
-    next(error);
-    }
-});
+  }),
+);
 
 /**
  * POST /api/vehicles
@@ -65,25 +65,11 @@ router.get('/:id', roleMiddleware(RoleGroups.VEHICLE_READERS), async (req: Reque
 router.post(
   '/',
   roleMiddleware(['ADMIN', 'SUPERVISOR_VEHICLES']),
-  async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const parsed = vehicleSchema.safeParse(req.body);
-      if (!parsed.success) {
-        return res.status(400).json({
-          error: 'Datos inválidos',
-          details: parsed.error.issues.map((issue) => ({
-            field: issue.path.join('.'),
-            message: issue.message,
-          })),
-        });
-      }
-
-      const vehicle = await vehicleService.createVehicle(parsed.data);
-      res.status(201).json(vehicle);
-    } catch (error) {
-      next(error);
-      }
-  }
+  validateBody(vehicleSchema),
+  ah(async (req: Request, res: Response) => {
+    const vehicle = await vehicleService.createVehicle(req.body as VehicleInput);
+    res.status(201).json(vehicle);
+  }),
 );
 
 /**
@@ -93,30 +79,12 @@ router.post(
 router.put(
   '/:id',
   roleMiddleware(['ADMIN', 'SUPERVISOR_VEHICLES']),
-  async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const id = parseInt(req.params.id);
-      if (isNaN(id)) {
-        return res.status(400).json({ error: 'ID inválido' });
-      }
-
-      const parsed = vehicleSchema.safeParse(req.body);
-      if (!parsed.success) {
-        return res.status(400).json({
-          error: 'Datos inválidos',
-          details: parsed.error.issues.map((issue) => ({
-            field: issue.path.join('.'),
-            message: issue.message,
-          })),
-        });
-      }
-
-      const vehicle = await vehicleService.updateVehicle(id, parsed.data);
-      res.json(vehicle);
-    } catch (error) {
-      next(error);
-      }
-  }
+  validateBody(vehicleSchema),
+  ah(async (req: Request, res: Response) => {
+    const id = parseId(req);
+    const vehicle = await vehicleService.updateVehicle(id, req.body as VehicleInput);
+    res.json(vehicle);
+  }),
 );
 
 /**
@@ -126,19 +94,11 @@ router.put(
 router.delete(
   '/:id',
   roleMiddleware(['ADMIN']),
-  async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const id = parseInt(req.params.id);
-      if (isNaN(id)) {
-        return res.status(400).json({ error: 'ID inválido' });
-      }
-
-      await vehicleService.deleteVehicle(id);
-      res.json({ message: 'Vehículo eliminado correctamente' });
-    } catch (error) {
-      next(error);
-      }
-  }
+  ah(async (req: Request, res: Response) => {
+    const id = parseId(req);
+    await vehicleService.deleteVehicle(id);
+    res.json({ message: 'Vehículo eliminado correctamente' });
+  }),
 );
 
 export default router;

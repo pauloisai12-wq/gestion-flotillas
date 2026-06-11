@@ -1,12 +1,13 @@
-// /api/src/routes/workshopRouter.ts
 // CRUD de talleres certificados (gemelo de stations)
 
 import { Router, Request, Response } from 'express';
 import prisma from '../lib/prisma';
 import { requireRole, RoleGroups } from '../middlewares/roleMiddleware';
-import { isPrismaKnownError, Conflict, NotFound } from '../middlewares/errorHandler';
+import { isPrismaKnownError, Conflict } from '../middlewares/errorHandler';
 import { ah } from '../lib/asyncHandler';
-import { workshopSchema, workshopUpdateSchema } from '../validators/workshopValidator';
+import { validateBody } from '../middlewares/validate';
+import { parseId, ensureFound } from '../lib/http';
+import { workshopSchema, workshopUpdateSchema, WorkshopInput } from '../validators/workshopValidator';
 
 const router = Router();
 
@@ -30,9 +31,8 @@ router.get(
   '/:id',
   requireRole(RoleGroups.MAINT_MANAGERS),
   ah(async (req, res) => {
-    const id = Number(req.params.id);
-    const workshop = await prisma.workshop.findUnique({ where: { id } });
-    if (!workshop) throw NotFound('Taller');
+    const id = parseId(req);
+    const workshop = ensureFound(await prisma.workshop.findUnique({ where: { id } }), 'Taller');
     res.json({ data: workshop });
   }),
 );
@@ -41,14 +41,10 @@ router.get(
 router.post(
   '/',
   requireRole(RoleGroups.MAINT_MANAGERS),
+  validateBody(workshopSchema),
   ah(async (req: Request, res: Response) => {
-    const parsed = workshopSchema.safeParse(req.body);
-    if (!parsed.success) {
-      res.status(400).json({ error: 'Datos inválidos', issues: parsed.error.issues });
-      return;
-    }
     try {
-      const workshop = await prisma.workshop.create({ data: parsed.data });
+      const workshop = await prisma.workshop.create({ data: req.body as WorkshopInput });
       res.status(201).json({ data: workshop });
     } catch (e) {
       if (isPrismaKnownError(e, 'P2002')) throw Conflict('RFC ya registrado');
@@ -61,14 +57,13 @@ router.post(
 router.patch(
   '/:id',
   requireRole(RoleGroups.MAINT_MANAGERS),
+  validateBody(workshopUpdateSchema),
   ah(async (req: Request, res: Response) => {
-    const id = Number(req.params.id);
-    const parsed = workshopUpdateSchema.safeParse(req.body);
-    if (!parsed.success) {
-      res.status(400).json({ error: 'Datos inválidos', issues: parsed.error.issues });
-      return;
-    }
-    const workshop = await prisma.workshop.update({ where: { id }, data: parsed.data });
+    const id = parseId(req);
+    const workshop = await prisma.workshop.update({
+      where: { id },
+      data: req.body as Partial<WorkshopInput>,
+    });
     res.json({ data: workshop });
   }),
 );
@@ -78,7 +73,7 @@ router.delete(
   '/:id',
   requireRole(RoleGroups.MAINT_MANAGERS),
   ah(async (req, res) => {
-    const id = Number(req.params.id);
+    const id = parseId(req);
     await prisma.workshop.update({ where: { id }, data: { isActive: false } });
     res.status(204).end();
   }),

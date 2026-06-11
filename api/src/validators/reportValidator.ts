@@ -1,5 +1,4 @@
-// Archivo: /flotillas/api/src/validators/reportValidator.ts
-// ARCHIVO NUEVO — Validación para generación de reportes
+// Validación para generación de reportes
 
 import { z } from 'zod/v4';
 

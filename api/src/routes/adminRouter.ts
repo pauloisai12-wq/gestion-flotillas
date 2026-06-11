@@ -1,11 +1,12 @@
-// /api/src/routes/adminRouter.ts
 // Operaciones administrativas críticas — auditadas + doble confirmación
 
 import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod/v4';
 import prisma from '../lib/prisma';
 import { requireRole, RoleGroups } from '../middlewares/roleMiddleware';
-import { BadRequest, Forbidden } from '../middlewares/errorHandler';
+import { Forbidden } from '../middlewares/errorHandler';
+import { validateBody } from '../middlewares/validate';
+import { ah } from '../lib/asyncHandler';
 import { logger } from '../lib/logger';
 
 const router = Router();
@@ -23,65 +24,59 @@ const wipeSchema = z.object({
 router.post(
   '/wipe-operational',
   requireRole(RoleGroups.ADMIN_ONLY),
-  async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const parsed = wipeSchema.safeParse(req.body);
-      if (!parsed.success) {
-        return next(BadRequest('Confirmación inválida', parsed.error.issues));
-      }
+  validateBody(wipeSchema),
+  ah(async (req: Request, res: Response, next: NextFunction) => {
+    const { adminEmail } = req.body as z.infer<typeof wipeSchema>;
 
-      const userId = req.user!.userId;
-      const user = await prisma.user.findUnique({ where: { id: userId } });
+    const userId = req.user!.userId;
+    const user = await prisma.user.findUnique({ where: { id: userId } });
 
-      // El email del admin que confirma debe coincidir con el del usuario logueado
-      if (!user || user.email !== parsed.data.adminEmail.toLowerCase()) {
-        return next(Forbidden('El correo de confirmación no coincide con tu cuenta'));
-      }
-
-      logger.warn({ userId, email: user.email }, '⚠️ WIPE OPERATIONAL iniciado');
-
-      const counts: Record<string, number> = {};
-      const steps: [string, () => Promise<{ count: number }>][] = [
-        ['notifications', () => prisma.notification.deleteMany({})],
-        ['vehicle_notes', () => prisma.vehicleNote.deleteMany({})],
-        ['fuel_loads', () => prisma.fuelLoad.deleteMany({})],
-        ['maintenance_records', () => prisma.maintenanceRecord.deleteMany({})],
-        ['vehicle_assignments', () => prisma.vehicleAssignment.deleteMany({})],
-        ['documents', () => prisma.document.deleteMany({})],
-        ['vehicle_budgets', () => prisma.vehicleBudget.deleteMany({})],
-        ['monthly_budgets', () => prisma.monthlyBudget.deleteMany({})],
-        ['report_history', () => prisma.reportHistory.deleteMany({})],
-        ['vehicles', () => prisma.vehicle.deleteMany({})],
-        ['operators', () => prisma.operator.deleteMany({})],
-        ['approved_stations', () => prisma.approvedStation.deleteMany({})],
-        ['workshops', () => prisma.workshop.deleteMany({})],
-        ['service_catalog', () => prisma.serviceCatalog.deleteMany({})],
-        ['sectors', () => prisma.sector.deleteMany({})],
-        ['vehicle_types', () => prisma.vehicleType.deleteMany({})],
-      ];
-
-      for (const [name, fn] of steps) {
-        const r = await fn();
-        counts[name] = r.count;
-      }
-
-      // Registro explícito en AuditLog (además del automático)
-      await prisma.auditLog.create({
-        data: {
-          userId,
-          action: 'WIPE',
-          resource: 'OperationalData',
-          metadata: counts,
-          ipAddress: (req.ip || '').toString(),
-        },
-      });
-
-      logger.warn({ counts, userId }, '⚠️ WIPE OPERATIONAL completado');
-      res.json({ data: { deleted: counts, preservedUsers: await prisma.user.count() } });
-    } catch (e) {
-      next(e);
+    // El email del admin que confirma debe coincidir con el del usuario logueado
+    if (!user || user.email !== adminEmail.toLowerCase()) {
+      return next(Forbidden('El correo de confirmación no coincide con tu cuenta'));
     }
-  },
+
+    logger.warn({ userId, email: user.email }, '⚠️ WIPE OPERATIONAL iniciado');
+
+    const counts: Record<string, number> = {};
+    const steps: [string, () => Promise<{ count: number }>][] = [
+      ['notifications', () => prisma.notification.deleteMany({})],
+      ['vehicle_notes', () => prisma.vehicleNote.deleteMany({})],
+      ['fuel_loads', () => prisma.fuelLoad.deleteMany({})],
+      ['maintenance_records', () => prisma.maintenanceRecord.deleteMany({})],
+      ['vehicle_assignments', () => prisma.vehicleAssignment.deleteMany({})],
+      ['documents', () => prisma.document.deleteMany({})],
+      ['vehicle_budgets', () => prisma.vehicleBudget.deleteMany({})],
+      ['monthly_budgets', () => prisma.monthlyBudget.deleteMany({})],
+      ['report_history', () => prisma.reportHistory.deleteMany({})],
+      ['vehicles', () => prisma.vehicle.deleteMany({})],
+      ['operators', () => prisma.operator.deleteMany({})],
+      ['approved_stations', () => prisma.approvedStation.deleteMany({})],
+      ['workshops', () => prisma.workshop.deleteMany({})],
+      ['service_catalog', () => prisma.serviceCatalog.deleteMany({})],
+      ['sectors', () => prisma.sector.deleteMany({})],
+      ['vehicle_types', () => prisma.vehicleType.deleteMany({})],
+    ];
+
+    for (const [name, fn] of steps) {
+      const r = await fn();
+      counts[name] = r.count;
+    }
+
+    // Registro explícito en AuditLog (además del automático)
+    await prisma.auditLog.create({
+      data: {
+        userId,
+        action: 'WIPE',
+        resource: 'OperationalData',
+        metadata: counts,
+        ipAddress: (req.ip || '').toString(),
+      },
+    });
+
+    logger.warn({ counts, userId }, '⚠️ WIPE OPERATIONAL completado');
+    res.json({ data: { deleted: counts, preservedUsers: await prisma.user.count() } });
+  }),
 );
 
 // ═══════════════════════════════════════════════════

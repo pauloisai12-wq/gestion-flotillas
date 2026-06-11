@@ -1,4 +1,3 @@
-// Archivo: /api/src/validators/vehicleNoteValidator.ts
 // Validación de notas de bitácora
 
 import { z } from 'zod/v4';

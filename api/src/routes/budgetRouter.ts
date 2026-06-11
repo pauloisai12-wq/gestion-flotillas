@@ -1,17 +1,22 @@
-// /api/src/routes/budgetRouter.ts
 // Presupuestos v2 — unificados FUEL|MAINTENANCE con rollover mensual
-// Reemplaza completamente el router v1.
 
 import { Router, Request, Response } from 'express';
+import { z } from 'zod/v4';
 import { BudgetKind, Prisma } from '@prisma/client';
 import prisma from '../lib/prisma';
 import { requireRole, RoleGroups, Roles } from '../middlewares/roleMiddleware';
 import { ah } from '../lib/asyncHandler';
+import { validateBody, validateQuery } from '../middlewares/validate';
 import {
   assignBudgetSchema,
   distributeBudgetSchema,
   closeMonthSchema,
+  monthlyPoolSchema,
   listBudgetsQuerySchema,
+  AssignBudgetInput,
+  DistributeBudgetInput,
+  CloseMonthInput,
+  MonthlyPoolInput,
 } from '../validators/budgetValidator';
 import { closeMonthAndRollover } from '../services/budgetService';
 import { BadRequest, Forbidden } from '../middlewares/errorHandler';
@@ -32,12 +37,8 @@ function assertCanManageKind(role: string, kind: BudgetKind): void {
 }
 
 /** GET / — lista presupuestos con filtros (kind, year, month, vehicleId) */
-router.get('/', requireRole(RoleGroups.ANY_AUTH), ah(async (req: Request, res: Response) => {
-  const parsed = listBudgetsQuerySchema.safeParse(req.query);
-  if (!parsed.success) {
-    return res.status(400).json({ error: 'Query inválida', issues: parsed.error.issues });
-  }
-  const { kind, year, month, vehicleId } = parsed.data;
+router.get('/', requireRole(RoleGroups.ANY_AUTH), validateQuery(listBudgetsQuerySchema), ah(async (req: Request, res: Response) => {
+  const { kind, year, month, vehicleId } = req.query as unknown as z.infer<typeof listBudgetsQuerySchema>;
 
   const user = req.user!;
 
@@ -80,12 +81,8 @@ router.get('/', requireRole(RoleGroups.ANY_AUTH), ah(async (req: Request, res: R
 
 /** POST /assign — asignar baseAmount a UN vehículo en un periodo.
  *  requireRole(BUDGET_MANAGERS) como primera barrera; el check por kind afina luego. */
-router.post('/assign', requireRole(RoleGroups.BUDGET_MANAGERS), ah(async (req: Request, res: Response) => {
-  const parsed = assignBudgetSchema.safeParse(req.body);
-  if (!parsed.success) {
-    return res.status(400).json({ error: 'Datos inválidos', issues: parsed.error.issues });
-  }
-  const { vehicleId, kind, year, month, baseAmount } = parsed.data;
+router.post('/assign', requireRole(RoleGroups.BUDGET_MANAGERS), validateBody(assignBudgetSchema), ah(async (req: Request, res: Response) => {
+  const { vehicleId, kind, year, month, baseAmount } = req.body as AssignBudgetInput;
 
   const user = req.user!;
 
@@ -148,12 +145,8 @@ router.post('/assign', requireRole(RoleGroups.BUDGET_MANAGERS), ah(async (req: R
 }));
 
 /** POST /distribute — asignación masiva (valida contra pote) */
-router.post('/distribute', requireRole(RoleGroups.BUDGET_MANAGERS), ah(async (req: Request, res: Response) => {
-  const parsed = distributeBudgetSchema.safeParse(req.body);
-  if (!parsed.success) {
-    return res.status(400).json({ error: 'Datos inválidos', issues: parsed.error.issues });
-  }
-  const { kind, year, month, distributions } = parsed.data;
+router.post('/distribute', requireRole(RoleGroups.BUDGET_MANAGERS), validateBody(distributeBudgetSchema), ah(async (req: Request, res: Response) => {
+  const { kind, year, month, distributions } = req.body as DistributeBudgetInput;
   const user = req.user!;
 
   assertCanManageKind(user.role, kind);
@@ -218,12 +211,8 @@ router.post('/distribute', requireRole(RoleGroups.BUDGET_MANAGERS), ah(async (re
 }));
 
 /** POST /close-month — cerrar mes + rollover idempotente (admin) */
-router.post('/close-month', requireRole(RoleGroups.ADMIN_ONLY), ah(async (req: Request, res: Response) => {
-  const parsed = closeMonthSchema.safeParse(req.body);
-  if (!parsed.success) {
-    return res.status(400).json({ error: 'Datos inválidos', issues: parsed.error.issues });
-  }
-  const result = await closeMonthAndRollover(parsed.data);
+router.post('/close-month', requireRole(RoleGroups.ADMIN_ONLY), validateBody(closeMonthSchema), ah(async (req: Request, res: Response) => {
+  const result = await closeMonthAndRollover(req.body as CloseMonthInput);
   res.json({ data: result });
 }));
 
@@ -280,34 +269,21 @@ router.get('/monthly-pool', requireRole(RoleGroups.ANY_AUTH), ah(async (req: Req
 }));
 
 /** PUT /monthly-pool — declarar/actualizar el pote total del mes */
-router.put('/monthly-pool', requireRole(RoleGroups.BUDGET_MANAGERS), ah(async (req: Request, res: Response) => {
-  const schema = {
-    kind: req.body.kind,
-    year: Number(req.body.year),
-    month: Number(req.body.month),
-    totalAmount: Number(req.body.totalAmount),
-    notes: req.body.notes || null,
-  };
-
-  if (!['FUEL', 'MAINTENANCE'].includes(schema.kind)) {
-    return res.status(400).json({ error: 'kind debe ser FUEL o MAINTENANCE' });
-  }
-  if (!Number.isFinite(schema.totalAmount) || schema.totalAmount < 0) {
-    return res.status(400).json({ error: 'totalAmount debe ser número >= 0' });
-  }
+router.put('/monthly-pool', requireRole(RoleGroups.BUDGET_MANAGERS), validateBody(monthlyPoolSchema), ah(async (req: Request, res: Response) => {
+  const { kind, year, month, totalAmount, notes } = req.body as MonthlyPoolInput;
 
   const user = req.user!;
-  assertCanManageKind(user.role, schema.kind as BudgetKind);
+  assertCanManageKind(user.role, kind);
 
   const pool = await prisma.monthlyBudget.upsert({
-    where: { kind_year_month: { kind: schema.kind, year: schema.year, month: schema.month } },
+    where: { kind_year_month: { kind, year, month } },
     create: {
-      kind: schema.kind, year: schema.year, month: schema.month,
-      totalAmount: schema.totalAmount, notes: schema.notes,
+      kind, year, month,
+      totalAmount, notes: notes ?? null,
       createdBy: user.userId, updatedBy: user.userId,
     },
     update: {
-      totalAmount: schema.totalAmount, notes: schema.notes, updatedBy: user.userId,
+      totalAmount, notes: notes ?? null, updatedBy: user.userId,
     },
   });
 

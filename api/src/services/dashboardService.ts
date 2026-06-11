@@ -1,6 +1,4 @@
-// Archivo: api/src/services/dashboardService.ts
-// Propósito: Servicios del dashboard con soporte de filtros globales
-// REEMPLAZA: contenido anterior completo
+// Servicios del dashboard con soporte de filtros globales
 
 import prisma from '../lib/prisma';
 import { Prisma } from '@prisma/client';

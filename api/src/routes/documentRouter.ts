@@ -1,10 +1,12 @@
-import { Router, Request, Response, NextFunction } from 'express';
+import { Router, Request, Response } from 'express';
 import multer from 'multer';
 import path from 'path';
 import crypto from 'crypto';
 import { documentSchema } from '../validators/documentValidator';
 import * as documentService from '../services/documentService';
 import { roleMiddleware, RoleGroups } from '../middlewares/roleMiddleware';
+import { ah } from '../lib/asyncHandler';
+import { parseId } from '../lib/http';
 
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => {
@@ -34,118 +36,98 @@ const upload = multer({
 
 const router = Router();
 
-router.get('/vehicles/:vehicleId/documents', roleMiddleware(RoleGroups.VEHICLE_READERS), async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const vehicleId = parseInt(req.params.vehicleId);
-    if (isNaN(vehicleId)) return res.status(400).json({ error: 'ID inválido' });
-    const docs = await documentService.getDocumentsByVehicle(vehicleId);
-    res.json(docs);
-  } catch (error) {
-    next(error);
-    }
-});
+router.get('/vehicles/:vehicleId/documents', roleMiddleware(RoleGroups.VEHICLE_READERS), ah(async (req: Request, res: Response) => {
+  const vehicleId = parseId(req, 'vehicleId');
+  const docs = await documentService.getDocumentsByVehicle(vehicleId);
+  res.json(docs);
+}));
 
-router.get('/documents/:id', roleMiddleware(RoleGroups.VEHICLE_READERS), async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const id = parseInt(req.params.id);
-    if (isNaN(id)) return res.status(400).json({ error: 'ID inválido' });
-    const doc = await documentService.getDocumentById(id);
-    res.json(doc);
-  } catch (error) {
-    next(error);
-    }
-});
+router.get('/documents/:id', roleMiddleware(RoleGroups.VEHICLE_READERS), ah(async (req: Request, res: Response) => {
+  const id = parseId(req);
+  const doc = await documentService.getDocumentById(id);
+  res.json(doc);
+}));
 
 router.post(
   '/documents',
   roleMiddleware(['ADMIN', 'SUPERVISOR_VEHICLES']),
   upload.single('file'),
-  async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const body = {
-        vehicleId: parseInt(req.body.vehicleId),
-        type: req.body.type,
-        issuedAt: req.body.issuedAt,
-        expiresAt: req.body.expiresAt,
-        notes: req.body.notes || null,
-      };
+  ah(async (req: Request, res: Response) => {
+    // Multipart: tras multer los campos llegan como texto, por eso el armado
+    // manual del body antes del safeParse (validateBody no aplica aquí).
+    const body = {
+      vehicleId: parseInt(req.body.vehicleId),
+      type: req.body.type,
+      issuedAt: req.body.issuedAt,
+      expiresAt: req.body.expiresAt,
+      notes: req.body.notes || null,
+    };
 
-      const parsed = documentSchema.safeParse(body);
-      if (!parsed.success) {
-        return res.status(400).json({
-          error: 'Datos inválidos',
-          details: parsed.error.issues.map((i) => ({
-            field: i.path.join('.'),
-            message: i.message,
-          })),
-        });
-      }
+    const parsed = documentSchema.safeParse(body);
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: 'Datos inválidos',
+        details: parsed.error.issues.map((i) => ({
+          field: i.path.join('.'),
+          message: i.message,
+        })),
+      });
+    }
 
-      const file = req.file
-        ? { filename: req.file.filename, originalname: req.file.originalname }
-        : undefined;
+    const file = req.file
+      ? { filename: req.file.filename, originalname: req.file.originalname }
+      : undefined;
 
-      const doc = await documentService.createDocument(parsed.data, file);
-      res.status(201).json(doc);
-    } catch (error) {
-      next(error);
-      }
-  }
+    const doc = await documentService.createDocument(parsed.data, file);
+    res.status(201).json(doc);
+  })
 );
 
 router.put(
   '/documents/:id',
   roleMiddleware(['ADMIN', 'SUPERVISOR_VEHICLES']),
   upload.single('file'),
-  async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const id = parseInt(req.params.id);
-      if (isNaN(id)) return res.status(400).json({ error: 'ID inválido' });
+  ah(async (req: Request, res: Response) => {
+    const id = parseId(req);
 
-      const body = {
-        vehicleId: parseInt(req.body.vehicleId),
-        type: req.body.type,
-        issuedAt: req.body.issuedAt,
-        expiresAt: req.body.expiresAt,
-        notes: req.body.notes || null,
-      };
+    // Multipart: tras multer los campos llegan como texto, por eso el armado
+    // manual del body antes del safeParse (validateBody no aplica aquí).
+    const body = {
+      vehicleId: parseInt(req.body.vehicleId),
+      type: req.body.type,
+      issuedAt: req.body.issuedAt,
+      expiresAt: req.body.expiresAt,
+      notes: req.body.notes || null,
+    };
 
-      const parsed = documentSchema.safeParse(body);
-      if (!parsed.success) {
-        return res.status(400).json({
-          error: 'Datos inválidos',
-          details: parsed.error.issues.map((i) => ({
-            field: i.path.join('.'),
-            message: i.message,
-          })),
-        });
-      }
+    const parsed = documentSchema.safeParse(body);
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: 'Datos inválidos',
+        details: parsed.error.issues.map((i) => ({
+          field: i.path.join('.'),
+          message: i.message,
+        })),
+      });
+    }
 
-      const file = req.file
-        ? { filename: req.file.filename, originalname: req.file.originalname }
-        : undefined;
+    const file = req.file
+      ? { filename: req.file.filename, originalname: req.file.originalname }
+      : undefined;
 
-      const doc = await documentService.updateDocument(id, parsed.data, file);
-      res.json(doc);
-    } catch (error) {
-      next(error);
-      }
-  }
+    const doc = await documentService.updateDocument(id, parsed.data, file);
+    res.json(doc);
+  })
 );
 
 router.delete(
   '/documents/:id',
   roleMiddleware(['ADMIN', 'SUPERVISOR_VEHICLES']),
-  async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const id = parseInt(req.params.id);
-      if (isNaN(id)) return res.status(400).json({ error: 'ID inválido' });
-      await documentService.deleteDocument(id);
-      res.json({ message: 'Documento eliminado correctamente' });
-    } catch (error) {
-      next(error);
-      }
-  }
+  ah(async (req: Request, res: Response) => {
+    const id = parseId(req);
+    await documentService.deleteDocument(id);
+    res.json({ message: 'Documento eliminado correctamente' });
+  })
 );
 
 export default router;

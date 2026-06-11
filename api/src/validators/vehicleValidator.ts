@@ -1,4 +1,3 @@
-// Archivo: /api/src/validators/vehicleValidator.ts
 // Validación de vehículos — v2 con classification + sectorId
 
 import { z } from 'zod/v4';

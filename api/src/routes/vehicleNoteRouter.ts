@@ -1,11 +1,16 @@
-// /api/src/routes/vehicleNoteRouter.ts
 // Bitácora de notas de un vehículo — append-only log con edición auditada
 
 import { Router, Request, Response } from 'express';
 import prisma from '../lib/prisma';
 import { requireRole, RoleGroups, Roles } from '../middlewares/roleMiddleware';
 import { ah } from '../lib/asyncHandler';
-import { vehicleNoteCreateSchema, vehicleNoteUpdateSchema } from '../validators/vehicleNoteValidator';
+import { validateBody } from '../middlewares/validate';
+import { parseId, ensureFound } from '../lib/http';
+import {
+  vehicleNoteCreateSchema,
+  vehicleNoteUpdateSchema,
+  VehicleNoteInput,
+} from '../validators/vehicleNoteValidator';
 
 const router = Router({ mergeParams: true });
 
@@ -14,8 +19,7 @@ router.get(
   '/vehicles/:vehicleId/notes',
   requireRole(RoleGroups.VEHICLE_READERS),
   ah(async (req: Request, res: Response) => {
-    const vehicleId = Number(req.params.vehicleId);
-    if (!Number.isInteger(vehicleId)) return res.status(400).json({ error: 'ID inválido' });
+    const vehicleId = parseId(req, 'vehicleId');
     const notes = await prisma.vehicleNote.findMany({
       where: { vehicleId, deletedAt: null },
       include: {
@@ -32,20 +36,19 @@ router.get(
 router.post(
   '/vehicles/:vehicleId/notes',
   requireRole(RoleGroups.NOTES_WRITERS),
+  validateBody(vehicleNoteCreateSchema),
   ah(async (req: Request, res: Response) => {
-    const vehicleId = Number(req.params.vehicleId);
-    if (!Number.isInteger(vehicleId)) return res.status(400).json({ error: 'ID inválido' });
-    const parsed = vehicleNoteCreateSchema.safeParse(req.body);
-    if (!parsed.success) {
-      return res.status(400).json({ error: 'Datos inválidos', issues: parsed.error.issues });
-    }
+    const vehicleId = parseId(req, 'vehicleId');
+    const { content } = req.body as VehicleNoteInput;
     const userId = req.user!.userId;
 
-    const vehicleExists = await prisma.vehicle.findUnique({ where: { id: vehicleId }, select: { id: true } });
-    if (!vehicleExists) return res.status(404).json({ error: 'Vehículo no encontrado' });
+    ensureFound(
+      await prisma.vehicle.findUnique({ where: { id: vehicleId }, select: { id: true } }),
+      'Vehículo',
+    );
 
     const note = await prisma.vehicleNote.create({
-      data: { vehicleId, content: parsed.data.content, createdBy: userId },
+      data: { vehicleId, content, createdBy: userId },
       include: { author: { select: { id: true, fullName: true } } },
     });
     res.status(201).json({ data: note });
@@ -56,13 +59,10 @@ router.post(
 router.patch(
   '/notes/:noteId',
   requireRole(RoleGroups.NOTES_WRITERS),
+  validateBody(vehicleNoteUpdateSchema),
   ah(async (req: Request, res: Response) => {
-    const noteId = Number(req.params.noteId);
-    if (!Number.isInteger(noteId)) return res.status(400).json({ error: 'ID inválido' });
-    const parsed = vehicleNoteUpdateSchema.safeParse(req.body);
-    if (!parsed.success) {
-      return res.status(400).json({ error: 'Datos inválidos', issues: parsed.error.issues });
-    }
+    const noteId = parseId(req, 'noteId');
+    const { content } = req.body as VehicleNoteInput;
     const user = req.user!;
 
     const note = await prisma.vehicleNote.findUnique({ where: { id: noteId } });
@@ -75,7 +75,7 @@ router.patch(
 
     const updated = await prisma.vehicleNote.update({
       where: { id: noteId },
-      data: { content: parsed.data.content, updatedBy: user.userId },
+      data: { content, updatedBy: user.userId },
       include: {
         author: { select: { id: true, fullName: true } },
         editor: { select: { id: true, fullName: true } },
@@ -90,8 +90,7 @@ router.delete(
   '/notes/:noteId',
   requireRole(RoleGroups.NOTES_WRITERS),
   ah(async (req: Request, res: Response) => {
-    const noteId = Number(req.params.noteId);
-    if (!Number.isInteger(noteId)) return res.status(400).json({ error: 'ID inválido' });
+    const noteId = parseId(req, 'noteId');
     const user = req.user!;
 
     const note = await prisma.vehicleNote.findUnique({ where: { id: noteId } });

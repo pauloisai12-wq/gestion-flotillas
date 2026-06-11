@@ -1,4 +1,3 @@
-// Archivo: /api/src/validators/workshopValidator.ts
 // Validación de talleres — mismo contrato que gasolineras
 
 import { z } from 'zod/v4';

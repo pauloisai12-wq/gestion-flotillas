@@ -1,5 +1,4 @@
-// Archivo: /flotillas/api/src/services/documentService.ts
-// NUEVO: Operaciones CRUD de documentos vehiculares con semáforo
+// Operaciones CRUD de documentos vehiculares con semáforo
 import prisma from '../lib/prisma';
 import { DocumentInput } from '../validators/documentValidator';
 import { NotFound, Conflict } from '../middlewares/errorHandler';

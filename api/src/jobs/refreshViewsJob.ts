@@ -1,5 +1,4 @@
-// Archivo: api/src/jobs/refreshViewsJob.ts
-// Propósito: Job que refresca las vistas materializadas del dashboard cada 15 minutos
+// Job que refresca las vistas materializadas del dashboard cada 15 minutos
 
 import prisma from '../lib/prisma';
 import { logger } from '../lib/logger';

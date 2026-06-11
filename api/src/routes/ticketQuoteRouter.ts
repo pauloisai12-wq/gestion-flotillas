@@ -1,4 +1,3 @@
-// /api/src/routes/ticketQuoteRouter.ts
 // Endpoints para que los talleres operen sus cotizaciones.
 //
 // Montado en /api/ticket-quotes (ver index.ts).
@@ -10,7 +9,14 @@ import crypto from 'crypto';
 import { RoleGroups, requireRole } from '../middlewares/roleMiddleware';
 import * as ticketService from '../services/maintenanceTicketService';
 import { TicketError } from '../services/maintenanceTicketService';
-import { submitQuoteSchema, declineQuoteSchema } from '../validators/maintenanceTicketValidator';
+import {
+  submitQuoteSchema,
+  declineQuoteSchema,
+  SubmitQuoteInput,
+  DeclineQuoteInput,
+} from '../validators/maintenanceTicketValidator';
+import { validateBody } from '../middlewares/validate';
+import { parseId, parsePagination } from '../lib/http';
 import prisma from '../lib/prisma';
 
 const router = Router();
@@ -36,15 +42,6 @@ const pdfUpload = multer({
     cb(new Error('La cotización debe ser un archivo PDF'));
   },
 });
-
-function parseIdParam(req: Request, res: Response, param = 'id'): number | null {
-  const id = parseInt(req.params[param], 10);
-  if (isNaN(id) || id <= 0) {
-    res.status(400).json({ error: 'ID inválido' });
-    return null;
-  }
-  return id;
-}
 
 function handleTicketError(err: unknown, res: Response, next?: NextFunction) {
   if (err instanceof TicketError) {
@@ -76,8 +73,7 @@ router.get(
       if (!user?.workshopId) return res.json({ quotes: [] });
 
       // Paginación con tope para no traer todo el histórico de cotizaciones.
-      const page = Math.max(1, Number(req.query.page) || 1);
-      const limit = Math.min(50, Number(req.query.limit) || 20);
+      const { page, limit } = parsePagination(req, { maxLimit: 50 });
 
       const quotes = await prisma.ticketQuote.findMany({
         where: { workshopId: user.workshopId },
@@ -112,24 +108,18 @@ router.post(
   '/:id/submit',
   requireRole(RoleGroups.WORKSHOP_ONLY),
   pdfUpload.single('pdf'),
+  // validateBody va tras multer: los campos multipart llegan como strings y
+  // submitQuoteSchema ya los coercea (z.coerce.number en amount).
+  validateBody(submitQuoteSchema),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const id = parseIdParam(req, res);
-      if (id === null) return;
+      const id = parseId(req);
       if (!req.file) return res.status(400).json({ error: 'Falta el archivo PDF en campo "pdf"' });
-
-      const parsed = submitQuoteSchema.safeParse(req.body);
-      if (!parsed.success) {
-        return res.status(400).json({
-          error: 'Datos inválidos',
-          details: parsed.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })),
-        });
-      }
 
       const quote = await ticketService.submitQuote(
         id,
         req.user!.userId,
-        parsed.data,
+        req.body as SubmitQuoteInput,
         {
           url: `/uploads/maintenance-tickets/quotes/${req.file.filename}`,
           fileName: req.file.originalname,
@@ -148,18 +138,11 @@ router.post(
 router.post(
   '/:id/decline',
   requireRole(RoleGroups.WORKSHOP_ONLY),
+  validateBody(declineQuoteSchema),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const id = parseIdParam(req, res);
-      if (id === null) return;
-      const parsed = declineQuoteSchema.safeParse(req.body);
-      if (!parsed.success) {
-        return res.status(400).json({
-          error: 'Datos inválidos',
-          details: parsed.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })),
-        });
-      }
-      const quote = await ticketService.declineQuote(id, req.user!.userId, parsed.data);
+      const id = parseId(req);
+      const quote = await ticketService.declineQuote(id, req.user!.userId, req.body as DeclineQuoteInput);
       res.json(quote);
     } catch (err) {
       handleTicketError(err, res, next);

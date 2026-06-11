@@ -1,4 +1,3 @@
-// /api/src/routes/publicRouter.ts
 // Portal público para operadores — SIN auth, con protecciones:
 //   - Rate limit por IP (Redis)
 //   - CSRF tokens en Redis (sobreviven restart, escalan horizontalmente)
@@ -25,6 +24,18 @@ const publicRateLimit = rateLimit({
 });
 
 router.use(publicRateLimit);
+
+// Rate limit POR RUTA para /verify, apilado sobre el global: el endpoint
+// permite enumerar operadores/vehículos probando employeeNumber/economicNumber,
+// así que se limita más agresivo (5/min por IP) y fail-closed (como /login:
+// si Redis cae, NO se desactiva la protección anti-enumeración).
+const verifyRateLimit = rateLimit({
+  max: 5,
+  windowSec: 60,
+  keyBuilder: (req) => `public-verify:${getClientIp(req)}`,
+  message: 'Demasiadas verificaciones. Espera un minuto.',
+  failClosed: true,
+});
 
 // ─────────────────────────────────────────────
 // CSRF tokens en Redis (TTL 10 min, one-use)
@@ -107,7 +118,7 @@ router.get('/stations', async (_req, res, next) => {
 // ═══════════════════════════════════════════════════
 // GET /verify — valida operador + vehículo + retorna presupuesto
 // ═══════════════════════════════════════════════════
-router.get('/verify', async (req: Request, res: Response, next: NextFunction) => {
+router.get('/verify', verifyRateLimit, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const employeeNumber = String(req.query.employeeNumber ?? '').trim();
     const economicNumber = String(req.query.economicNumber ?? '').trim();

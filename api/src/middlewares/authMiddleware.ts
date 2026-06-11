@@ -1,7 +1,7 @@
 // Auth middleware — verifica JWT + crea contexto de auditoría
 
 import { Request, Response, NextFunction } from 'express';
-import { verifyToken } from '../services/authService';
+import { verifyToken, isTokenBlacklisted, type JwtPayload } from '../services/authService';
 import { runWithAuditContext } from '../lib/auditContext';
 import { Unauthorized } from './errorHandler';
 
@@ -16,24 +16,39 @@ function tokenFromCookie(req: Request): string | null {
   return null;
 }
 
-export function authMiddleware(req: Request, res: Response, next: NextFunction): void {
-  // 1) Bearer header (compat) — 2) cookie httpOnly (preferido).
-  let token: string | null = null;
+/**
+ * Extrae el token de la petición: 1) Bearer header (compat) — 2) cookie
+ * httpOnly (preferido). Lanza Unauthorized si el header tiene formato inválido.
+ */
+export function tokenFromRequest(req: Request): string | null {
   const authHeader = req.headers.authorization;
   if (authHeader) {
     const parts = authHeader.split(' ');
     if (parts.length !== 2 || parts[0] !== 'Bearer') {
-      return next(Unauthorized('Formato inválido. Use: Bearer <token>'));
+      throw Unauthorized('Formato inválido. Use: Bearer <token>');
     }
-    token = parts[1];
-  } else {
-    token = tokenFromCookie(req);
+    return parts[1];
   }
+  return tokenFromCookie(req);
+}
 
-  if (!token) return next(Unauthorized('Token requerido'));
-
+export async function authMiddleware(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const payload = verifyToken(token);
+    const token = tokenFromRequest(req);
+    if (!token) return next(Unauthorized('Token requerido'));
+
+    let payload: JwtPayload;
+    try {
+      payload = verifyToken(token);
+    } catch {
+      return next(Unauthorized('Token inválido o expirado'));
+    }
+
+    // Token invalidado por logout (blacklist en Redis; fail-open si Redis cae).
+    if (await isTokenBlacklisted(token)) {
+      return next(Unauthorized('Sesión cerrada'));
+    }
+
     req.user = payload;
 
     // Crear contexto de auditoría con userId/ip/requestId
@@ -46,7 +61,8 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction):
       },
       () => next(),
     );
-  } catch {
-    return next(Unauthorized('Token inválido o expirado'));
+  } catch (err) {
+    // Middleware async: cualquier error debe seguir llegando al errorHandler.
+    next(err);
   }
 }

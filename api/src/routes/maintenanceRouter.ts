@@ -1,14 +1,20 @@
-// api/src/routes/maintenanceRouter.ts
 // Endpoints para registros de mantenimiento y consulta de próximos servicios.
 
-import { Router, Request, Response, NextFunction } from 'express';
+import { Router, Request, Response } from 'express';
 import multer from 'multer';
 import path from 'path';
 import crypto from 'crypto';
 import { roleMiddleware } from '../middlewares/roleMiddleware';
-import { maintenanceSchema } from '../validators/maintenanceValidator';
+import {
+  maintenanceSchema,
+  listMaintenanceQuerySchema,
+  ListMaintenanceQuery,
+} from '../validators/maintenanceValidator';
 import * as maintenanceRecordService from '../services/maintenanceRecordService';
 import { getUpcomingServices, getAllPendingServices } from '../services/maintenanceService';
+import { ah } from '../lib/asyncHandler';
+import { validateQuery } from '../middlewares/validate';
+import { parseId } from '../lib/http';
 
 // Configuración de multer para evidencia fotográfica.
 // SEGURIDAD: el nombre original del cliente NUNCA toca el filesystem (evita
@@ -44,137 +50,97 @@ const upload = multer({
 const router = Router();
 
 // GET /api/maintenance/pending — Todos los servicios pendientes (WARNING + OVERDUE)
-router.get('/pending', async function(req: Request, res: Response, next: NextFunction) {
-  try {
-    const pending = await getAllPendingServices();
-    res.json({ data: pending });
-  } catch (error) {
-    next(error);
-    }
-});
+router.get('/pending', ah(async function(_req: Request, res: Response) {
+  const pending = await getAllPendingServices();
+  res.json({ data: pending });
+}));
 
 // GET /api/maintenance/upcoming/:vehicleId — Próximos servicios de un vehículo
-router.get('/upcoming/:vehicleId', async function(req: Request, res: Response, next: NextFunction) {
-  try {
-    const vehicleId = parseInt(req.params.vehicleId);
-    if (isNaN(vehicleId)) return res.status(400).json({ error: 'ID inválido' });
-
-    const services = await getUpcomingServices(vehicleId);
-    res.json({ data: services });
-  } catch (error) {
-    next(error);
-    }
-});
+router.get('/upcoming/:vehicleId', ah(async function(req: Request, res: Response) {
+  const vehicleId = parseId(req, 'vehicleId');
+  const services = await getUpcomingServices(vehicleId);
+  res.json({ data: services });
+}));
 
 // GET /api/maintenance — Lista paginada de registros
-router.get('/', async function(req: Request, res: Response, next: NextFunction) {
-  try {
-    const query = {
-      page: req.query.page ? parseInt(req.query.page as string) : 1,
-      limit: req.query.limit ? parseInt(req.query.limit as string) : 20,
-      vehicleId: req.query.vehicleId ? parseInt(req.query.vehicleId as string) : undefined,
-      serviceId: req.query.serviceId ? parseInt(req.query.serviceId as string) : undefined,
-    };
-
-    const result = await maintenanceRecordService.getAll(query);
-    res.json(result);
-  } catch (error) {
-    next(error);
-    }
-});
+router.get('/', validateQuery(listMaintenanceQuerySchema), ah(async function(req: Request, res: Response) {
+  const result = await maintenanceRecordService.getAll(req.query as unknown as ListMaintenanceQuery);
+  res.json(result);
+}));
 
 // GET /api/maintenance/vehicle/:vehicleId — Historial de un vehículo
-router.get('/vehicle/:vehicleId', async function(req: Request, res: Response, next: NextFunction) {
-  try {
-    const vehicleId = parseInt(req.params.vehicleId);
-    if (isNaN(vehicleId)) return res.status(400).json({ error: 'ID inválido' });
-
-    const records = await maintenanceRecordService.getByVehicle(vehicleId);
-    res.json({ data: records });
-  } catch (error) {
-    next(error);
-    }
-});
+router.get('/vehicle/:vehicleId', ah(async function(req: Request, res: Response) {
+  const vehicleId = parseId(req, 'vehicleId');
+  const records = await maintenanceRecordService.getByVehicle(vehicleId);
+  res.json({ data: records });
+}));
 
 // POST /api/maintenance — Registrar mantenimiento (ADMIN, SUPERVISOR)
-router.post('/', roleMiddleware(['ADMIN', 'SUPERVISOR_VEHICLES']), upload.single('evidence'), async function(req: Request, res: Response, next: NextFunction) {
-  try {
-    // multer pone los campos de texto en req.body como strings, hay que parsear números
-    const body = {
-      vehicleId: parseInt(req.body.vehicleId),
-      serviceId: parseInt(req.body.serviceId),
-      odometer: parseFloat(req.body.odometer),
-      cost: parseFloat(req.body.cost),
-      provider: req.body.provider,
-      workshop: req.body.workshop,
-      serviceDate: req.body.serviceDate,
-      notes: req.body.notes,
-    };
+// NOTA: se conserva el safeParse inline (no validateBody) porque multer entrega
+// los campos como strings y el schema no es coercitivo: hay que parsear números antes.
+router.post('/', roleMiddleware(['ADMIN', 'SUPERVISOR_VEHICLES']), upload.single('evidence'), ah(async function(req: Request, res: Response) {
+  // multer pone los campos de texto en req.body como strings, hay que parsear números
+  const body = {
+    vehicleId: parseInt(req.body.vehicleId),
+    serviceId: parseInt(req.body.serviceId),
+    odometer: parseFloat(req.body.odometer),
+    cost: parseFloat(req.body.cost),
+    provider: req.body.provider,
+    workshop: req.body.workshop,
+    serviceDate: req.body.serviceDate,
+    notes: req.body.notes,
+  };
 
-    const parsed = maintenanceSchema.safeParse(body);
-    if (!parsed.success) {
-      return res.status(400).json({
-        error: 'Datos inválidos',
-        details: parsed.error.issues.map(function(i) {
-          return { field: i.path.join('.'), message: i.message };
-        }),
-      });
-    }
+  const parsed = maintenanceSchema.safeParse(body);
+  if (!parsed.success) {
+    return res.status(400).json({
+      error: 'Datos inválidos',
+      details: parsed.error.issues.map(function(i) {
+        return { field: i.path.join('.'), message: i.message };
+      }),
+    });
+  }
 
-    const evidenceUrl = req.file ? '/uploads/maintenance/' + req.file.filename : undefined;
-    const record = await maintenanceRecordService.create(parsed.data, evidenceUrl);
-    res.status(201).json({ data: record });
-  } catch (error) {
-    next(error);
-    }
-});
+  const evidenceUrl = req.file ? '/uploads/maintenance/' + req.file.filename : undefined;
+  const record = await maintenanceRecordService.create(parsed.data, evidenceUrl);
+  res.status(201).json({ data: record });
+}));
 
 // PUT /api/maintenance/:id — Actualizar registro (ADMIN, SUPERVISOR)
-router.put('/:id', roleMiddleware(['ADMIN', 'SUPERVISOR_VEHICLES']), upload.single('evidence'), async function(req: Request, res: Response, next: NextFunction) {
-  try {
-    const id = parseInt(req.params.id);
-    if (isNaN(id)) return res.status(400).json({ error: 'ID inválido' });
+router.put('/:id', roleMiddleware(['ADMIN', 'SUPERVISOR_VEHICLES']), upload.single('evidence'), ah(async function(req: Request, res: Response) {
+  const id = parseId(req);
 
-    const body = {
-      vehicleId: parseInt(req.body.vehicleId),
-      serviceId: parseInt(req.body.serviceId),
-      odometer: parseFloat(req.body.odometer),
-      cost: parseFloat(req.body.cost),
-      provider: req.body.provider,
-      workshop: req.body.workshop,
-      serviceDate: req.body.serviceDate,
-      notes: req.body.notes,
-    };
+  const body = {
+    vehicleId: parseInt(req.body.vehicleId),
+    serviceId: parseInt(req.body.serviceId),
+    odometer: parseFloat(req.body.odometer),
+    cost: parseFloat(req.body.cost),
+    provider: req.body.provider,
+    workshop: req.body.workshop,
+    serviceDate: req.body.serviceDate,
+    notes: req.body.notes,
+  };
 
-    const parsed = maintenanceSchema.safeParse(body);
-    if (!parsed.success) {
-      return res.status(400).json({
-        error: 'Datos inválidos',
-        details: parsed.error.issues.map(function(i) {
-          return { field: i.path.join('.'), message: i.message };
-        }),
-      });
-    }
+  const parsed = maintenanceSchema.safeParse(body);
+  if (!parsed.success) {
+    return res.status(400).json({
+      error: 'Datos inválidos',
+      details: parsed.error.issues.map(function(i) {
+        return { field: i.path.join('.'), message: i.message };
+      }),
+    });
+  }
 
-    const evidenceUrl = req.file ? '/uploads/maintenance/' + req.file.filename : undefined;
-    const record = await maintenanceRecordService.update(id, parsed.data, evidenceUrl);
-    res.json({ data: record });
-  } catch (error) {
-    next(error);
-    }
-});
+  const evidenceUrl = req.file ? '/uploads/maintenance/' + req.file.filename : undefined;
+  const record = await maintenanceRecordService.update(id, parsed.data, evidenceUrl);
+  res.json({ data: record });
+}));
 
 // DELETE /api/maintenance/:id — Eliminar registro (ADMIN)
-router.delete('/:id', roleMiddleware(['ADMIN']), async function(req: Request, res: Response, next: NextFunction) {
-  try {
-    const id = parseInt(req.params.id);
-    if (isNaN(id)) return res.status(400).json({ error: 'ID inválido' });
-
-    await maintenanceRecordService.remove(id);
-    res.json({ message: 'Registro eliminado correctamente' });
-  } catch (error) {
-    next(error);
-    }
-});
+router.delete('/:id', roleMiddleware(['ADMIN']), ah(async function(req: Request, res: Response) {
+  const id = parseId(req);
+  await maintenanceRecordService.remove(id);
+  res.json({ message: 'Registro eliminado correctamente' });
+}));
 
 export default router;

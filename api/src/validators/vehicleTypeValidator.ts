@@ -1,5 +1,4 @@
-// Archivo: /flotillas/api/src/validators/vehicleTypeValidator.ts
-// NUEVO: Validación de datos de entrada para tipos de vehículo
+// Validación de datos de entrada para tipos de vehículo
 import { z } from 'zod/v4';
 
 // Esquema que valida los datos al crear o editar un tipo de vehículo

@@ -1,4 +1,3 @@
-// api/src/validators/serviceCatalogValidator.ts
 // Validaciones para el catálogo de servicios de mantenimiento
 
 import { z } from 'zod/v4';
@@ -11,3 +10,10 @@ export const serviceCatalogSchema = z.object({
 });
 
 export type ServiceCatalogInput = z.infer<typeof serviceCatalogSchema>;
+
+/** Query de listado: filtro opcional por tipo de vehículo. */
+export const serviceCatalogQuerySchema = z.object({
+  vehicleTypeId: z.coerce.number().int().positive().optional(),
+});
+
+export type ServiceCatalogQuery = z.infer<typeof serviceCatalogQuerySchema>;

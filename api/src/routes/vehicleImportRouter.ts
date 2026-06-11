@@ -1,4 +1,3 @@
-// /api/src/routes/vehicleImportRouter.ts
 // Import de Excel/CSV con validación de magic bytes (no solo MIME type)
 
 import { Router, Request, Response, NextFunction } from 'express';
@@ -9,6 +8,7 @@ import multer from 'multer';
 import { requireRole, RoleGroups } from '../middlewares/roleMiddleware';
 import { importVehiclesFromBuffer } from '../services/vehicleImportService';
 import { BadRequest } from '../middlewares/errorHandler';
+import { ah } from '../lib/asyncHandler';
 import { logger } from '../lib/logger';
 
 const router = Router();
@@ -31,34 +31,30 @@ router.post(
   '/import',
   requireRole(RoleGroups.VEHICLE_WRITERS),
   upload.single('file'),
-  async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      if (!req.file) return next(BadRequest('Sube un archivo en el campo "file"'));
+  ah(async (req: Request, res: Response, next: NextFunction) => {
+    if (!req.file) return next(BadRequest('Sube un archivo en el campo "file"'));
 
-      // Validar MAGIC BYTES (no confiar en mimetype/extensión)
-      const { fileTypeFromBuffer } = await import('file-type');
-      const type = await fileTypeFromBuffer(req.file.buffer);
-      const isCsv = !type && /[,;\t]/.test(req.file.buffer.toString('utf8', 0, 200));
+    // Validar MAGIC BYTES (no confiar en mimetype/extensión)
+    const { fileTypeFromBuffer } = await import('file-type');
+    const type = await fileTypeFromBuffer(req.file.buffer);
+    const isCsv = !type && /[,;\t]/.test(req.file.buffer.toString('utf8', 0, 200));
 
-      if (!isCsv && (!type || !ALLOWED_EXTS.has(type.ext))) {
-        logger.warn(
-          { detected: type?.ext, mime: req.file.mimetype, size: req.file.size },
-          'Archivo rechazado por magic bytes',
-        );
-        return next(BadRequest('El archivo no parece ser un Excel/CSV válido'));
-      }
-
-      // Rechazar archivos sospechosamente pequeños o vacíos
-      if (req.file.size < 50) {
-        return next(BadRequest('Archivo demasiado pequeño'));
-      }
-
-      const result = await importVehiclesFromBuffer(req.file.buffer);
-      res.json({ data: result });
-    } catch (e) {
-      next(e);
+    if (!isCsv && (!type || !ALLOWED_EXTS.has(type.ext))) {
+      logger.warn(
+        { detected: type?.ext, mime: req.file.mimetype, size: req.file.size },
+        'Archivo rechazado por magic bytes',
+      );
+      return next(BadRequest('El archivo no parece ser un Excel/CSV válido'));
     }
-  },
+
+    // Rechazar archivos sospechosamente pequeños o vacíos
+    if (req.file.size < 50) {
+      return next(BadRequest('Archivo demasiado pequeño'));
+    }
+
+    const result = await importVehiclesFromBuffer(req.file.buffer);
+    res.json({ data: result });
+  }),
 );
 
 export default router;

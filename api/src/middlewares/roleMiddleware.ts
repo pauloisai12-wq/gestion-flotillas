@@ -1,4 +1,3 @@
-// Archivo: /api/src/middlewares/roleMiddleware.ts
 // RBAC v2 — 6 roles, helpers tipados.
 
 import { Request, Response, NextFunction } from 'express';

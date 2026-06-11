@@ -1,5 +1,3 @@
-// Archivo: /flotillas/api/src/services/reportService.ts
-// ARCHIVO NUEVO — Servicio de reportes: encolar generación y consultar historial
 
 import { createQueue } from '../config/queue';
 import prisma from '../lib/prisma';

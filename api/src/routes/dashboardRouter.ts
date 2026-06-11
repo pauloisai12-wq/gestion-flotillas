@@ -1,12 +1,11 @@
-// Archivo: api/src/routes/dashboardRouter.ts
-// Propósito: Endpoints del dashboard con soporte de filtros globales
-// REEMPLAZA: contenido anterior completo
+// Endpoints del dashboard con soporte de filtros globales
 
 import { Router, Request, Response } from 'express';
 import * as dashboardService from '../services/dashboardService';
 import { DashboardFilters } from '../services/dashboardService';
 import { requireRole, RoleGroups } from '../middlewares/roleMiddleware';
 import { ah } from '../lib/asyncHandler';
+import { parsePagination } from '../lib/http';
 
 const router = Router();
 
@@ -45,7 +44,7 @@ router.get(
   '/vehicle-ranking/top',
   requireDashboardAccess,
   ah(async (req: Request, res: Response) => {
-    const limit = Number(req.query.limit) || 10;
+    const limit = parsePagination(req, { defaultLimit: 10, maxLimit: 100 }).limit;
     const ranking = await dashboardService.getVehicleRankingTop(limit, extractFilters(req));
     res.json(ranking);
   }),
@@ -55,7 +54,7 @@ router.get(
   '/vehicle-ranking/bottom',
   requireDashboardAccess,
   ah(async (req: Request, res: Response) => {
-    const limit = Number(req.query.limit) || 10;
+    const limit = parsePagination(req, { defaultLimit: 10, maxLimit: 100 }).limit;
     const ranking = await dashboardService.getVehicleRankingBottom(limit, extractFilters(req));
     res.json(ranking);
   }),
@@ -65,7 +64,7 @@ router.get(
   '/operator-ranking',
   requireDashboardAccess,
   ah(async (req: Request, res: Response) => {
-    const limit = Number(req.query.limit) || 10;
+    const limit = parsePagination(req, { defaultLimit: 10, maxLimit: 100 }).limit;
     const ranking = await dashboardService.getOperatorRanking(limit, extractFilters(req));
     res.json(ranking);
   }),
