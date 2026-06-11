@@ -409,24 +409,31 @@ export async function importVehiclesFromBuffer(buffer: Buffer): Promise<ImportRe
         ...(vehicleTypeId ? { vehicleTypeId } : {}),
       };
 
-      // Upsert IDEMPOTENTE: busca un vehículo existente por cualquiera de las claves
-      // únicas que vamos a escribir, en orden de confiabilidad. `data.economicNumber`
-      // y `data.plate` incluyen el placeholder por posición (`SIN ECO/PLACA FILA-N`)
-      // cuando la fila no los trae, de modo que re-subir el MISMO archivo actualiza
-      // la fila en lugar de recrearla. Antes solo se buscaba por economicNumber REAL,
-      // así que toda fila sin económico se recreaba en cada importación → duplicados
-      // y choques P2002 que agotaban los reintentos -DUP- ("No se pudo crear...").
-      // La LECTURA y la resolución del tipo de respaldo van FUERA de la tx
-      // (la caché de tipos es compartida entre filas, no debe revertirse).
-      let existing = data.economicNumber
-        ? await prisma.vehicle.findUnique({ where: { economicNumber: data.economicNumber } })
-        : null;
-      if (!existing && data.expedientNumber)
-        existing = await prisma.vehicle.findUnique({ where: { expedientNumber: data.expedientNumber } });
-      if (!existing && data.plate)
-        existing = await prisma.vehicle.findUnique({ where: { plate: data.plate } });
-      if (!existing && data.vin)
-        existing = await prisma.vehicle.findUnique({ where: { vin: data.vin } });
+      // Coincidencia IDEMPOTENTE pero SEGURA: se considera "el mismo vehículo" (→ UPDATE)
+      // solo cuando AL MENOS DOS identificadores únicos REALES apuntan al mismo registro
+      // existente. Con una sola coincidencia se trata como vehículo DISTINTO y se crea
+      // (safeCreate desambigua la clave que choque, con su warning). Así un valor basura
+      // repetido en el Excel —p. ej. un VIN '0' o un económico duplicado en dos renglones
+      // de vehículos diferentes— ya NO fusiona dos registros. Los placeholders por posición
+      // (`SIN ECO/PLACA FILA-N`) NO cuentan como clave. La lectura va FUERA de la tx (la
+      // caché de tipos es compartida entre filas, no debe revertirse).
+      const realPlate = data.plate && !data.plate.startsWith('SIN PLACA FILA-') ? data.plate : null;
+      const realEconomic =
+        data.economicNumber && !data.economicNumber.startsWith('SIN ECO FILA-') ? data.economicNumber : null;
+      const keyMatches = (
+        await Promise.all([
+          realEconomic ? prisma.vehicle.findUnique({ where: { economicNumber: realEconomic } }) : null,
+          data.expedientNumber ? prisma.vehicle.findUnique({ where: { expedientNumber: data.expedientNumber } }) : null,
+          realPlate ? prisma.vehicle.findUnique({ where: { plate: realPlate } }) : null,
+          data.vin ? prisma.vehicle.findUnique({ where: { vin: data.vin } }) : null,
+        ])
+      ).filter((v): v is NonNullable<typeof v> => v != null);
+
+      // ¿Hay un vehículo existente referenciado por ≥2 de las claves reales? Ese es el
+      // match. Si no, existing=null → se crea como vehículo nuevo.
+      const hitCount = new Map<number, number>();
+      for (const m of keyMatches) hitCount.set(m.id, (hitCount.get(m.id) ?? 0) + 1);
+      const existing = keyMatches.find((m) => (hitCount.get(m.id) ?? 0) >= 2) ?? null;
 
       if (existing) {
         if (!vehicleTypeId) delete data.vehicleTypeId;
