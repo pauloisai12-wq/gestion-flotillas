@@ -30,8 +30,13 @@ export default function VehicleImportDialog({
     mutationFn: async (file: File) => {
       const fd = new FormData();
       fd.append('file', file);
+      // Timeout largo (10 min): un inventario de miles de filas tarda más que
+      // el timeout global de 30 s. Sin esto el cliente cortaba, el servidor
+      // seguía procesando, y el reintento del usuario lanzaba imports
+      // concurrentes que duplicaban todos los vehículos.
       const res = await api.post('/vehicles/import', fd, {
         headers: { 'Content-Type': 'multipart/form-data' },
+        timeout: 600_000,
       });
       return res.data.data as ImportResult;
     },

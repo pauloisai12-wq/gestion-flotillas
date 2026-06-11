@@ -7,11 +7,18 @@ import multer from 'multer';
 // (que falla en typecheck y en runtime).
 import { requireRole, RoleGroups } from '../middlewares/roleMiddleware';
 import { importVehiclesFromBuffer } from '../services/vehicleImportService';
-import { BadRequest } from '../middlewares/errorHandler';
+import { BadRequest, Conflict } from '../middlewares/errorHandler';
 import { ah } from '../lib/asyncHandler';
 import { logger } from '../lib/logger';
 
 const router = Router();
+
+// Candado de concurrencia: una importación de vehículos puede tardar más que el
+// timeout del cliente. Si el navegador corta y el usuario reintenta, se lanzarían
+// imports SOLAPADOS que (al leer la BD antes de que el otro haga commit) crean
+// todos los vehículos por duplicado. Este flag a nivel de módulo —un único proceso
+// de API— garantiza que solo corra UNA importación a la vez; las demás reciben 409.
+let importRunning = false;
 
 // Multer en memoria, max 10MB
 const upload = multer({
@@ -52,8 +59,17 @@ router.post(
       return next(BadRequest('Archivo demasiado pequeño'));
     }
 
-    const result = await importVehiclesFromBuffer(req.file.buffer);
-    res.json({ data: result });
+    // No permitir imports solapados (evita duplicación masiva por reintentos).
+    if (importRunning) {
+      return next(Conflict('Ya hay una importación en curso. Espera a que termine antes de subir otra.'));
+    }
+    importRunning = true;
+    try {
+      const result = await importVehiclesFromBuffer(req.file.buffer);
+      res.json({ data: result });
+    } finally {
+      importRunning = false;
+    }
   }),
 );
 
