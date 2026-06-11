@@ -1,13 +1,11 @@
-# Archivo: /flotillas/worker/generate_pdf.py
-# REEMPLAZA: Archivo existente completo
-# Generador de reportes PDF mensuales — Nombres de columnas corregidos
+# Generador de reportes PDF mensuales
 
 import os
 import calendar
-from datetime import datetime, date
+from datetime import datetime
 
 import pandas as pd
-from jinja2 import Environment, FileSystemLoader
+from jinja2 import Environment, FileSystemLoader, select_autoescape
 from weasyprint import HTML
 
 from db import query_to_dataframe, query_single_value
@@ -386,7 +384,7 @@ def generate_pdf(month, year, requested_by="sistema"):
     maintenance_done = get_maintenance_done(month, year)
     maintenance_pending = get_maintenance_pending()
 
-    print(f"  [PDF] Datos recopilados. Renderizando plantilla...")
+    print("  [PDF] Datos recopilados. Renderizando plantilla...")
 
     # 2. Preparar variables para la plantilla
     last_day_num = calendar.monthrange(year, month)[1]
@@ -410,7 +408,9 @@ def generate_pdf(month, year, requested_by="sistema"):
 
     # 3. Cargar y renderizar la plantilla con Jinja2
     template_dir = os.path.join(os.path.dirname(__file__), "templates")
-    env = Environment(loader=FileSystemLoader(template_dir))
+    # autoescape: los datos de BD se interpolan en HTML (bandit B701); la
+    # plantilla no usa |safe, así que escapar no cambia el render legítimo.
+    env = Environment(loader=FileSystemLoader(template_dir), autoescape=select_autoescape(['html']))
     template = env.get_template("report_template.html")
     html_content = template.render(**template_data)
 

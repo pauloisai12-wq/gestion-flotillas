@@ -1,8 +1,6 @@
-# Archivo: /flotillas/worker/generate_excel.py
-# ARCHIVO NUEVO — Generador de reportes Excel mensuales
+# Generador de reportes Excel mensuales
 
 import os
-import calendar
 from datetime import datetime
 
 from openpyxl import Workbook
@@ -356,7 +354,7 @@ def generate_excel(month, year, requested_by="sistema"):
     maintenance_done = get_maintenance_done(month, year)
     maintenance_pending = get_maintenance_pending()
 
-    print(f"  [Excel] Datos recopilados. Generando hojas...")
+    print("  [Excel] Datos recopilados. Generando hojas...")
 
     # 2. Crear workbook
     wb = Workbook()

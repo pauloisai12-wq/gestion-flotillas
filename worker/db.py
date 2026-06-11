@@ -1,11 +1,9 @@
-# Archivo: /flotillas/worker/db.py
 # Módulo de conexión a PostgreSQL — con pool de conexiones
 
 import os
 import warnings
 import atexit
 import pandas as pd
-import psycopg2
 from psycopg2 import pool
 from psycopg2.extras import RealDictCursor
 from contextlib import contextmanager

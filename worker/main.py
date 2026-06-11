@@ -1,12 +1,9 @@
-# Archivo: /flotillas/worker/main.py
-# REEMPLAZA: Archivo existente completo
 # Worker de reportería — Genera PDF y Excel, guarda historial
 
 import asyncio
 import json
 import os
 import signal
-import sys
 from datetime import datetime
 from urllib.parse import urlparse
 
@@ -220,7 +217,7 @@ async def process_report(job, job_token):
             "generated_at": datetime.now().isoformat()
         }
 
-        print(f"\n  === REPORTE COMPLETADO ===")
+        print("\n  === REPORTE COMPLETADO ===")
         print(f"  PDF: {pdf_path} ({pdf_size:,} bytes)")
         print(f"  Excel: {excel_path} ({excel_size:,} bytes)")
         print(f"  Notificados: {len(admin_ids)} admin(s)")
@@ -228,7 +225,7 @@ async def process_report(job, job_token):
         return result
 
     except Exception as e:
-        print(f"\n  === ERROR EN REPORTE ===")
+        print("\n  === ERROR EN REPORTE ===")
         print(f"  Error: {str(e)}")
 
         # Guardar el error en historial
@@ -252,7 +249,7 @@ async def main():
     Función principal: inicia el worker y lo mantiene escuchando.
     """
     print(f"\n{'='*60}")
-    print(f"  WORKER DE REPORTERIA - PLATAFORMA FLOTILLAS")
+    print("  WORKER DE REPORTERIA - PLATAFORMA FLOTILLAS")
     print(f"  Conectando a Redis: {REDIS_HOST}:{REDIS_PORT}")
     print(f"  Cola: {QUEUE_NAME}")
     print(f"  Inicio: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
