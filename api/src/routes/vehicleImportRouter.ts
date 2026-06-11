@@ -7,6 +7,7 @@ import multer from 'multer';
 // (que falla en typecheck y en runtime).
 import { requireRole, RoleGroups } from '../middlewares/roleMiddleware';
 import { importVehiclesFromBuffer } from '../services/vehicleImportService';
+import { refreshMaterializedViews } from '../jobs/refreshViewsJob';
 import { BadRequest, Conflict } from '../middlewares/errorHandler';
 import { ah } from '../lib/asyncHandler';
 import { logger } from '../lib/logger';
@@ -66,6 +67,15 @@ router.post(
     importRunning = true;
     try {
       const result = await importVehiclesFromBuffer(req.file.buffer);
+      // Refrescar las vistas materializadas del dashboard tras la importación para
+      // que la cuenta de "unidades" refleje el nuevo total de inmediato (si no,
+      // mostraría el valor anterior hasta el cron de 15 min). Un fallo del refresco
+      // no debe tumbar la respuesta del import (los datos ya se escribieron).
+      try {
+        await refreshMaterializedViews();
+      } catch (err) {
+        logger.warn({ err }, 'Import OK pero falló el refresco de vistas materializadas');
+      }
       res.json({ data: result });
     } finally {
       importRunning = false;

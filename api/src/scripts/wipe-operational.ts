@@ -21,6 +21,8 @@
 
 import 'dotenv/config';
 import { PrismaClient } from '@prisma/client';
+import libPrisma from '../lib/prisma';
+import { refreshMaterializedViews } from '../jobs/refreshViewsJob';
 
 const prisma = new PrismaClient();
 
@@ -51,6 +53,17 @@ async function main(): Promise<void> {
     console.log(`  ${name}: ${r.count} borrados`);
   }
 
+  // Refrescar las vistas materializadas para que el DASHBOARD refleje el vaciado de
+  // inmediato. Si no, seguiría mostrando el conteo anterior hasta el cron (15 min),
+  // que es justo lo que hace parecer que "siguen apareciendo" vehículos ya borrados.
+  // Un fallo aquí no invalida el borrado (ya está hecho), solo se avisa.
+  try {
+    await refreshMaterializedViews();
+    console.log('✅ Vistas del dashboard refrescadas.');
+  } catch (e) {
+    console.warn('⚠️ No se pudieron refrescar las vistas del dashboard (el borrado SÍ se completó):', e);
+  }
+
   console.log('✅ Reset completado. Vuelve a importar el Excel una sola vez.');
   console.table(counts);
 }
@@ -62,4 +75,5 @@ main()
   })
   .finally(() => {
     void prisma.$disconnect();
+    void libPrisma.$disconnect();
   });
