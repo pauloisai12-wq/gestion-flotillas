@@ -15,6 +15,9 @@ interface ImportResult {
   updated: number;
   skipped: number;
   errors: { row: number; message: string }[];
+  // Avisos no fatales: clave única repetida que se guardó desambiguada con
+  // sufijo -DUP- (revisar el duplicado en el archivo de origen).
+  warnings: { row: number; message: string }[];
 }
 
 export default function VehicleImportDialog({
@@ -194,6 +197,25 @@ export default function VehicleImportDialog({
                   ))}
                   {result.errors.length > 30 && (
                     <div className="text-muted-foreground italic">…y {result.errors.length - 30} más</div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {result.warnings?.length > 0 && (
+              <div className="rounded-md border border-warning/30 bg-warning/5">
+                <div className="flex items-center gap-2 px-3 py-2 border-b border-warning/20 text-warning text-sm font-medium">
+                  <AlertTriangle className="size-4" />
+                  {result.warnings.length} aviso{result.warnings.length === 1 ? '' : 's'} de duplicado (revisar)
+                </div>
+                <div className="max-h-48 overflow-y-auto p-2 text-xs space-y-1">
+                  {result.warnings.slice(0, 50).map((w, i) => (
+                    <div key={i} className="font-mono text-warning">
+                      Fila {w.row}: <span className="font-sans text-foreground">{w.message}</span>
+                    </div>
+                  ))}
+                  {result.warnings.length > 50 && (
+                    <div className="text-muted-foreground italic">…y {result.warnings.length - 50} más</div>
                   )}
                 </div>
               </div>
