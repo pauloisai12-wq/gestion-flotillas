@@ -50,6 +50,21 @@ if [ -n "$placeholders" ]; then
 fi
 c_grn "  .env presente y sin placeholders."
 
+# ── 2.bis. Disco de datos montado (evita la BD fantasma) ────────────────────
+# Si el override persiste Postgres/Redis en un mountpoint (LUKS en staging) y ESE
+# disco NO está montado, Docker crearía el bind mount como carpeta VACÍA en el
+# disco raíz e inicializaría una base FANTASMA: usuarios/datos "desaparecen" al
+# reiniciar y el stack termina leyendo una BD distinta de la real. Fallar AQUÍ.
+if [ -n "${REQUIRE_MOUNT:-}" ]; then
+  step "Verificando que el disco de datos esté montado: ${REQUIRE_MOUNT}"
+  if ! mountpoint -q "${REQUIRE_MOUNT}" 2>/dev/null; then
+    die "${REQUIRE_MOUNT} NO está montado. El stack persiste Postgres/Redis ahí (disco cifrado LUKS).
+       Arrancar ahora crearía una base VACÍA en el disco raíz (datos fantasma + los reales quedan inaccesibles).
+       Desbloquea y monta el LUKS primero, verifica con  'mountpoint -q ${REQUIRE_MOUNT}'  y reintenta."
+  fi
+  c_grn "  ${REQUIRE_MOUNT} montado."
+fi
+
 # ── 3. Detectar binario de Docker Compose ───────────────────────────────────
 step "Detectando Docker Compose"
 if docker compose version >/dev/null 2>&1; then

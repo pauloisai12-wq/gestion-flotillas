@@ -25,6 +25,10 @@ readonly SCRIPT_NAME="deploy.sh"
 readonly ENV_TEMPLATE="env.staging.plantilla.txt"
 readonly COMPOSE_OVERRIDE="docker-compose.staging.yml"
 readonly COMPOSE_OLD_DIE_MSG="actualiza Compose o aplica el fallback de puertos y reintenta."
+# Staging persiste Postgres/Redis/uploads/reports en el disco cifrado LUKS bajo
+# /srv/datos (bind mounts del override). deploy-common.sh aborta si NO está montado,
+# para no inicializar una base fantasma vacía en el disco raíz.
+readonly REQUIRE_MOUNT="/srv/datos"
 
 # Ayuda mostrada si Docker Compose es < 2.24 (Gotcha 3: `ports: !reset []`).
 gotcha_reset_help() {
