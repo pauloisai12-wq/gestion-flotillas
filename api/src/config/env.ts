@@ -40,6 +40,16 @@ const envSchema = z.object({
   // de __dirname (frágil entre dist/ y src/ y según la profundidad de carpetas).
   REPORTS_DIR: z.string().default('/app/storage/reports'),
 
+  // qa_externa (ingesta de Evidencia Externa de GeoCampo). Todas opcionales con
+  // default: NO añaden un secreto obligatorio en producción (no rompen env.ts).
+  QA_EXTERNA_DIR: z.string().default('/app/uploads/qa-externa'),
+  QA_EXTERNA_MAX_FILE_SIZE_MB: z.coerce.number().int().min(1).max(100).default(12),
+  QA_EXTERNA_MAX_FILES: z.coerce.number().int().min(1).max(20).default(5),
+  QA_EXTERNA_RATE_MAX: z.coerce.number().int().min(1).default(60),
+  QA_EXTERNA_RATE_WINDOW_SEC: z.coerce.number().int().min(10).default(60),
+  // Pepper opcional para HMAC-SHA256 de las API keys (defensa en profundidad).
+  QA_EXTERNA_KEY_PEPPER: z.string().optional(),
+
   // Captcha del portal público (opcional en dev, obligatorio en prod si está habilitado)
   TURNSTILE_SECRET: z.string().optional(),
 
