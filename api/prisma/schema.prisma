@@ -750,3 +750,78 @@ model TicketAttachment {
   @@index([ticketId])
   @@map("ticket_attachments")
 }
+
+// ============================================
+// QA EXTERNA (ingesta de Evidencia Externa de GeoCampo) — módulo aditivo
+// ============================================
+enum QaExternaTipo {
+  lona
+  reunion
+  barda
+  otro
+}
+
+model QaExternaDispositivo {
+  id            Int       @id @default(autoincrement())
+  identificador String
+  keyHash       String    @unique @map("key_hash")
+  activo        Boolean   @default(true)
+  lastUsedAt    DateTime? @map("last_used_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  registros QaExternaRegistro[]
+
+  @@map("qa_externa_dispositivos")
+}
+
+model QaExternaRegistro {
+  id                Int                  @id @default(autoincrement())
+  clienteRegistroId String               @unique @map("cliente_registro_id")
+  dispositivoId     Int                  @map("dispositivo_id")
+  dispositivo       QaExternaDispositivo @relation(fields: [dispositivoId], references: [id])
+  identificadorApp  String               @map("identificador_app")
+  tipo              QaExternaTipo
+  lat               Float
+  lng               Float
+  accuracy          Float?
+  capturadoAt       DateTime             @map("capturado_at")
+  notas             String?              @db.Text
+  metadataRaw       String               @map("metadata_raw") @db.Text
+  createdAt         DateTime             @default(now()) @map("created_at")
+  updatedAt         DateTime             @updatedAt @map("updated_at")
+
+  imagenes QaExternaRegistroImagen[]
+
+  @@index([dispositivoId])
+  @@index([capturadoAt])
+  @@map("qa_externa_registros")
+}
+
+model QaExternaImagen {
+  id        Int      @id @default(autoincrement())
+  sha256    String   @unique
+  ruta      String
+  mime      String
+  bytes     Int
+  width     Int?
+  height    Int?
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  registros QaExternaRegistroImagen[]
+
+  @@map("qa_externa_imagenes")
+}
+
+model QaExternaRegistroImagen {
+  registroId Int               @map("registro_id")
+  imagenId   Int               @map("imagen_id")
+  registro   QaExternaRegistro @relation(fields: [registroId], references: [id], onDelete: Cascade)
+  imagen     QaExternaImagen   @relation(fields: [imagenId], references: [id], onDelete: Cascade)
+  createdAt  DateTime          @default(now()) @map("created_at")
+
+  @@id([registroId, imagenId])
+  @@index([imagenId])
+  @@map("qa_externa_registro_imagenes")
+}
