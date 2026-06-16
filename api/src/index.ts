@@ -38,11 +38,15 @@ import adminRouter from './routes/adminRouter';
 import docsRouter from './routes/docsRouter';
 import maintenanceTicketRouter from './routes/maintenanceTicketRouter';
 import ticketQuoteRouter from './routes/ticketQuoteRouter';
+import qaExternaRouter from './routes/qaExternaRouter';
 
 import { initializeJobs, shutdownJobs } from './jobs';
 import prisma from './lib/prisma';
 import { closeRedis } from './lib/redis';
 import { authMiddleware } from './middlewares/authMiddleware';
+import { deviceAuthMiddleware } from './middlewares/deviceAuthMiddleware';
+import { rateLimit } from './middlewares/rateLimit';
+import { ensureQaExternaDir } from './lib/qaExternaStorage';
 import { errorHandler } from './middlewares/errorHandler';
 import { logger, httpLoggerMiddleware } from './lib/logger';
 import { healthHandler } from './lib/health';
@@ -198,6 +202,18 @@ app.use('/api/maintenance-tickets', authMiddleware, maintenanceTicketRouter);
 app.use('/api/ticket-quotes', authMiddleware, ticketQuoteRouter);
 
 // ═══════════════════════════════════════════════════
+// 6.bis RUTA DE DISPOSITIVO (qa_externa) — auth por API key, NO JWT
+// ═══════════════════════════════════════════════════
+// Rate-limit por IP (pre-auth, fail-open) para frenar el sondeo de keys, luego
+// el guard de dispositivo envuelve TODO el router (ingest + ping + 405).
+app.use(
+  '/api/qa-externa',
+  rateLimit({ max: env.QA_EXTERNA_RATE_MAX, windowSec: env.QA_EXTERNA_RATE_WINDOW_SEC }),
+  deviceAuthMiddleware,
+  qaExternaRouter,
+);
+
+// ═══════════════════════════════════════════════════
 // 7. Sentry error handler (DEBE ir antes del errorHandler propio)
 // ═══════════════════════════════════════════════════
 // Captura excepciones no manejadas y las envía a Sentry. Es no-op si no hay DSN.
@@ -213,6 +229,7 @@ app.use(errorHandler);
 // ═══════════════════════════════════════════════════
 const server = app.listen(env.PORT, async () => {
   logger.info({ port: env.PORT, env: env.NODE_ENV }, 'API arriba');
+  await ensureQaExternaDir();
   await initializeJobs();
 });
 
