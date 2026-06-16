@@ -34,7 +34,13 @@ qa.aztechcomposites.com {
 
 	# El frontend Next sirve la UI y proxya internamente /api y /uploads a la API
 	# (rewrites horneados con API_PROXY_TARGET=http://api:3001). Un solo origen.
-	reverse_proxy web:3000
+	reverse_proxy web:3000 {
+		transport http {
+			read_timeout 300s
+			write_timeout 300s
+			dial_timeout 30s
+		}
+	}
 
 	# --- Acceso restringido (OPCIONAL) ------------------------------------------
 	# Tu elección fue acceso ABIERTO, así que esto queda comentado. Si más adelante
