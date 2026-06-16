@@ -48,8 +48,12 @@ COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
 COPY --from=builder /app/node_modules/@prisma ./node_modules/@prisma
 COPY prisma ./prisma
 
-# Usuario no-root por seguridad
-RUN addgroup -S nodejs && adduser -S api -G nodejs && chown -R api:nodejs /app
+# Usuario no-root por seguridad. Creamos /app/uploads ANTES del chown para que
+# exista en la imagen con dueño `api`: un volumen nombrado nuevo montado ahí
+# hereda ese dueño y el proceso (no-root) puede escribir uploads (documentos,
+# evidencias y qa_externa). Sin esto, un volumen vacío nace root → EACCES.
+RUN mkdir -p /app/uploads \
+  && addgroup -S nodejs && adduser -S api -G nodejs && chown -R api:nodejs /app
 USER api
 
 EXPOSE 3001

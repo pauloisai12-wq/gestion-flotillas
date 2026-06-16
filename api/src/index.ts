@@ -229,7 +229,14 @@ app.use(errorHandler);
 // ═══════════════════════════════════════════════════
 const server = app.listen(env.PORT, async () => {
   logger.info({ port: env.PORT, env: env.NODE_ENV }, 'API arriba');
-  await ensureQaExternaDir();
+  // Best-effort: que el directorio de qa_externa no se pueda crear (p. ej. el
+  // volumen de uploads aún sin permisos de escritura) NO debe tumbar el API.
+  // Se reintenta perezosamente en processImage al primer upload.
+  try {
+    await ensureQaExternaDir();
+  } catch (err) {
+    logger.error({ err }, 'No se pudo crear el directorio de qa_externa al arranque; se reintentará en el primer upload');
+  }
   await initializeJobs();
 });
 
