@@ -178,6 +178,21 @@ app.use('/api/auth', authRouter);
 app.use('/api/public', publicRouter);
 
 // ═══════════════════════════════════════════════════
+// 5.bis RUTA DE DISPOSITIVO (qa_externa) — auth por API key, NO JWT
+// ═══════════════════════════════════════════════════
+// DEBE ir ANTES de las rutas protegidas: abajo hay routers montados con comodín
+// en '/api' (vehicleNoteRouter, documentRouter) cuyo authMiddleware (JWT) atrapa
+// CUALQUIER /api/*, incluido /api/qa-externa/*, y devolvería 401 (token JWT
+// inválido) antes de llegar al guard de dispositivo. Rate-limit por IP
+// (pre-auth, fail-open) para frenar sondeo de keys + guard que envuelve el router.
+app.use(
+  '/api/qa-externa',
+  rateLimit({ max: env.QA_EXTERNA_RATE_MAX, windowSec: env.QA_EXTERNA_RATE_WINDOW_SEC }),
+  deviceAuthMiddleware,
+  qaExternaRouter,
+);
+
+// ═══════════════════════════════════════════════════
 // 6. RUTAS PROTEGIDAS (JWT)
 // ═══════════════════════════════════════════════════
 app.use('/api/vehicle-types', authMiddleware, vehicleTypeRouter);
@@ -200,18 +215,6 @@ app.use('/api/audit-logs', authMiddleware, auditLogRouter);
 app.use('/api/admin', authMiddleware, adminRouter);
 app.use('/api/maintenance-tickets', authMiddleware, maintenanceTicketRouter);
 app.use('/api/ticket-quotes', authMiddleware, ticketQuoteRouter);
-
-// ═══════════════════════════════════════════════════
-// 6.bis RUTA DE DISPOSITIVO (qa_externa) — auth por API key, NO JWT
-// ═══════════════════════════════════════════════════
-// Rate-limit por IP (pre-auth, fail-open) para frenar el sondeo de keys, luego
-// el guard de dispositivo envuelve TODO el router (ingest + ping + 405).
-app.use(
-  '/api/qa-externa',
-  rateLimit({ max: env.QA_EXTERNA_RATE_MAX, windowSec: env.QA_EXTERNA_RATE_WINDOW_SEC }),
-  deviceAuthMiddleware,
-  qaExternaRouter,
-);
 
 // ═══════════════════════════════════════════════════
 // 7. Sentry error handler (DEBE ir antes del errorHandler propio)
