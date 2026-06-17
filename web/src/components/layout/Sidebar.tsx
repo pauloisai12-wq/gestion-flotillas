@@ -151,6 +151,9 @@ const roleLabels: Record<Role, string> = {
   SUPERVISOR_MAINTENANCE: 'Sup. Mantenimiento',
   EXECUTOR: 'Ejecutor',
   WORKSHOP: 'Taller',
+  // El revisor QA no usa esta barra (vive aislado en /revision), pero el
+  // Record<Role,...> debe ser exhaustivo para el typecheck.
+  REVISOR_QA: 'Revisor QA',
 };
 
 export default function Sidebar() {

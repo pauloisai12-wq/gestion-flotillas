@@ -11,6 +11,7 @@ export const Roles = {
   SUP_MAINT: 'SUPERVISOR_MAINTENANCE' as UserRole,
   EXECUTOR: 'EXECUTOR' as UserRole,
   WORKSHOP: 'WORKSHOP' as UserRole,
+  REVISOR_QA: 'REVISOR_QA' as UserRole,
 } as const;
 
 /** Grupos útiles */

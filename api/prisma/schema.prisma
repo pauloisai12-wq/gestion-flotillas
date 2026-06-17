@@ -63,6 +63,7 @@ enum AssignmentType {
 /// RBAC — 6 roles. Operador ya no tiene cuenta; usa portal público.
 /// EXECUTOR: responsable de vehículos asignados, levanta tickets de mantto.
 /// WORKSHOP: cuenta vinculada a un Workshop, cotiza y ejecuta reparaciones.
+/// REVISOR_QA: revisor externo aislado; solo lista y descarga evidencias qa_externa (ver /revision).
 enum UserRole {
   ADMIN
   SUPERVISOR_VEHICLES
@@ -70,6 +71,7 @@ enum UserRole {
   SUPERVISOR_MAINTENANCE
   EXECUTOR
   WORKSHOP
+  REVISOR_QA
 }
 
 enum NotificationType {

@@ -29,7 +29,9 @@ function isPublicPath(pathname: string): boolean {
     pathname === '/login' ||
     pathname.startsWith('/login/') ||
     pathname === '/cargas' ||
-    pathname.startsWith('/cargas/')
+    pathname.startsWith('/cargas/') ||
+    pathname === '/revision/login' ||
+    pathname.startsWith('/revision/login/')
   );
 }
 
@@ -41,7 +43,11 @@ api.interceptors.response.use(
       typeof window !== 'undefined' &&
       !isPublicPath(window.location.pathname)
     ) {
-      window.location.href = '/login';
+      // El portal de revisión tiene su propio login aislado; mandar a /login
+      // sacaría al revisor de su zona. Redirigimos según la ruta de origen.
+      window.location.href = window.location.pathname.startsWith('/revision')
+        ? '/revision/login'
+        : '/login';
     }
     return Promise.reject(error);
   },

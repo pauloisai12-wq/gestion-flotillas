@@ -9,7 +9,7 @@ import { env } from './config/env';
 import './lib/sentry';
 import * as Sentry from '@sentry/node';
 
-import express from 'express';
+import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import compression from 'compression';
@@ -39,6 +39,7 @@ import docsRouter from './routes/docsRouter';
 import maintenanceTicketRouter from './routes/maintenanceTicketRouter';
 import ticketQuoteRouter from './routes/ticketQuoteRouter';
 import qaExternaRouter from './routes/qaExternaRouter';
+import qaExternaRegistrosRouter from './routes/qaExternaRegistrosRouter';
 
 import { initializeJobs, shutdownJobs } from './jobs';
 import prisma from './lib/prisma';
@@ -154,6 +155,16 @@ app.use(httpLoggerMiddleware);
 app.use(
   '/uploads',
   authMiddleware,
+  // El rol REVISOR_QA está aislado del resto de /uploads (documentos vehiculares,
+  // cotizaciones, etc.): solo accede a sus miniaturas qa_externa por el endpoint
+  // role-gated /api/qa-externa-registros/imagenes/:sha256.
+  (req: Request, res: Response, next: NextFunction) => {
+    if (req.user?.role === 'REVISOR_QA') {
+      res.status(403).json({ error: 'Sin permisos', code: 'FORBIDDEN' });
+      return;
+    }
+    next();
+  },
   express.static(path.join(__dirname, '../uploads'), {
     maxAge: '30d',
     immutable: true,
@@ -215,6 +226,10 @@ app.use('/api/audit-logs', authMiddleware, auditLogRouter);
 app.use('/api/admin', authMiddleware, adminRouter);
 app.use('/api/maintenance-tickets', authMiddleware, maintenanceTicketRouter);
 app.use('/api/ticket-quotes', authMiddleware, ticketQuoteRouter);
+// Lado REVISOR_QA: listado + export ZIP de evidencia qa_externa. Va bajo
+// /api/qa-externa-registros (NO /api/qa-externa/*, que es del router de ingesta
+// con guard por API key montado más arriba).
+app.use('/api/qa-externa-registros', authMiddleware, qaExternaRegistrosRouter);
 
 // ═══════════════════════════════════════════════════
 // 7. Sentry error handler (DEBE ir antes del errorHandler propio)

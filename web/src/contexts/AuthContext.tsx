@@ -11,7 +11,8 @@ export type UserRole =
   | 'SUPERVISOR_FUEL'
   | 'SUPERVISOR_MAINTENANCE'
   | 'EXECUTOR'
-  | 'WORKSHOP';
+  | 'WORKSHOP'
+  | 'REVISOR_QA';
 
 interface User {
   id: number;
@@ -26,8 +27,8 @@ interface User {
 interface AuthContextType {
   user: User | null;
   loading: boolean;
-  login: (email: string, password: string) => Promise<void>;
-  logout: () => Promise<void>;
+  login: (email: string, password: string, redirectTo?: string) => Promise<void>;
+  logout: (redirectTo?: string) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -82,16 +83,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     initAuth();
   }, []);
 
-  const login = useCallback(async (email: string, password: string) => {
+  const login = useCallback(async (email: string, password: string, redirectTo = '/dashboard') => {
     // El backend emite Set-Cookie httpOnly con el token. El cliente solo
     // consume el user de la respuesta — el token no se almacena en JS.
     const res = await api.post('/auth/login', { email, password });
     externalUser = res.data.data.user;
     emitChange();
-    router.push('/dashboard');
+    router.push(redirectTo);
   }, [router]);
 
-  const logout = useCallback(async () => {
+  const logout = useCallback(async (redirectTo = '/login') => {
     // El backend borra la cookie httpOnly; aquí solo limpiamos el estado.
     try {
       await api.post('/auth/logout');
@@ -101,7 +102,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     externalUser = null;
     initialized = false; // permite re-verificar /auth/me si el provider se remonta
     emitChange();
-    router.push('/login');
+    router.push(redirectTo);
   }, [router]);
 
   return (

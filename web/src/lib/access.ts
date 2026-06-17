@@ -9,6 +9,7 @@ import type { UserRole } from '@/contexts/AuthContext';
 const RESTRICTED_PREFIXES: Partial<Record<UserRole, string[]>> = {
   EXECUTOR: ['/tickets'],
   WORKSHOP: ['/tickets'],
+  REVISOR_QA: ['/revision'],
 };
 
 /**
@@ -28,6 +29,8 @@ export function getHomePath(role: UserRole): string {
     case 'EXECUTOR':
     case 'WORKSHOP':
       return '/tickets';
+    case 'REVISOR_QA':
+      return '/revision';
     default:
       return '/tickets';
   }
