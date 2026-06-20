@@ -2,6 +2,7 @@
 // dedupe de imágenes por sha256 y vínculo M2M idempotente. Un reintento completo
 // (misma clave + mismas imágenes) NO duplica nada y devuelve el mismo registro_id.
 
+import type { QaExternaPrograma } from '@prisma/client';
 import prisma from '../lib/prisma';
 import { isPrismaKnownError } from '../middlewares/errorHandler';
 import { processImage } from '../lib/qaExternaStorage';
@@ -11,6 +12,9 @@ export interface IngestInput {
   dispositivoId: number;
   identificadorApp: string;
   tipo: 'lona' | 'reunion' | 'barda' | 'otro';
+  // Dimensión ortogonal a `tipo`; el servidor la estampa desde req.device
+  // (la liga la API key del dispositivo). El cliente NUNCA la envía.
+  programa: QaExternaPrograma;
   lat: number;
   lng: number;
   accuracy?: number;
@@ -37,6 +41,7 @@ export async function ingest(input: IngestInput): Promise<IngestResult> {
     dispositivoId: input.dispositivoId,
     identificadorApp: input.identificadorApp,
     tipo: input.tipo,
+    programa: input.programa,
     lat: input.lat,
     lng: input.lng,
     accuracy: input.accuracy ?? null,
@@ -70,14 +75,15 @@ export async function ingest(input: IngestInput): Promise<IngestResult> {
   //    en BD) y vincular al registro sin duplicar el vínculo.
   const imagenes: IngestResult['imagenes'] = [];
   for (const buffer of input.buffers) {
-    const meta = await processImage(buffer);
+    const meta = await processImage(buffer, input.programa);
 
     let imagen;
     try {
       imagen = await prisma.qaExternaImagen.upsert({
-        where: { sha256: meta.sha256 },
+        where: { sha256_programa: { sha256: meta.sha256, programa: input.programa } },
         create: {
           sha256: meta.sha256,
+          programa: input.programa,
           ruta: meta.ruta,
           mime: meta.mime,
           bytes: meta.bytes,
@@ -89,7 +95,7 @@ export async function ingest(input: IngestInput): Promise<IngestResult> {
     } catch (e) {
       if (isPrismaKnownError(e, 'P2002')) {
         imagen = await prisma.qaExternaImagen.findUniqueOrThrow({
-          where: { sha256: meta.sha256 },
+          where: { sha256_programa: { sha256: meta.sha256, programa: input.programa } },
         });
       } else {
         throw e;

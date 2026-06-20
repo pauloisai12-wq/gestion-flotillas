@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { useQaRegistros, downloadQaZip, type QaRegistro } from '@/hooks/useQaRegistros';
+import { useQaRegistros, downloadQaZip, type QaRegistro, type QaPrograma } from '@/hooks/useQaRegistros';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
@@ -18,6 +18,12 @@ const TIPO_OPTIONS: { value: string; label: string }[] = [
   { value: 'reunion', label: 'Reunión' },
   { value: 'barda', label: 'Barda' },
   { value: 'otro', label: 'Otro' },
+];
+
+const PROGRAMA_OPTIONS: { value: string; label: string }[] = [
+  { value: '', label: 'Todos' },
+  { value: 'BUFFALO', label: 'BUFFALO' },
+  { value: 'LX', label: 'LX' },
 ];
 
 const columns: ColumnDef<QaRegistro, unknown>[] = [
@@ -39,7 +45,7 @@ const columns: ColumnDef<QaRegistro, unknown>[] = [
         <div className="relative h-14 w-14">
           {/* eslint-disable-next-line @next/next/no-img-element -- thumbnails de evidencia dinámica servidos por la API */}
           <img
-            src={`${API_BASE}/api/qa-externa-registros/imagenes/${first.sha256}`}
+            src={`${API_BASE}/api/qa-externa-registros/imagenes/${first.programa}/${first.sha256}`}
             alt="Evidencia"
             className="h-14 w-14 object-cover rounded border border-border"
             loading="lazy"
@@ -52,6 +58,11 @@ const columns: ColumnDef<QaRegistro, unknown>[] = [
         </div>
       );
     },
+  },
+  {
+    accessorKey: 'programa',
+    header: 'Programa',
+    cell: ({ row }) => <Badge variant="secondary">{row.original.programa}</Badge>,
   },
   {
     accessorKey: 'tipo',
@@ -84,28 +95,31 @@ const columns: ColumnDef<QaRegistro, unknown>[] = [
 export default function RevisionPage() {
   const [page, setPage] = useState(1);
   const [tipo, setTipo] = useState<string>('');
+  const [programa, setPrograma] = useState<string>('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
-  const [downloading, setDownloading] = useState(false);
+  // Programa cuyo ZIP se está generando ('' = ninguno); cada export es por programa.
+  const [downloading, setDownloading] = useState<'' | QaPrograma>('');
 
   const { data, isLoading } = useQaRegistros({
     page,
     limit: 20,
     tipo: tipo || undefined,
+    programa: programa || undefined,
     dateFrom: dateFrom || undefined,
     dateTo: dateTo || undefined,
   });
 
-  const handleDownload = async () => {
-    setDownloading(true);
+  const handleDownload = async (prog: QaPrograma) => {
+    setDownloading(prog);
     try {
-      await downloadQaZip();
+      await downloadQaZip(prog);
     } finally {
-      setDownloading(false);
+      setDownloading('');
     }
   };
 
-  const hasFilters = Boolean(tipo || dateFrom || dateTo);
+  const hasFilters = Boolean(tipo || programa || dateFrom || dateTo);
 
   return (
     <div className="space-y-4">
@@ -116,8 +130,20 @@ export default function RevisionPage() {
         </div>
       </div>
 
-      {/* Filtros: tipo + rango de fechas */}
+      {/* Filtros: programa + tipo + rango de fechas */}
       <div className="flex gap-2 items-end flex-wrap">
+        <div>
+          <label className="text-xs text-muted-foreground">Programa</label>
+          <select
+            value={programa}
+            onChange={(e) => { setPrograma(e.target.value); setPage(1); }}
+            className="h-9 w-full min-w-0 rounded-md border border-input bg-transparent px-3 py-1 text-sm transition-colors outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40"
+          >
+            {PROGRAMA_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
+        </div>
         <div>
           <label className="text-xs text-muted-foreground">Tipo</label>
           <select
@@ -142,7 +168,7 @@ export default function RevisionPage() {
           <Button
             variant="outline"
             size="sm"
-            onClick={() => { setTipo(''); setDateFrom(''); setDateTo(''); setPage(1); }}
+            onClick={() => { setTipo(''); setPrograma(''); setDateFrom(''); setDateTo(''); setPage(1); }}
           >
             Limpiar
           </Button>
@@ -157,9 +183,14 @@ export default function RevisionPage() {
         onPageChange={setPage}
         isLoading={isLoading}
         headerActions={
-          <Button onClick={handleDownload} disabled={downloading}>
-            {downloading ? 'Generando…' : 'Descargar todo (ZIP)'}
-          </Button>
+          <div className="flex gap-2">
+            <Button onClick={() => handleDownload('BUFFALO')} disabled={downloading !== ''}>
+              {downloading === 'BUFFALO' ? 'Generando…' : 'Descargar BUFFALO'}
+            </Button>
+            <Button onClick={() => handleDownload('LX')} disabled={downloading !== ''}>
+              {downloading === 'LX' ? 'Generando…' : 'Descargar LX'}
+            </Button>
+          </div>
         }
       />
     </div>

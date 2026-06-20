@@ -8,12 +8,18 @@ import { toast } from '@/components/ui/toast';
 
 export type QaTipo = 'lona' | 'reunion' | 'barda' | 'otro';
 
+// Programa al que pertenece el dispositivo que capturó la evidencia. Es
+// ortogonal a `tipo`: lo estampa el servidor desde req.device en cada ingest;
+// el cliente nunca lo envía. La separación de seguridad la da la API key.
+export type QaPrograma = 'BUFFALO' | 'LX';
+
 export interface QaRegistroImagen {
   sha256: string;
   mime: string;
   bytes: number;
   width: number | null;
   height: number | null;
+  programa: QaPrograma;
 }
 
 export interface QaRegistro {
@@ -21,6 +27,7 @@ export interface QaRegistro {
   clienteRegistroId: string;
   identificadorApp: string;
   tipo: QaTipo;
+  programa: QaPrograma;
   lat: number;
   lng: number;
   accuracy: number | null;
@@ -40,6 +47,7 @@ interface QaRegistroQuery {
   page?: number;
   limit?: number;
   tipo?: string;
+  programa?: string;
   dateFrom?: string;
   dateTo?: string;
 }
@@ -49,6 +57,7 @@ export function useQaRegistros(query: QaRegistroQuery = {}) {
   if (query.page) params.set('page', query.page.toString());
   if (query.limit) params.set('limit', query.limit.toString());
   if (query.tipo) params.set('tipo', query.tipo);
+  if (query.programa) params.set('programa', query.programa);
   if (query.dateFrom) params.set('dateFrom', query.dateFrom);
   if (query.dateTo) params.set('dateTo', query.dateTo);
 
@@ -61,19 +70,21 @@ export function useQaRegistros(query: QaRegistroQuery = {}) {
   });
 }
 
-// Descarga el ZIP de evidencias. Usa el cliente axios (withCredentials → cookie
-// httpOnly de sesión) con responseType:'blob' para que axios rechace respuestas
-// no-2xx en vez de bajar un archivo de error corrupto (mismo patrón que
-// downloadReport en useReports.ts).
-export async function downloadQaZip() {
+// Descarga el ZIP de evidencias de un programa. Usa el cliente axios
+// (withCredentials → cookie httpOnly de sesión) con responseType:'blob' para
+// que axios rechace respuestas no-2xx en vez de bajar un archivo de error
+// corrupto (mismo patrón que downloadReport en useReports.ts). El export exige
+// ?programa porque cada programa se exporta por separado.
+export async function downloadQaZip(programa: QaPrograma) {
   try {
     const res = await api.get('/qa-externa-registros/export', {
+      params: { programa },
       responseType: 'blob',
     });
     const blobUrl = URL.createObjectURL(res.data as Blob);
     const link = document.createElement('a');
     link.href = blobUrl;
-    link.download = 'evidencias-qa.zip';
+    link.download = `evidencias-qa-${programa.toLowerCase()}.zip`;
     document.body.appendChild(link);
     link.click();
     link.remove();

@@ -4,12 +4,13 @@
 // { data, pagination }).
 
 import prisma from '../lib/prisma';
-import { Prisma, QaExternaTipo } from '@prisma/client';
+import { Prisma, QaExternaTipo, QaExternaPrograma } from '@prisma/client';
 
 interface QaRegistrosListQuery {
   page?: number;
   limit?: number;
   tipo?: QaExternaTipo;
+  programa?: QaExternaPrograma;
   dispositivo?: number;
   dateFrom?: string;
   dateTo?: string;
@@ -18,6 +19,7 @@ interface QaRegistrosListQuery {
 /** Imagen resumida en el DTO del listado (sin la ruta interna). */
 export interface QaRegistroImagenDto {
   sha256: string;
+  programa: QaExternaPrograma;
   mime: string;
   bytes: number;
   width: number | null;
@@ -30,6 +32,7 @@ export interface QaRegistroDto {
   clienteRegistroId: string;
   identificadorApp: string;
   tipo: QaExternaTipo;
+  programa: QaExternaPrograma;
   lat: number;
   lng: number;
   accuracy: number | null;
@@ -55,6 +58,7 @@ export async function list(params: QaRegistrosListQuery) {
 
   const where: Prisma.QaExternaRegistroWhereInput = {};
   if (params.tipo) where.tipo = params.tipo;
+  if (params.programa) where.programa = params.programa;
   if (params.dispositivo) where.dispositivoId = params.dispositivo;
   if (params.dateFrom || params.dateTo) {
     where.capturadoAt = {
@@ -82,6 +86,7 @@ export async function list(params: QaRegistrosListQuery) {
     clienteRegistroId: row.clienteRegistroId,
     identificadorApp: row.identificadorApp,
     tipo: row.tipo,
+    programa: row.programa,
     lat: row.lat,
     lng: row.lng,
     accuracy: row.accuracy,
@@ -91,6 +96,7 @@ export async function list(params: QaRegistrosListQuery) {
     dispositivo: { id: row.dispositivo.id, identificador: row.dispositivo.identificador },
     imagenes: row.imagenes.map((ri) => ({
       sha256: ri.imagen.sha256,
+      programa: ri.imagen.programa,
       mime: ri.imagen.mime,
       bytes: ri.imagen.bytes,
       width: ri.imagen.width,
@@ -102,8 +108,11 @@ export async function list(params: QaRegistrosListQuery) {
 }
 
 /** Todos los registros (sin paginar) con relaciones, para construir el ZIP. */
-export async function getAllForExport(): Promise<QaRegistroWithRelations[]> {
+export async function getAllForExport(
+  programa: QaExternaPrograma,
+): Promise<QaRegistroWithRelations[]> {
   return prisma.qaExternaRegistro.findMany({
+    where: { programa },
     orderBy: { capturadoAt: 'desc' },
     include: {
       dispositivo: { select: { id: true, identificador: true } },

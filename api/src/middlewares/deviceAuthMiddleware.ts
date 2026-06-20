@@ -33,7 +33,7 @@ export async function deviceAuthMiddleware(
       return next(Unauthorized('API key inválida o revocada'));
     }
 
-    req.device = { id: device.id, identificador: device.identificador };
+    req.device = { id: device.id, identificador: device.identificador, programa: device.programa };
 
     // Marca de uso, no bloqueante (no debe retrasar ni romper el request).
     void prisma.qaExternaDispositivo

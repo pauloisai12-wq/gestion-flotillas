@@ -101,6 +101,9 @@ router.post(
       dispositivoId: req.device!.id,
       identificadorApp: parsed.data.identificadorApp,
       tipo: parsed.data.tipo,
+      // Estampado server-side desde el dispositivo autenticado; el cliente
+      // nunca lo envía (ni en body ni en metadata).
+      programa: req.device!.programa,
       lat: parsed.data.lat,
       lng: parsed.data.lng,
       accuracy: parsed.data.accuracy,
