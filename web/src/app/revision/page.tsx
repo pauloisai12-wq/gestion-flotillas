@@ -20,9 +20,11 @@ const TIPO_OPTIONS: { value: string; label: string }[] = [
   { value: 'otro', label: 'Otro' },
 ];
 
-const PROGRAMA_OPTIONS: { value: string; label: string }[] = [
-  { value: '', label: 'Todos' },
-  { value: 'BUFFALO', label: 'BUFFALO' },
+// Cada programa (BUFFALO | LX) es una TABLA INDEPENDIENTE; se cambia con el
+// switch de arriba. Por eso la tabla ya no lleva columna 'programa': siempre
+// muestra un solo programa a la vez.
+const PROGRAMA_TABS: { value: QaPrograma; label: string }[] = [
+  { value: 'BUFFALO', label: 'Buffalo' },
   { value: 'LX', label: 'LX' },
 ];
 
@@ -60,11 +62,6 @@ const columns: ColumnDef<QaRegistro, unknown>[] = [
     },
   },
   {
-    accessorKey: 'programa',
-    header: 'Programa',
-    cell: ({ row }) => <Badge variant="secondary">{row.original.programa}</Badge>,
-  },
-  {
     accessorKey: 'tipo',
     header: 'Tipo',
     cell: ({ row }) => <Badge variant="info">{row.original.tipo}</Badge>,
@@ -93,57 +90,70 @@ const columns: ColumnDef<QaRegistro, unknown>[] = [
 ];
 
 export default function RevisionPage() {
+  // El programa es la TABLA activa (no un filtro): siempre hay una seleccionada.
+  const [programa, setPrograma] = useState<QaPrograma>('BUFFALO');
   const [page, setPage] = useState(1);
   const [tipo, setTipo] = useState<string>('');
-  const [programa, setPrograma] = useState<string>('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
-  // Programa cuyo ZIP se está generando ('' = ninguno); cada export es por programa.
-  const [downloading, setDownloading] = useState<'' | QaPrograma>('');
+  const [downloading, setDownloading] = useState(false);
 
   const { data, isLoading } = useQaRegistros({
     page,
     limit: 20,
+    programa, // siempre uno: la tabla es de un solo programa
     tipo: tipo || undefined,
-    programa: programa || undefined,
     dateFrom: dateFrom || undefined,
     dateTo: dateTo || undefined,
   });
 
-  const handleDownload = async (prog: QaPrograma) => {
-    setDownloading(prog);
+  // Cambiar de tabla: reinicia paginación y filtros de la vista anterior.
+  const switchPrograma = (p: QaPrograma) => {
+    if (p === programa) return;
+    setPrograma(p);
+    setPage(1);
+    setTipo('');
+    setDateFrom('');
+    setDateTo('');
+  };
+
+  const handleDownload = async () => {
+    setDownloading(true);
     try {
-      await downloadQaZip(prog);
+      await downloadQaZip(programa);
     } finally {
-      setDownloading('');
+      setDownloading(false);
     }
   };
 
-  const hasFilters = Boolean(tipo || programa || dateFrom || dateTo);
+  const hasFilters = Boolean(tipo || dateFrom || dateTo);
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold">Evidencias de campo</h1>
-          <p className="text-sm text-muted-foreground">{data?.pagination?.total || 0} evidencias registradas</p>
-        </div>
+      <div>
+        <h1 className="text-2xl font-bold">Evidencias de campo</h1>
+        <p className="text-sm text-muted-foreground">
+          Registro <span className="font-medium text-foreground">{programa}</span> · {data?.pagination?.total || 0} evidencias
+        </p>
       </div>
 
-      {/* Filtros: programa + tipo + rango de fechas */}
-      <div className="flex gap-2 items-end flex-wrap">
-        <div>
-          <label className="text-xs text-muted-foreground">Programa</label>
-          <select
-            value={programa}
-            onChange={(e) => { setPrograma(e.target.value); setPage(1); }}
-            className="h-9 w-full min-w-0 rounded-md border border-input bg-transparent px-3 py-1 text-sm transition-colors outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40"
+      {/* Switch de tabla por programa: dos tablas independientes (BUFFALO / LX). */}
+      <div className="inline-flex gap-1 rounded-lg border border-border bg-muted/40 p-1">
+        {PROGRAMA_TABS.map((t) => (
+          <Button
+            key={t.value}
+            variant={programa === t.value ? 'default' : 'ghost'}
+            size="sm"
+            onClick={() => switchPrograma(t.value)}
+            aria-pressed={programa === t.value}
           >
-            {PROGRAMA_OPTIONS.map((opt) => (
-              <option key={opt.value} value={opt.value}>{opt.label}</option>
-            ))}
-          </select>
-        </div>
+            {t.label}
+          </Button>
+        ))}
+      </div>
+
+      {/* Filtros de la tabla activa: tipo + rango de fechas. */}
+      <div className="flex gap-2 items-end flex-wrap">
         <div>
           <label className="text-xs text-muted-foreground">Tipo</label>
           <select
@@ -168,7 +178,7 @@ export default function RevisionPage() {
           <Button
             variant="outline"
             size="sm"
-            onClick={() => { setTipo(''); setPrograma(''); setDateFrom(''); setDateTo(''); setPage(1); }}
+            onClick={() => { setTipo(''); setDateFrom(''); setDateTo(''); setPage(1); }}
           >
             Limpiar
           </Button>
@@ -183,14 +193,9 @@ export default function RevisionPage() {
         onPageChange={setPage}
         isLoading={isLoading}
         headerActions={
-          <div className="flex gap-2">
-            <Button onClick={() => handleDownload('BUFFALO')} disabled={downloading !== ''}>
-              {downloading === 'BUFFALO' ? 'Generando…' : 'Descargar BUFFALO'}
-            </Button>
-            <Button onClick={() => handleDownload('LX')} disabled={downloading !== ''}>
-              {downloading === 'LX' ? 'Generando…' : 'Descargar LX'}
-            </Button>
-          </div>
+          <Button onClick={handleDownload} disabled={downloading}>
+            {downloading ? 'Generando…' : `Descargar ${programa} (ZIP)`}
+          </Button>
         }
       />
     </div>
