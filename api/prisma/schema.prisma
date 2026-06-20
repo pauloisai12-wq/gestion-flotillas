@@ -763,17 +763,27 @@ enum QaExternaTipo {
   otro
 }
 
+// Dimensión "programa", ortogonal a `tipo`. Se liga al dispositivo y el
+// servidor la estampa server-side desde req.device en cada ingest; el
+// cliente NUNCA la envía (la separación de seguridad la da la API key).
+enum QaExternaPrograma {
+  BUFFALO
+  LX
+}
+
 model QaExternaDispositivo {
-  id            Int       @id @default(autoincrement())
+  id            Int               @id @default(autoincrement())
   identificador String
-  keyHash       String    @unique @map("key_hash")
-  activo        Boolean   @default(true)
-  lastUsedAt    DateTime? @map("last_used_at")
-  createdAt     DateTime  @default(now()) @map("created_at")
-  updatedAt     DateTime  @updatedAt @map("updated_at")
+  keyHash       String            @unique @map("key_hash")
+  programa      QaExternaPrograma
+  activo        Boolean           @default(true)
+  lastUsedAt    DateTime?         @map("last_used_at")
+  createdAt     DateTime          @default(now()) @map("created_at")
+  updatedAt     DateTime          @updatedAt @map("updated_at")
 
   registros QaExternaRegistro[]
 
+  @@index([programa])
   @@map("qa_externa_dispositivos")
 }
 
@@ -784,6 +794,7 @@ model QaExternaRegistro {
   dispositivo       QaExternaDispositivo @relation(fields: [dispositivoId], references: [id])
   identificadorApp  String               @map("identificador_app")
   tipo              QaExternaTipo
+  programa          QaExternaPrograma
   lat               Float
   lng               Float
   accuracy          Float?
@@ -797,22 +808,26 @@ model QaExternaRegistro {
 
   @@index([dispositivoId])
   @@index([capturadoAt])
+  @@index([programa])
   @@map("qa_externa_registros")
 }
 
 model QaExternaImagen {
-  id        Int      @id @default(autoincrement())
-  sha256    String   @unique
+  id        Int               @id @default(autoincrement())
+  sha256    String
   ruta      String
   mime      String
   bytes     Int
   width     Int?
   height    Int?
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  programa  QaExternaPrograma
+  createdAt DateTime          @default(now()) @map("created_at")
+  updatedAt DateTime          @updatedAt @map("updated_at")
 
   registros QaExternaRegistroImagen[]
 
+  @@unique([sha256, programa])
+  @@index([programa])
   @@map("qa_externa_imagenes")
 }
 

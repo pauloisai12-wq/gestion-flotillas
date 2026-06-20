@@ -13,7 +13,7 @@ declare global {
       user?: JwtPayload;
       // Populado por deviceAuthMiddleware en las rutas /api/qa-externa/* tras
       // validar la API key del dispositivo (separado de req.user / JWT).
-      device?: { id: number; identificador: string };
+      device?: { id: number; identificador: string; programa: 'BUFFALO' | 'LX' };
     }
   }
 }

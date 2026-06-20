@@ -7,6 +7,7 @@ export const qaRegistrosQuerySchema = z.object({
   page: z.coerce.number().optional(),
   limit: z.coerce.number().optional(),
   tipo: z.enum(['lona', 'reunion', 'barda', 'otro']).optional(),
+  programa: z.enum(['BUFFALO', 'LX']).optional(),
   dispositivo: z.coerce.number().int().positive().optional(),
   dateFrom: z.string().optional(),
   dateTo: z.string().optional(),

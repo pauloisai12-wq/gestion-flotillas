@@ -21,6 +21,7 @@ import {
   QaRegistrosQueryInput,
 } from '../validators/qaExternaRegistrosValidator';
 import * as service from '../services/qaExternaRegistrosService';
+import { QaExternaPrograma } from '@prisma/client';
 import prisma from '../lib/prisma';
 import { env } from '../config/env';
 import { logger } from '../lib/logger';
@@ -47,6 +48,7 @@ router.get(
       page,
       limit,
       tipo: q.tipo,
+      programa: q.programa,
       dispositivo: q.dispositivo,
       dateFrom: q.dateFrom,
       dateTo: q.dateTo,
@@ -56,18 +58,22 @@ router.get(
 );
 
 // ───────────────────────────────────────────────────────────
-// GET /imagenes/:sha256 — sirve <sha256>.jpg confinado a QA_EXTERNA_DIR
+// GET /imagenes/:programa/:sha256 — sirve <sha256>.jpg confinado a la
+// subcarpeta del programa dentro de QA_EXTERNA_DIR (buffalo/ o lx/).
 // ───────────────────────────────────────────────────────────
 router.get(
-  '/imagenes/:sha256',
+  '/imagenes/:programa/:sha256',
   requireRole([Roles.REVISOR_QA]),
   ah(async (req: Request, res: Response) => {
-    const { sha256 } = req.params;
+    const { programa, sha256 } = req.params;
+    if (programa !== 'BUFFALO' && programa !== 'LX') throw BadRequest('Programa inválido');
     if (!/^[a-f0-9]{64}$/.test(sha256)) throw BadRequest('Hash inválido');
 
-    // sha256 ya validado como hex de 64 chars; además path.basename + el chequeo
-    // startsWith confinan la lectura a QA_EXTERNA_DIR (defensa en profundidad).
-    const baseDir = path.resolve(env.QA_EXTERNA_DIR);
+    // programa ya validado contra el allowlist y sha256 como hex de 64 chars;
+    // además path.basename + el chequeo startsWith confinan la lectura a la
+    // subcarpeta del programa en QA_EXTERNA_DIR (defensa en profundidad).
+    const sub = programa === 'BUFFALO' ? 'buffalo' : 'lx';
+    const baseDir = path.resolve(env.QA_EXTERNA_DIR, sub);
     const safePath = path.resolve(baseDir, path.basename(sha256 + '.jpg')); // nosemgrep
     if (!safePath.startsWith(baseDir + path.sep)) throw BadRequest('Ruta inválida');
 
@@ -91,9 +97,17 @@ router.get(
   '/export',
   requireRole([Roles.REVISOR_QA]),
   ah(async (req: Request, res: Response) => {
-    const registros = await service.getAllForExport();
+    // programa REQUERIDO. Se valida ANTES de tocar la respuesta para preservar
+    // el invariante de cabeceras (una vez que el stream empieza ya no se pueden
+    // cambiar). El cliente lo pasa por query; el servidor lo confina al allowlist.
+    const programa = String(req.query.programa || '').toUpperCase();
+    if (programa !== 'BUFFALO' && programa !== 'LX')
+      throw BadRequest('programa es requerido (BUFFALO|LX)');
+    const sub = programa === 'BUFFALO' ? 'buffalo' : 'lx';
 
-    const baseDir = path.resolve(env.QA_EXTERNA_DIR);
+    const registros = await service.getAllForExport(programa as QaExternaPrograma);
+
+    const baseDir = path.resolve(env.QA_EXTERNA_DIR, sub);
 
     interface PhotoEntry {
       absPath: string;
@@ -169,7 +183,7 @@ router.get(
           userId: req.user?.userId ?? null,
           action: 'EXPORT',
           resource: 'QaExternaRegistro',
-          metadata: { registros: registros.length, fotos: photoEntries.length },
+          metadata: { programa, registros: registros.length, fotos: photoEntries.length },
           ipAddress: (req.ip || '').toString(),
         },
       });
@@ -186,7 +200,7 @@ router.get(
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader(
       'Content-Disposition',
-      'attachment; filename="qa-externa-evidencia-' + dateStamp + '.zip"',
+      'attachment; filename="qa-externa-evidencia-' + sub + '-' + dateStamp + '.zip"',
     );
 
     // Nivel 1: los JPEG ya están comprimidos; comprimir de nuevo sería puro coste.
