@@ -87,6 +87,14 @@ const columns: ColumnDef<QaRegistro, unknown>[] = [
     accessorFn: (row) => row.dispositivo?.identificador ?? '',
     cell: ({ row }) => row.original.dispositivo.identificador,
   },
+  {
+    // Nombre que el operador le pone al celular en la app GeoCampo (campo
+    // identificador_app de cada registro). Es distinto de 'Dispositivo', que es
+    // el identificador de la API key fijado por el admin al registrar el equipo.
+    accessorKey: 'identificadorApp',
+    header: 'Celular',
+    cell: ({ row }) => row.original.identificadorApp,
+  },
 ];
 
 export default function RevisionPage() {

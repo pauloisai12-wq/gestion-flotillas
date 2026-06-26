@@ -118,7 +118,7 @@ router.get(
     interface XlsxRow {
       registro_id: number;
       cliente_registro_id: string;
-      identificador_app: string;
+      celular: string;
       tipo: string;
       lat: number;
       lng: number;
@@ -157,7 +157,7 @@ router.get(
       rows.push({
         registro_id: r.id,
         cliente_registro_id: r.clienteRegistroId,
-        identificador_app: r.identificadorApp,
+        celular: r.identificadorApp,
         tipo: r.tipo,
         lat: r.lat,
         lng: r.lng,
