@@ -1,5 +1,5 @@
-// Diálogo para que el admin seleccione EXACTAMENTE 3 talleres.
-// El backend valida que sean 3 únicos y activos; aquí ayudamos visualmente.
+// Diálogo para que el admin seleccione de 1 a 3 talleres.
+// El backend valida que sean 1-3 únicos y activos; aquí ayudamos visualmente.
 
 'use client';
 
@@ -26,7 +26,8 @@ interface Props {
   onSuccess?: () => void;
 }
 
-const REQUIRED = 3;
+const MIN = 1;
+const MAX = 3;
 
 export function WorkshopPickerDialog({ ticketId, children, onSuccess }: Props) {
   const [open, setOpen] = useState(false);
@@ -50,12 +51,12 @@ export function WorkshopPickerDialog({ ticketId, children, onSuccess }: Props) {
   function toggle(id: number) {
     const next = new Set(selected);
     if (next.has(id)) next.delete(id);
-    else if (next.size < REQUIRED) next.add(id);
+    else if (next.size < MAX) next.add(id);
     setSelected(next);
   }
 
   async function submit() {
-    if (selected.size !== REQUIRED) return;
+    if (selected.size < MIN || selected.size > MAX) return;
     try {
       await assign.mutateAsync({ ticketId, workshopIds: Array.from(selected) });
       setOpen(false);
@@ -76,7 +77,7 @@ export function WorkshopPickerDialog({ ticketId, children, onSuccess }: Props) {
         <DialogHeader>
           <DialogTitle>Asignar talleres para cotizar</DialogTitle>
           <DialogDescription>
-            Selecciona exactamente <strong>{REQUIRED}</strong> talleres. Recibirán una notificación para subir su cotización.
+            Selecciona entre <strong>{MIN}</strong> y <strong>{MAX}</strong> talleres. Recibirán una notificación para subir su cotización.
           </DialogDescription>
         </DialogHeader>
 
@@ -99,7 +100,7 @@ export function WorkshopPickerDialog({ ticketId, children, onSuccess }: Props) {
             <ul className="space-y-1">
               {filtered.map((w) => {
                 const isSel = selected.has(w.id);
-                const disabled = !isSel && selected.size >= REQUIRED;
+                const disabled = !isSel && selected.size >= MAX;
                 return (
                   <li key={w.id}>
                     <button
@@ -146,9 +147,12 @@ export function WorkshopPickerDialog({ ticketId, children, onSuccess }: Props) {
 
         <DialogFooter className="sm:justify-between items-center">
           <span className="text-xs text-muted-foreground">
-            Seleccionados: <span className="font-semibold text-foreground">{selected.size}</span> / {REQUIRED}
+            Seleccionados: <span className="font-semibold text-foreground">{selected.size}</span> / {MAX}
           </span>
-          <Button onClick={submit} disabled={selected.size !== REQUIRED || assign.isPending}>
+          <Button
+            onClick={submit}
+            disabled={selected.size < MIN || selected.size > MAX || assign.isPending}
+          >
             {assign.isPending ? 'Asignando…' : 'Asignar y notificar'}
           </Button>
         </DialogFooter>

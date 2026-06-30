@@ -33,6 +33,8 @@ export interface VehicleSummary {
   id: number;
   economicNumber: string;
   plate: string;
+  vin?: string | null;
+  civ?: string | null;
   brand?: string;
   model?: string;
   year?: number;
@@ -94,6 +96,7 @@ export interface TicketAttachment {
 
 export interface MaintenanceTicket {
   id: number;
+  folio?: string | null;
   vehicleId: number;
   vehicle?: VehicleSummary;
   requestedById: number;
@@ -163,6 +166,32 @@ export function useTickets(filters: ListFilters = {}) {
       }>('/maintenance-tickets', { params: filters });
       return data;
     },
+  });
+}
+
+export interface SearchTicketFilters {
+  civ?: string;
+  placa?: string;
+  serie?: string;
+  folio?: string;
+  page?: number;
+  limit?: number;
+}
+
+/** Búsqueda del revisor (ADMIN / SUP_MAINT) por CIV / placa / serie / folio. */
+export function useSearchTickets(filters: SearchTicketFilters, enabled: boolean) {
+  return useQuery({
+    queryKey: ['maintenance-tickets', 'search', filters],
+    queryFn: async () => {
+      const { data } = await api.get<{
+        tickets: MaintenanceTicket[];
+        total: number;
+        page: number;
+        limit: number;
+      }>('/maintenance-tickets/search', { params: filters });
+      return data;
+    },
+    enabled,
   });
 }
 

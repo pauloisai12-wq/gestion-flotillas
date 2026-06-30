@@ -21,6 +21,7 @@ import {
   Building2,
   Landmark,
   ClipboardList,
+  Search,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -85,6 +86,11 @@ const menu: MenuSection[] = [
         // Único punto de entrada al flujo de tickets — el contenido cambia según rol.
         label: 'Tickets de reparación', href: '/tickets',
         icon: ClipboardList, roles: ['ADMIN', 'SUPERVISOR_MAINTENANCE', 'EXECUTOR', 'WORKSHOP'],
+      },
+      {
+        // Búsqueda/consulta de solicitudes por CIV, placa, serie o folio.
+        label: 'Buscar solicitudes', href: '/tickets/buscar',
+        icon: Search, roles: ['ADMIN', 'SUPERVISOR_MAINTENANCE'],
       },
     ],
   },

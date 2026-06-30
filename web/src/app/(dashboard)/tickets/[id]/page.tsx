@@ -1,7 +1,7 @@
 // Detalle de ticket — UI cambia según rol del usuario.
 //
 // ADMIN / SUPERVISOR_MAINTENANCE:
-//   - PENDING: botones [Rechazar] [Asignar 3 talleres]
+//   - PENDING: botones [Rechazar] [Asignar talleres (1-3)]
 //   - AWAITING: BudgetVsQuotesCard FULL-WIDTH + ApprovePanel + [Rechazar]
 //   - APPROVED+: read-only con resumen
 //
@@ -42,6 +42,7 @@ import {
   PackageCheck,
   Clock,
   MinusCircle,
+  FileText,
 } from 'lucide-react';
 
 // Host del API para servir imágenes/PDFs absolutos.
@@ -214,6 +215,23 @@ export default function TicketDetailPage({ params }: { params: Promise<{ id: str
 
         {/* ─── COLUMNA DERECHA: acciones específicas por rol ─── */}
         <div className="space-y-4">
+          {(isAdmin || (user?.role === 'EXECUTOR' && ticket.requestedById === user.id)) && (
+            <Button
+              variant="outline"
+              className="w-full"
+              onClick={() =>
+                window.open(
+                  `${API_BASE}/api/maintenance-tickets/${id}/solicitud.pdf`,
+                  '_blank',
+                  'noopener,noreferrer',
+                )
+              }
+            >
+              <FileText className="size-4 mr-1.5" />
+              Ver/Descargar PDF de solicitud
+            </Button>
+          )}
+
           {isAdmin && (
             <AdminActions ticket={ticket} ticketId={id} selectedQuote={effectiveSelected} />
           )}
@@ -256,14 +274,14 @@ function AdminActions({
         <div>
           <h3 className="font-semibold text-sm">Filtro inicial</h3>
           <p className="text-xs text-muted-foreground mt-1">
-            Revisa la descripción y fotos. Si procede, asigna 3 talleres para que coticen.
+            Revisa la descripción y fotos. Si procede, asigna de 1 a 3 talleres para que coticen.
           </p>
         </div>
         <div className="flex flex-col gap-2">
           <WorkshopPickerDialog ticketId={ticketId}>
             <Button className="w-full">
               <UsersRound className="size-4 mr-1.5" />
-              Asignar 3 talleres
+              Asignar talleres
             </Button>
           </WorkshopPickerDialog>
           <RejectDialog ticketId={ticketId}>
