@@ -3,7 +3,7 @@
 
 import prisma from '../../lib/prisma';
 import { Prisma, UserRole } from '@prisma/client';
-import { ListTicketsQuery } from '../../validators/maintenanceTicketValidator';
+import { ListTicketsQuery, SearchTicketsQuery } from '../../validators/maintenanceTicketValidator';
 import { TicketError } from './shared';
 
 // ─── Detalle de un ticket (filtrado por rol del consultante) ───────
@@ -153,4 +153,96 @@ export async function getBudgetContext(ticketId: number) {
       fits: q.amount ? Number(q.amount) <= available : null,
     })),
   };
+}
+
+// ─── Datos para el PDF de la solicitud (con RBAC) ──────────────────
+// No incluye precios/cotizaciones → seguro para que el ejecutor dueño lo vea.
+export async function getSolicitudData(
+  ticketId: number,
+  user: { userId: number; role: UserRole },
+) {
+  const ticket = await prisma.maintenanceTicket.findUnique({
+    where: { id: ticketId },
+    select: {
+      id: true,
+      folio: true,
+      description: true,
+      failureCategory: true,
+      status: true,
+      reportedOdometer: true,
+      odometerStatus: true,
+      createdAt: true,
+      approvedAt: true,
+      requestedById: true,
+      vehicle: {
+        select: {
+          economicNumber: true,
+          civ: true,
+          plate: true,
+          vin: true,
+          brand: true,
+          model: true,
+          year: true,
+        },
+      },
+      requestedBy: { select: { fullName: true, role: true } },
+      approvedByAdmin: { select: { fullName: true, role: true } },
+    },
+  });
+
+  if (!ticket) throw new TicketError('NOT_FOUND', 'Ticket no existe');
+
+  // El ejecutor sólo puede descargar el PDF de las solicitudes que él levantó.
+  if (user.role === 'EXECUTOR' && ticket.requestedById !== user.userId) {
+    throw new TicketError('FORBIDDEN', 'No puedes ver solicitudes que no levantaste');
+  }
+
+  return ticket;
+}
+
+export type SolicitudData = Awaited<ReturnType<typeof getSolicitudData>>;
+
+// ─── Búsqueda del revisor (CIV / placa / serie / folio) ────────────
+// Coincidencia: folio y CIV exactos (insensible); placa y serie parciales (ILIKE).
+// RBAC: el gating por rol se hace en la ruta (MAINT_MANAGERS).
+export async function searchTickets(query: SearchTicketsQuery) {
+  const vehicleWhere: Prisma.VehicleWhereInput = {};
+  if (query.civ) vehicleWhere.civ = { equals: query.civ, mode: 'insensitive' };
+  if (query.placa) vehicleWhere.plate = { contains: query.placa, mode: 'insensitive' };
+  if (query.serie) vehicleWhere.vin = { contains: query.serie, mode: 'insensitive' };
+
+  const where: Prisma.MaintenanceTicketWhereInput = {};
+  if (query.folio) where.folio = { equals: query.folio, mode: 'insensitive' };
+  if (Object.keys(vehicleWhere).length > 0) where.vehicle = { is: vehicleWhere };
+
+  const [tickets, total] = await Promise.all([
+    prisma.maintenanceTicket.findMany({
+      where,
+      select: {
+        id: true,
+        folio: true,
+        status: true,
+        createdAt: true,
+        vehicle: {
+          select: {
+            id: true,
+            economicNumber: true,
+            plate: true,
+            vin: true,
+            civ: true,
+            brand: true,
+            model: true,
+            year: true,
+          },
+        },
+        requestedBy: { select: { id: true, fullName: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+      skip: (query.page - 1) * query.limit,
+      take: query.limit,
+    }),
+    prisma.maintenanceTicket.count({ where }),
+  ]);
+
+  return { tickets, total, page: query.page, limit: query.limit };
 }

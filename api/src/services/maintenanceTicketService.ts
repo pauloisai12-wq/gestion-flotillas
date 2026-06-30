@@ -33,4 +33,6 @@ export {
   getTicketById,
   listTickets,
   getBudgetContext,
+  getSolicitudData,
+  searchTickets,
 } from './tickets/queries';

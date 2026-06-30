@@ -1,7 +1,7 @@
 // /api/src/services/tickets/createFlow.ts
 // Acciones tempranas del flujo de tickets:
 //   - EJECUTOR: crea ticket, sube fotos.
-//   - ADMIN: rechaza (filtro inicial) o asigna 3 talleres → AWAITING_QUOTES.
+//   - ADMIN: rechaza (filtro inicial) o asigna 1-3 talleres → AWAITING_QUOTES.
 
 import prisma from '../../lib/prisma';
 import { MaintenanceTicketStatus } from '@prisma/client';
@@ -26,15 +26,30 @@ export async function createTicket(executorId: number, input: CreateTicketInput)
     throw new TicketError('FORBIDDEN', 'No eres el ejecutor asignado a este vehículo');
   }
 
-  const ticket = await prisma.maintenanceTicket.create({
-    data: {
-      vehicleId: input.vehicleId,
-      requestedById: executorId,
-      failureCategory: input.failureCategory,
-      description: input.description,
-      reportedOdometer: input.reportedOdometer ?? null,
-      odometerStatus: input.odometerStatus,
-    },
+  // Folio único concurrency-safe: el UPSERT atómico del contador anual
+  // (ON CONFLICT DO UPDATE bloquea la fila) corre en la MISMA transacción que la
+  // inserción del ticket, así dos creaciones simultáneas nunca obtienen el mismo folio.
+  const ticket = await prisma.$transaction(async (tx) => {
+    const year = new Date().getFullYear();
+    const rows = await tx.$queryRaw<{ lastValue: number }[]>`
+      INSERT INTO "maintenance_folio_counters" ("year", "lastValue")
+      VALUES (${year}, 1)
+      ON CONFLICT ("year")
+      DO UPDATE SET "lastValue" = "maintenance_folio_counters"."lastValue" + 1
+      RETURNING "lastValue"`;
+    const folio = `SM-${year}-${String(rows[0].lastValue).padStart(5, '0')}`;
+
+    return tx.maintenanceTicket.create({
+      data: {
+        folio,
+        vehicleId: input.vehicleId,
+        requestedById: executorId,
+        failureCategory: input.failureCategory,
+        description: input.description,
+        reportedOdometer: input.reportedOdometer ?? null,
+        odometerStatus: input.odometerStatus,
+      },
+    });
   });
 
   await notifyTicketAdmins({
@@ -120,7 +135,7 @@ export async function rejectTicket(ticketId: number, adminId: number, rejectionR
   return updated;
 }
 
-// ─── ADMIN: asignar 3 talleres → AWAITING_QUOTES ───────────────────
+// ─── ADMIN: asignar talleres (1 a 3) → AWAITING_QUOTES ─────────────
 export async function assignWorkshops(
   ticketId: number,
   _adminId: number,
@@ -140,7 +155,9 @@ export async function assignWorkshops(
     where: { id: { in: input.workshopIds }, isActive: true },
     select: { id: true, legalName: true, user: { select: { id: true } } },
   });
-  if (workshops.length !== 3) {
+  // Se aceptan 1-3 talleres (validado en el schema); aquí sólo verificamos que
+  // todos los seleccionados existan y estén activos.
+  if (workshops.length !== input.workshopIds.length) {
     throw new TicketError('BAD_REQUEST', 'Algún taller no existe o está inactivo');
   }
 

@@ -18,14 +18,17 @@ import {
   approveTicketSchema,
   completeRepairSchema,
   listTicketsQuerySchema,
+  searchTicketsQuerySchema,
   CreateTicketInput,
   RejectTicketInput,
   AssignWorkshopsInput,
   ApproveTicketInput,
   CompleteRepairInput,
   ListTicketsQuery,
+  SearchTicketsQuery,
 } from '../validators/maintenanceTicketValidator';
 import { validateBody, validateQuery } from '../middlewares/validate';
+import { renderSolicitudPdf } from '../services/tickets/solicitudPdf';
 import { parseId } from '../lib/http';
 
 const router = Router();
@@ -95,6 +98,22 @@ router.get(
   },
 );
 
+// Búsqueda del revisor (ADMIN / SUP_MAINT) por CIV / placa / serie / folio.
+// IMPORTANTE: debe ir ANTES de '/:id' o Express captura 'search' como :id.
+router.get(
+  '/search',
+  requireRole(RoleGroups.MAINT_MANAGERS),
+  validateQuery(searchTicketsQuerySchema),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const result = await ticketService.searchTickets(req.query as unknown as SearchTicketsQuery);
+      res.json(result);
+    } catch (err) {
+      handleTicketError(err, res, next);
+    }
+  },
+);
+
 router.get(
   '/:id',
   requireRole([...RoleGroups.ANY_AUTH, 'WORKSHOP']),
@@ -106,6 +125,28 @@ router.get(
         role: req.user!.role,
       });
       res.json(ticket);
+    } catch (err) {
+      handleTicketError(err, res, next);
+    }
+  },
+);
+
+// PDF de la solicitud (on-demand, refleja el estatus actual). Visible para
+// ADMIN/SUP_MAINT y el ejecutor dueño (el service aplica el RBAC del ejecutor).
+router.get(
+  '/:id/solicitud.pdf',
+  requireRole([...RoleGroups.MAINT_MANAGERS, 'EXECUTOR']),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const id = parseId(req);
+      const data = await ticketService.getSolicitudData(id, {
+        userId: req.user!.userId,
+        role: req.user!.role,
+      });
+      const pdf = await renderSolicitudPdf(data);
+      res.contentType('application/pdf');
+      res.setHeader('Content-Disposition', `inline; filename="${data.folio ?? 'solicitud-' + id}.pdf"`);
+      res.send(pdf);
     } catch (err) {
       handleTicketError(err, res, next);
     }

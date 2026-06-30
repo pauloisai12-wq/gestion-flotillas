@@ -45,15 +45,16 @@ export const rejectTicketSchema = z.object({
 
 export type RejectTicketInput = z.infer<typeof rejectTicketSchema>;
 
-/// ── ADMIN: asignar exactamente 3 talleres ─────────────────────────
+/// ── ADMIN: asignar talleres (1 a 3, opcional cuántos) ─────────────
 export const assignWorkshopsSchema = z
   .object({
     workshopIds: z
       .array(z.number().int().positive())
-      .length(3, 'Debes seleccionar exactamente 3 talleres'),
+      .min(1, 'Selecciona al menos un taller')
+      .max(3, 'Puedes asignar como máximo 3 talleres'),
   })
-  .refine((d) => new Set(d.workshopIds).size === 3, {
-    message: 'Los 3 talleres deben ser distintos',
+  .refine((d) => new Set(d.workshopIds).size === d.workshopIds.length, {
+    message: 'Los talleres seleccionados deben ser distintos',
     path: ['workshopIds'],
   });
 
@@ -125,3 +126,16 @@ export const listTicketsQuerySchema = z.object({
 });
 
 export type ListTicketsQuery = z.infer<typeof listTicketsQuerySchema>;
+
+/// ── Revisor (ADMIN / SUP_MAINT): búsqueda por CIV / placa / serie / folio ──
+/// Coincidencia: folio y CIV exactos; placa y serie parciales (ILIKE).
+export const searchTicketsQuerySchema = z.object({
+  civ: z.string().trim().min(1).optional(),
+  placa: z.string().trim().min(1).optional(),
+  serie: z.string().trim().min(1).optional(),
+  folio: z.string().trim().min(1).optional(),
+  page: z.coerce.number().int().positive().default(1),
+  limit: z.coerce.number().int().positive().max(100).default(20),
+});
+
+export type SearchTicketsQuery = z.infer<typeof searchTicketsQuerySchema>;
