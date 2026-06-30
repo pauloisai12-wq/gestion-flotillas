@@ -708,7 +708,7 @@ model MaintenanceTicket {
 }
 
 /// Cotización individual de un taller para un ticket.
-/// Se crean 3 al pasar a AWAITING_QUOTES (una por taller seleccionado), con
+/// Se crean 1-3 al pasar a AWAITING_QUOTES (una por taller seleccionado), con
 /// submittedAt=null. El taller las actualiza al enviar amount+pdf, o las marca
 /// declined si no quiere/puede cotizar.
 model TicketQuote {
