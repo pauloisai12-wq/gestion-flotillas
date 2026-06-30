@@ -272,6 +272,8 @@ model Vehicle {
   model           String
   year            Int
   vin             String?   @unique
+  /// Clave de Identificación Vehicular (CIV) — identificador único del padrón vehicular
+  civ             String?   @unique
   color           String?
   /// Número de motor
   engineNumber    String?
@@ -653,6 +655,8 @@ model ReportHistory {
 /// Rechazos posibles en filtro inicial (REJECTED_BY_ADMIN) o final (REJECTED_FINAL).
 model MaintenanceTicket {
   id                Int                      @id @default(autoincrement())
+  /// Folio único de la solicitud (formato SM-AAAA-NNNNN). Se asigna en la creación.
+  folio             String?                  @unique
   vehicleId         Int
   vehicle           Vehicle                  @relation(fields: [vehicleId], references: [id])
 
@@ -751,6 +755,16 @@ model TicketAttachment {
 
   @@index([ticketId])
   @@map("ticket_attachments")
+}
+
+/// Contador de folios de solicitudes de mantenimiento, con reinicio por año.
+/// El incremento se hace con UPSERT atómico (ON CONFLICT DO UPDATE) dentro de la
+/// transacción de creación del ticket → concurrency-safe, sin folios duplicados.
+model MaintenanceFolioCounter {
+  year      Int @id
+  lastValue Int @default(0)
+
+  @@map("maintenance_folio_counters")
 }
 
 // ============================================
