@@ -79,10 +79,6 @@ const menu: MenuSection[] = [
         icon: Fuel, roles: ['ADMIN', 'SUPERVISOR_FUEL'],
       },
       {
-        label: 'Mantenimiento', href: '/maintenance',
-        icon: Wrench, roles: ['ADMIN', 'SUPERVISOR_MAINTENANCE'],
-      },
-      {
         // Único punto de entrada al flujo de tickets — el contenido cambia según rol.
         label: 'Tickets de reparación', href: '/tickets',
         icon: ClipboardList, roles: ['ADMIN', 'SUPERVISOR_MAINTENANCE', 'EXECUTOR', 'WORKSHOP'],
