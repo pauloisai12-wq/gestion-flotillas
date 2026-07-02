@@ -25,6 +25,10 @@ export interface LoginResponse {
     email: string;
     fullName: string;
     role: UserRole;
+    // Solo aplica a role=WORKSHOP; el frontend lo usa para vincular sus quotes.
+    // Debe venir en el login (no solo en /auth/me) o el taller no ve el form de
+    // cotización hasta recargar la página.
+    workshopId: number | null;
   };
 }
 
@@ -71,6 +75,7 @@ export async function login(email: string, password: string): Promise<LoginRespo
       email: user.email,
       fullName: user.fullName,
       role: user.role,
+      workshopId: user.workshopId,
     },
   };
 }
