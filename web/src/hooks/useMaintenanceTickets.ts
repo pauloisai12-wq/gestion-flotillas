@@ -313,6 +313,24 @@ export function useAssignWorkshops() {
   });
 }
 
+/** Cambiar/reasignar los talleres de un ticket que ya está en AWAITING_QUOTES. */
+export function useReassignWorkshops() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ ticketId, workshopIds }: { ticketId: number; workshopIds: number[] }) => {
+      const { data } = await api.post<MaintenanceTicket>(
+        `/maintenance-tickets/${ticketId}/reassign-workshops`,
+        { workshopIds },
+      );
+      return data;
+    },
+    onSuccess: (_d, vars) => {
+      qc.invalidateQueries({ queryKey: ['maintenance-tickets'] });
+      qc.invalidateQueries({ queryKey: ['maintenance-tickets', vars.ticketId] });
+    },
+  });
+}
+
 export function useApproveTicket() {
   const qc = useQueryClient();
   return useMutation({

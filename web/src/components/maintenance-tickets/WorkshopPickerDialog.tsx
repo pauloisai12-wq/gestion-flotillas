@@ -3,7 +3,7 @@
 
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import {
   Dialog,
   DialogContent,
@@ -18,23 +18,46 @@ import { Input } from '@/components/ui/input';
 import { Check, Search, AlertCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useWorkshops } from '@/hooks/useWorkshops';
-import { useAssignWorkshops } from '@/hooks/useMaintenanceTickets';
+import { useAssignWorkshops, useReassignWorkshops } from '@/hooks/useMaintenanceTickets';
 
 interface Props {
   ticketId: number;
   children: React.ReactNode; // trigger
   onSuccess?: () => void;
+  /** 'assign' = asignación inicial (PENDING); 'reassign' = cambiar talleres (AWAITING_QUOTES). */
+  mode?: 'assign' | 'reassign';
+  /** Talleres ya asignados a preseleccionar (modo reassign). */
+  initialSelected?: number[];
 }
 
 const MIN = 1;
 const MAX = 3;
 
-export function WorkshopPickerDialog({ ticketId, children, onSuccess }: Props) {
+export function WorkshopPickerDialog({
+  ticketId,
+  children,
+  onSuccess,
+  mode = 'assign',
+  initialSelected,
+}: Props) {
+  const isReassign = mode === 'reassign';
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
-  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [selected, setSelected] = useState<Set<number>>(new Set(initialSelected ?? []));
   const { data: workshops, isLoading } = useWorkshops();
   const assign = useAssignWorkshops();
+  const reassign = useReassignWorkshops();
+  const mutation = isReassign ? reassign : assign;
+
+  // Al abrir, sembrar la selección con los talleres actuales (reassign) o vaciar (assign).
+  useEffect(() => {
+    if (open) {
+      setSelected(new Set(initialSelected ?? []));
+      setSearch('');
+    }
+    // initialSelected es un array nuevo en cada render; lo serializamos para comparar por valor.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, (initialSelected ?? []).join(',')]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -58,7 +81,7 @@ export function WorkshopPickerDialog({ ticketId, children, onSuccess }: Props) {
   async function submit() {
     if (selected.size < MIN || selected.size > MAX) return;
     try {
-      await assign.mutateAsync({ ticketId, workshopIds: Array.from(selected) });
+      await mutation.mutateAsync({ ticketId, workshopIds: Array.from(selected) });
       setOpen(false);
       setSelected(new Set());
       setSearch('');
@@ -68,16 +91,24 @@ export function WorkshopPickerDialog({ ticketId, children, onSuccess }: Props) {
     }
   }
 
-  const error = assign.error as { response?: { data?: { error?: string } } } | null;
+  const error = mutation.error as { response?: { data?: { error?: string } } } | null;
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>{children}</DialogTrigger>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>Asignar talleres para cotizar</DialogTitle>
+          <DialogTitle>{isReassign ? 'Cambiar talleres asignados' : 'Asignar talleres para cotizar'}</DialogTitle>
           <DialogDescription>
-            Selecciona entre <strong>{MIN}</strong> y <strong>{MAX}</strong> talleres. Recibirán una notificación para subir su cotización.
+            Selecciona entre <strong>{MIN}</strong> y <strong>{MAX}</strong> talleres.{' '}
+            {isReassign ? (
+              <>
+                Los talleres nuevos recibirán una invitación; los que quites dejarán de participar
+                (si ya habían enviado su cotización, se perderá).
+              </>
+            ) : (
+              <>Recibirán una notificación para subir su cotización.</>
+            )}
           </DialogDescription>
         </DialogHeader>
 
@@ -151,9 +182,15 @@ export function WorkshopPickerDialog({ ticketId, children, onSuccess }: Props) {
           </span>
           <Button
             onClick={submit}
-            disabled={selected.size < MIN || selected.size > MAX || assign.isPending}
+            disabled={selected.size < MIN || selected.size > MAX || mutation.isPending}
           >
-            {assign.isPending ? 'Asignando…' : 'Asignar y notificar'}
+            {mutation.isPending
+              ? isReassign
+                ? 'Guardando…'
+                : 'Asignando…'
+              : isReassign
+                ? 'Guardar cambios'
+                : 'Asignar y notificar'}
           </Button>
         </DialogFooter>
       </DialogContent>

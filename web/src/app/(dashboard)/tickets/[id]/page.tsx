@@ -306,6 +306,15 @@ function AdminActions({
           </div>
         )}
         <ApprovePanel ticketId={ticketId} selectedQuoteId={selectedQuote} />
+        <WorkshopPickerDialog
+          ticketId={ticketId}
+          mode="reassign"
+          initialSelected={(ticket.quotes ?? []).map((q) => q.workshopId)}
+        >
+          <Button variant="outline" className="w-full">
+            <UsersRound className="size-4 mr-1.5" /> Cambiar talleres
+          </Button>
+        </WorkshopPickerDialog>
         <RejectDialog ticketId={ticketId}>
           <Button variant="outline" className="w-full">
             <XCircle className="size-4 mr-1.5" /> Rechazar tras cotizar

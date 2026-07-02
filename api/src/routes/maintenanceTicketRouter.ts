@@ -228,6 +228,22 @@ router.post(
   },
 );
 
+// Reasignar/cambiar talleres cuando el ticket ya está en AWAITING_QUOTES.
+router.post(
+  '/:id/reassign-workshops',
+  requireRole(RoleGroups.TICKET_ADMINS),
+  validateBody(assignWorkshopsSchema),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const id = parseId(req);
+      const ticket = await ticketService.reassignWorkshops(id, req.user!.userId, req.body as AssignWorkshopsInput);
+      res.json(ticket);
+    } catch (err) {
+      handleTicketError(err, res, next);
+    }
+  },
+);
+
 router.post(
   '/:id/approve',
   requireRole(RoleGroups.TICKET_ADMINS),

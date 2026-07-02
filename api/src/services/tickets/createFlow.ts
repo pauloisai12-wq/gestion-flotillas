@@ -194,3 +194,101 @@ export async function assignWorkshops(
 
   return result;
 }
+
+// ─── ADMIN: reasignar talleres (cambiar la selección en AWAITING_QUOTES) ──
+// A diferencia de assignWorkshops (asignación inicial desde PENDING_ADMIN_APPROVAL),
+// esto ajusta el conjunto de talleres cuando el ticket YA está esperando cotizaciones:
+// se recibe la lista deseada (1-3) y se sincroniza por diferencia.
+//   • Talleres nuevos → se crea su TicketQuote y se les notifica.
+//   • Talleres que se quitan → se borra su TicketQuote (se pierde su cotización si
+//     ya la habían enviado; es la intención explícita del admin al cambiarlo).
+//   • Talleres que se mantienen → intactos (conservan su cotización).
+// El estado del ticket NO cambia: sigue en AWAITING_QUOTES.
+export async function reassignWorkshops(
+  ticketId: number,
+  _adminId: number,
+  input: AssignWorkshopsInput,
+) {
+  const ticket = await prisma.maintenanceTicket.findUnique({
+    where: { id: ticketId },
+    select: {
+      id: true,
+      status: true,
+      quotes: { select: { id: true, workshopId: true, isWinner: true } },
+    },
+  });
+
+  if (!ticket) throw new TicketError('NOT_FOUND', 'Ticket no existe');
+  if (ticket.status !== 'AWAITING_QUOTES') {
+    throw new TicketError(
+      'INVALID_STATE',
+      `Solo se pueden cambiar talleres mientras se esperan cotizaciones (actual: ${ticket.status})`,
+    );
+  }
+
+  const desiredIds = input.workshopIds;
+  const currentIds = ticket.quotes.map((q) => q.workshopId);
+
+  const toAddIds = desiredIds.filter((id) => !currentIds.includes(id));
+  const toRemove = ticket.quotes.filter((q) => !desiredIds.includes(q.workshopId));
+
+  // Defensivo: en AWAITING_QUOTES no debería haber ganador, pero nunca borres uno.
+  if (toRemove.some((q) => q.isWinner)) {
+    throw new TicketError('INVALID_STATE', 'No se puede quitar un taller con cotización ganadora');
+  }
+
+  // Sin cambios: no-op idempotente, devolvemos el ticket tal cual.
+  if (toAddIds.length === 0 && toRemove.length === 0) {
+    return prisma.maintenanceTicket.findUniqueOrThrow({
+      where: { id: ticketId },
+      include: { quotes: { include: { workshop: { select: { id: true, legalName: true } } } } },
+    });
+  }
+
+  // Verificar que todos los talleres NUEVOS existan y estén activos.
+  const addedWorkshops = await prisma.workshop.findMany({
+    where: { id: { in: toAddIds }, isActive: true },
+    select: { id: true, legalName: true, user: { select: { id: true } } },
+  });
+  if (addedWorkshops.length !== toAddIds.length) {
+    throw new TicketError('BAD_REQUEST', 'Algún taller no existe o está inactivo');
+  }
+
+  const result = await prisma.$transaction(async (tx) => {
+    if (toRemove.length > 0) {
+      await tx.ticketQuote.deleteMany({
+        where: { ticketId, workshopId: { in: toRemove.map((q) => q.workshopId) } },
+      });
+    }
+    if (toAddIds.length > 0) {
+      await tx.ticketQuote.createMany({
+        data: toAddIds.map((wid) => ({ ticketId, workshopId: wid })),
+      });
+    }
+
+    return tx.maintenanceTicket.update({
+      where: { id: ticketId },
+      data: {}, // toca updatedAt; el estado permanece en AWAITING_QUOTES
+      include: { quotes: { include: { workshop: { select: { id: true, legalName: true } } } } },
+    });
+  });
+
+  // Notificar solo a los talleres recién agregados.
+  await Promise.all(
+    addedWorkshops.map(async (w) => {
+      if (!w.user) {
+        logger.warn({ workshopId: w.id, ticketId }, 'Workshop sin cuenta de usuario — no se envía notificación');
+        return;
+      }
+      await createNotification({
+        userId: w.user.id,
+        type: 'MAINTENANCE_QUOTE_REQUESTED',
+        title: 'Solicitud de cotización',
+        message: `Se te invitó a cotizar el ticket #${ticketId}`,
+        entityRef: `ticket:${ticketId}`,
+      });
+    }),
+  );
+
+  return result;
+}

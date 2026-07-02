@@ -19,6 +19,7 @@ export {
   addAttachment,
   rejectTicket,
   assignWorkshops,
+  reassignWorkshops,
 } from './tickets/createFlow';
 
 export { submitQuote, declineQuote } from './tickets/quoteFlow';
