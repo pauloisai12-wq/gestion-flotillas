@@ -8,6 +8,9 @@
     "start": "node dist/index.js",
     "bootstrap:admin": "node dist/scripts/bootstrap-admin.js",
     "user:create": "node dist/scripts/create-user.js",
+    "test:config-refs": "node scripts/check-config-references.js",
+    "test:migrations": "node scripts/check-qa-migrations-safe.js",
+    "test:qa-ingest": "node scripts/test-qa-ingest-consistency.js",
     "qa:device:register": "node dist/scripts/qa-externa-device-register.js",
     "qa:device:revoke": "node dist/scripts/qa-externa-device-revoke.js",
     "qa:reviewer:create": "node dist/scripts/qa-reviewer-create.js"

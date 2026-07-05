@@ -5,7 +5,7 @@
 import type { QaExternaPrograma } from '@prisma/client';
 import prisma from '../lib/prisma';
 import { isPrismaKnownError } from '../middlewares/errorHandler';
-import { processImage } from '../lib/qaExternaStorage';
+import { processImage, type StoredImage } from '../lib/qaExternaStorage';
 
 export interface IngestInput {
   clienteRegistroId: string;
@@ -37,6 +37,18 @@ export interface IngestResult {
 }
 
 export async function ingest(input: IngestInput): Promise<IngestResult> {
+  return ingestWithDeps(input, { db: prisma, processImage });
+}
+
+interface IngestDeps {
+  db: typeof prisma;
+  processImage: typeof processImage;
+}
+
+export async function ingestWithDeps(
+  input: IngestInput,
+  deps: IngestDeps,
+): Promise<IngestResult> {
   const registroData = {
     dispositivoId: input.dispositivoId,
     identificadorApp: input.identificadorApp,
@@ -50,73 +62,66 @@ export async function ingest(input: IngestInput): Promise<IngestResult> {
     metadataRaw: input.metadataRaw,
   };
 
-  // 1. Upsert idempotente del registro (last-write-wins). Ante dos POST
-  //    concurrentes con la misma clave, uno crea y el otro choca con el UNIQUE
-  //    (P2002) → caemos a update y ambos convergen al mismo id.
-  let registro;
-  try {
-    registro = await prisma.qaExternaRegistro.upsert({
-      where: { clienteRegistroId: input.clienteRegistroId },
-      create: { clienteRegistroId: input.clienteRegistroId, ...registroData },
-      update: registroData,
+  // 1. Validar/escribir imágenes antes de tocar la BD. Si el JPEG real falla o
+  //    el filesystem no permite escribir, no queda un registro sin imagen.
+  const storedImages: StoredImage[] = [];
+  for (const buffer of input.buffers) {
+    storedImages.push(await deps.processImage(buffer, input.programa));
+  }
+
+  const writeOnce = () =>
+    deps.db.$transaction(async (tx) => {
+      // 2. Upsert idempotente del registro (last-write-wins). Ante dos POST
+      //    concurrentes con la misma clave, un P2002 aborta esta transacción;
+      //    el retry controlado ocurre afuera con una transacción nueva.
+      const registro = await tx.qaExternaRegistro.upsert({
+        where: { clienteRegistroId: input.clienteRegistroId },
+        create: { clienteRegistroId: input.clienteRegistroId, ...registroData },
+        update: registroData,
+      });
+
+      // 3. Por imagen: upsert por sha256 (dedupe en BD) y vínculo idempotente.
+      const imagenes: IngestResult['imagenes'] = [];
+      for (const meta of storedImages) {
+        const imagen = await tx.qaExternaImagen.upsert({
+          where: { sha256_programa: { sha256: meta.sha256, programa: input.programa } },
+          create: {
+            sha256: meta.sha256,
+            programa: input.programa,
+            ruta: meta.ruta,
+            mime: meta.mime,
+            bytes: meta.bytes,
+            width: meta.width,
+            height: meta.height,
+          },
+          update: {}, // dedupe: no se reescriben bytes ni metadatos
+        });
+
+        // Vínculo idempotente (PK compuesta → skipDuplicates evita duplicar).
+        await tx.qaExternaRegistroImagen.createMany({
+          data: [{ registroId: registro.id, imagenId: imagen.id }],
+          skipDuplicates: true,
+        });
+
+        imagenes.push({
+          id: imagen.id,
+          sha256: imagen.sha256,
+          bytes: imagen.bytes,
+          mime: imagen.mime,
+          width: imagen.width,
+          height: imagen.height,
+        });
+      }
+
+      return { registroId: registro.id, imagenes };
     });
+
+  try {
+    return await writeOnce();
   } catch (e) {
     if (isPrismaKnownError(e, 'P2002')) {
-      registro = await prisma.qaExternaRegistro.update({
-        where: { clienteRegistroId: input.clienteRegistroId },
-        data: registroData,
-      });
-    } else {
-      throw e;
+      return writeOnce();
     }
+    throw e;
   }
-
-  // 2. Por imagen: validar/escribir (dedupe en disco), upsert por sha256 (dedupe
-  //    en BD) y vincular al registro sin duplicar el vínculo.
-  const imagenes: IngestResult['imagenes'] = [];
-  for (const buffer of input.buffers) {
-    const meta = await processImage(buffer, input.programa);
-
-    let imagen;
-    try {
-      imagen = await prisma.qaExternaImagen.upsert({
-        where: { sha256_programa: { sha256: meta.sha256, programa: input.programa } },
-        create: {
-          sha256: meta.sha256,
-          programa: input.programa,
-          ruta: meta.ruta,
-          mime: meta.mime,
-          bytes: meta.bytes,
-          width: meta.width,
-          height: meta.height,
-        },
-        update: {}, // dedupe: no se reescriben bytes ni metadatos
-      });
-    } catch (e) {
-      if (isPrismaKnownError(e, 'P2002')) {
-        imagen = await prisma.qaExternaImagen.findUniqueOrThrow({
-          where: { sha256_programa: { sha256: meta.sha256, programa: input.programa } },
-        });
-      } else {
-        throw e;
-      }
-    }
-
-    // Vínculo idempotente (PK compuesta → skipDuplicates evita duplicar).
-    await prisma.qaExternaRegistroImagen.createMany({
-      data: [{ registroId: registro.id, imagenId: imagen.id }],
-      skipDuplicates: true,
-    });
-
-    imagenes.push({
-      id: imagen.id,
-      sha256: imagen.sha256,
-      bytes: imagen.bytes,
-      mime: imagen.mime,
-      width: imagen.width,
-      height: imagen.height,
-    });
-  }
-
-  return { registroId: registro.id, imagenes };
 }
