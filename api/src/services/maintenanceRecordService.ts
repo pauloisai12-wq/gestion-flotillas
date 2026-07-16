@@ -2,9 +2,69 @@
 // CRUD para registros de mantenimiento realizados.
 // Al registrar un mantenimiento, se reinicia el contador de km para ese servicio.
 
-import prisma from '../lib/prisma';
+import prisma, { Tx } from '../lib/prisma';
 import { MaintenanceInput } from '../validators/maintenanceValidator';
 import { NotFound, BadRequest } from '../middlewares/errorHandler';
+import { lockOpenBudgetPeriod } from './budgetPeriodLock';
+import { businessPeriodForDate } from '../lib/businessTime';
+
+interface LockedMaintenanceVehicle {
+  id: number;
+  vehicleTypeId: number;
+  currentOdometer: number;
+  isActive: boolean;
+}
+
+interface LockedMaintenanceRecord {
+  id: number;
+  vehicleId: number;
+  serviceDate: Date;
+  evidenceUrl: string | null;
+}
+
+async function lockMaintenanceRecord(tx: Tx, id: number): Promise<LockedMaintenanceRecord> {
+  const rows = await tx.$queryRaw<LockedMaintenanceRecord[]>`
+    SELECT id, "vehicleId", "serviceDate", "evidenceUrl"
+    FROM maintenance_records
+    WHERE id = ${id}
+    FOR UPDATE
+  `;
+  if (rows.length === 0) throw NotFound('Registro');
+  return rows[0];
+}
+
+function orderedUniquePeriods(...periods: Array<{ year: number; month: number }>) {
+  return [...new Map(
+    periods.map((period) => [`${period.year}-${period.month}`, period]),
+  ).values()].sort((a, b) => a.year - b.year || a.month - b.month);
+}
+
+/**
+ * Serializa cualquier escritura operativa con la baja lógica y con las otras
+ * fuentes del odómetro maestro (combustible/corrección administrativa).
+ */
+async function lockActiveVehicle(tx: Tx, vehicleId: number): Promise<LockedMaintenanceVehicle> {
+  const rows = await tx.$queryRaw<LockedMaintenanceVehicle[]>`
+    SELECT id, "vehicleTypeId", "currentOdometer", "isActive"
+    FROM vehicles
+    WHERE id = ${vehicleId}
+    FOR UPDATE
+  `;
+  if (rows.length === 0) throw NotFound('Vehículo');
+  if (!rows[0].isActive) throw BadRequest('El vehículo está dado de baja');
+  return rows[0];
+}
+
+function maintenancePeriod(serviceDate: string) {
+  // Los formularios envían fecha civil YYYY-MM-DD; no debe correrse al mes
+  // anterior al interpretarla como medianoche UTC en America/Mexico_City.
+  const civilDate = /^(\d{4})-(\d{2})-(\d{2})$/.exec(serviceDate);
+  if (civilDate) return { year: Number(civilDate[1]), month: Number(civilDate[2]) };
+
+  const parsed = new Date(serviceDate);
+  if (Number.isNaN(parsed.getTime())) throw BadRequest('Fecha de servicio inválida');
+  return businessPeriodForDate(parsed);
+}
 
 /**
  * Obtener todos los registros de mantenimiento con filtros opcionales.
@@ -50,16 +110,11 @@ export async function getAll(query: {
 /**
  * Obtener registros de mantenimiento de un vehículo específico.
  */
-export async function getByVehicle(vehicleId: number) {
-  return prisma.maintenanceRecord.findMany({
-    where: { vehicleId },
-    orderBy: { serviceDate: 'desc' },
-    include: {
-      service: {
-        select: { id: true, name: true, intervalKm: true },
-      },
-    },
-  });
+export async function getByVehicle(
+  vehicleId: number,
+  query: { page?: number; limit?: number } = {},
+) {
+  return getAll({ ...query, vehicleId });
 }
 
 /**
@@ -67,28 +122,24 @@ export async function getByVehicle(vehicleId: number) {
  * Esto reinicia el contador de km para ese servicio en ese vehículo.
  */
 export async function create(data: MaintenanceInput, evidenceUrl?: string) {
-  // Verificar que el vehículo existe
-  const vehicle = await prisma.vehicle.findUnique({
-    where: { id: data.vehicleId },
-  });
-  if (!vehicle) throw NotFound('Vehículo');
-
-  // Verificar que el servicio existe
-  const service = await prisma.serviceCatalog.findUnique({
-    where: { id: data.serviceId },
-  });
-  if (!service) throw NotFound('Servicio');
-
-  // Verificar que el servicio corresponde al tipo de vehículo
-  if (service.vehicleTypeId !== vehicle.vehicleTypeId) {
-    throw BadRequest(
-      'El servicio "' + service.name +
-      '" no corresponde al tipo de vehículo de esta unidad'
-    );
-  }
-
-  // Crear el registro dentro de una transacción
+  // Lectura, validación, alta y posible avance del odómetro comparten el lock.
   const result = await prisma.$transaction(async function(tx) {
+    const period = maintenancePeriod(data.serviceDate);
+    await lockOpenBudgetPeriod(tx, 'MAINTENANCE', period.year, period.month);
+    const vehicle = await lockActiveVehicle(tx, data.vehicleId);
+
+    const service = await tx.serviceCatalog.findUnique({
+      where: { id: data.serviceId },
+    });
+    if (!service) throw NotFound('Servicio');
+
+    if (service.vehicleTypeId !== vehicle.vehicleTypeId) {
+      throw BadRequest(
+        'El servicio "' + service.name +
+        '" no corresponde al tipo de vehículo de esta unidad'
+      );
+    }
+
     // 1. Crear el registro de mantenimiento
     const record = await tx.maintenanceRecord.create({
       data: {
@@ -110,7 +161,7 @@ export async function create(data: MaintenanceInput, evidenceUrl?: string) {
       },
     });
 
-    // 2. Actualizar odómetro del vehículo si es OK y mayor al actual
+    // El lock impide que una lectura obsoleta reduzca el maestro bajo concurrencia.
     if (data.odometerStatus === 'OK' && data.odometer != null && data.odometer > vehicle.currentOdometer) {
       await tx.vehicle.update({
         where: { id: data.vehicleId },
@@ -128,26 +179,33 @@ export async function create(data: MaintenanceInput, evidenceUrl?: string) {
  * Actualizar un registro de mantenimiento.
  */
 export async function update(id: number, data: MaintenanceInput, evidenceUrl?: string) {
-  const existing = await prisma.maintenanceRecord.findUnique({ where: { id } });
-  if (!existing) throw NotFound('Registro');
+  return prisma.$transaction(async (tx) => {
+    const existing = await lockMaintenanceRecord(tx, id);
+    const originalPeriod = businessPeriodForDate(existing.serviceDate);
+    const targetPeriod = maintenancePeriod(data.serviceDate);
+    for (const period of orderedUniquePeriods(originalPeriod, targetPeriod)) {
+      await lockOpenBudgetPeriod(tx, 'MAINTENANCE', period.year, period.month);
+    }
+    await lockActiveVehicle(tx, existing.vehicleId);
 
-  return prisma.maintenanceRecord.update({
-    where: { id },
-    data: {
-      odometer: data.odometerStatus === 'OK' ? (data.odometer as number) : null,
-      odometerStatus: data.odometerStatus,
-      cost: data.cost,
-      workshopId: data.workshopId ?? null,
-      workshopRaw: data.workshopRaw ?? null,
-      serviceDate: new Date(data.serviceDate),
-      notes: data.notes || null,
-      evidenceUrl: evidenceUrl !== undefined ? evidenceUrl : existing.evidenceUrl,
-    },
-    include: {
-      vehicle: { select: { id: true, plate: true, economicNumber: true } },
-      service: { select: { id: true, name: true, intervalKm: true } },
-      workshopRef: { select: { id: true, legalName: true, tradeName: true } },
-    },
+    return tx.maintenanceRecord.update({
+      where: { id },
+      data: {
+        odometer: data.odometerStatus === 'OK' ? (data.odometer as number) : null,
+        odometerStatus: data.odometerStatus,
+        cost: data.cost,
+        workshopId: data.workshopId ?? null,
+        workshopRaw: data.workshopRaw ?? null,
+        serviceDate: new Date(data.serviceDate),
+        notes: data.notes || null,
+        evidenceUrl: evidenceUrl !== undefined ? evidenceUrl : existing.evidenceUrl,
+      },
+      include: {
+        vehicle: { select: { id: true, plate: true, economicNumber: true } },
+        service: { select: { id: true, name: true, intervalKm: true } },
+        workshopRef: { select: { id: true, legalName: true, tradeName: true } },
+      },
+    });
   });
 }
 
@@ -155,8 +213,11 @@ export async function update(id: number, data: MaintenanceInput, evidenceUrl?: s
  * Eliminar un registro de mantenimiento.
  */
 export async function remove(id: number) {
-  const existing = await prisma.maintenanceRecord.findUnique({ where: { id } });
-  if (!existing) throw NotFound('Registro');
-
-  return prisma.maintenanceRecord.delete({ where: { id } });
+  return prisma.$transaction(async (tx) => {
+    const existing = await lockMaintenanceRecord(tx, id);
+    const period = businessPeriodForDate(existing.serviceDate);
+    await lockOpenBudgetPeriod(tx, 'MAINTENANCE', period.year, period.month);
+    await lockActiveVehicle(tx, existing.vehicleId);
+    return tx.maintenanceRecord.delete({ where: { id } });
+  });
 }

@@ -10,6 +10,7 @@ import { useState } from 'react';
 import { useDashboardSummaryFiltered } from '@/hooks/useDashboardAnalytics';
 import { useVehicles } from '@/hooks/useVehicles';
 import { DashboardGreeting } from '@/components/dashboard/DashboardGreeting';
+import { DashboardErrorAlert } from '@/components/dashboard/DashboardErrorAlert';
 import { KpiCard } from '@/components/ui/kpi-card';
 import { SkeletonKpi, SkeletonTable } from '@/components/ui/skeleton';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -27,14 +28,25 @@ const classificationLabel: Record<string, string> = {
 };
 
 export default function DashboardVehicles() {
-  const { data: summary, isLoading: loadingSum, dataUpdatedAt, refetch } = useDashboardSummaryFiltered({});
+  const summaryQuery = useDashboardSummaryFiltered({});
+  const { data: summary, isLoading: loadingSum, dataUpdatedAt, refetch } = summaryQuery;
   const [search, setSearch] = useState('');
   const [classFilter, setClassFilter] = useState<string>('ALL');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
 
-  const { data: vehiclesResp, isLoading: loadingVehicles } = useVehicles({
+  const vehiclesQuery = useVehicles({
     page: 1, limit: 100, search: search || undefined,
   });
+  const { data: vehiclesResp, isLoading: loadingVehicles } = vehiclesQuery;
+
+  const failedSections = [
+    summaryQuery.isError ? 'resumen de flota' : null,
+    vehiclesQuery.isError ? 'inventario de vehículos' : null,
+  ].filter((section): section is string => section !== null);
+  const retryFailed = () => {
+    if (summaryQuery.isError) void summaryQuery.refetch();
+    if (vehiclesQuery.isError) void vehiclesQuery.refetch();
+  };
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const vehicles = ((vehiclesResp?.data as any[]) || []).filter((v: any) => {
@@ -52,15 +64,21 @@ export default function DashboardVehicles() {
         onRefresh={() => refetch()}
       />
 
+      <DashboardErrorAlert
+        failedSections={failedSections}
+        isRetrying={summaryQuery.isFetching || vehiclesQuery.isFetching}
+        onRetry={retryFailed}
+      />
+
       {/* ═══ 1. ESTADO GENERAL (Z-top) ═══ */}
       <section>
         <h2 className="text-[10px] font-medium uppercase tracking-[0.1em] text-muted-foreground mb-3">
           Estado general
         </h2>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-          {loadingSum || !summary ? (
+          {loadingSum ? (
             Array.from({ length: 4 }).map((_, i) => <SkeletonKpi key={i} />)
-          ) : (
+          ) : summary ? (
             <>
               <KpiCard
                 label="Total unidades" value={formatNumber(summary.totalVehicles)}
@@ -87,6 +105,10 @@ export default function DashboardVehicles() {
                 delta={summary.docsExpired > 0 ? { value: String(summary.docsExpired), trend: 'up', meaning: 'bad' } : undefined}
               />
             </>
+          ) : (
+            <p className="col-span-full rounded-md border border-dashed p-4 text-sm text-muted-foreground">
+              Resumen de flota no disponible.
+            </p>
           )}
         </div>
       </section>
@@ -100,6 +122,10 @@ export default function DashboardVehicles() {
           <CardContent>
             {loadingVehicles ? (
               <SkeletonTable rows={4} cols={4} />
+            ) : vehiclesQuery.isError ? (
+              <p className="py-8 text-center text-sm text-muted-foreground">
+                Unidades prioritarias no disponibles.
+              </p>
             ) : (
               <Table>
                 <TableHeader>
@@ -187,6 +213,10 @@ export default function DashboardVehicles() {
           <CardContent>
             {loadingVehicles ? (
               <SkeletonTable rows={6} cols={5} />
+            ) : vehiclesQuery.isError ? (
+              <p className="py-8 text-center text-sm text-muted-foreground">
+                Inventario no disponible.
+              </p>
             ) : (
               <Table>
                 <TableHeader>

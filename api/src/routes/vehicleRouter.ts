@@ -1,6 +1,14 @@
 // Endpoints REST para vehículos
 import { Router, Request, Response } from 'express';
-import { vehicleSchema, VehicleInput } from '../validators/vehicleValidator';
+import { VehicleStatus } from '@prisma/client';
+import {
+  odometerCorrectionSchema,
+  OdometerCorrectionInput,
+  vehicleSchema,
+  vehicleUpdateSchema,
+  VehicleInput,
+  VehicleUpdateInput,
+} from '../validators/vehicleValidator';
 import * as vehicleService from '../services/vehicleService';
 import { roleMiddleware, RoleGroups, Roles } from '../middlewares/roleMiddleware';
 import { ah } from '../lib/asyncHandler';
@@ -26,7 +34,7 @@ router.get(
       vehicleTypeId: req.query.vehicleTypeId
         ? parseInt(req.query.vehicleTypeId as string)
         : undefined,
-      status: req.query.status as string | undefined,
+      status: req.query.status as VehicleStatus | undefined,
       executorId: req.query.executorId
         ? parseInt(req.query.executorId as string)
         : undefined,
@@ -79,25 +87,44 @@ router.post(
 router.put(
   '/:id',
   roleMiddleware(['ADMIN', 'SUPERVISOR_VEHICLES']),
-  validateBody(vehicleSchema),
+  validateBody(vehicleUpdateSchema),
   ah(async (req: Request, res: Response) => {
     const id = parseId(req);
-    const vehicle = await vehicleService.updateVehicle(id, req.body as VehicleInput);
+    const vehicle = await vehicleService.updateVehicle(id, req.body as VehicleUpdateInput);
+    res.json(vehicle);
+  }),
+);
+
+/**
+ * PATCH /api/vehicles/:id/odometer-correction
+ * Corrección excepcional y auditada. Acceso: Solo ADMIN.
+ */
+router.patch(
+  '/:id/odometer-correction',
+  roleMiddleware(['ADMIN']),
+  validateBody(odometerCorrectionSchema),
+  ah(async (req: Request, res: Response) => {
+    const id = parseId(req);
+    const vehicle = await vehicleService.correctVehicleOdometer(
+      id,
+      req.body as OdometerCorrectionInput,
+      req.user!.userId,
+    );
     res.json(vehicle);
   }),
 );
 
 /**
  * DELETE /api/vehicles/:id
- * Eliminar vehículo. Acceso: Solo ADMIN.
+ * Dar de baja lógica al vehículo. Acceso: Solo ADMIN.
  */
 router.delete(
   '/:id',
   roleMiddleware(['ADMIN']),
   ah(async (req: Request, res: Response) => {
     const id = parseId(req);
-    await vehicleService.deleteVehicle(id);
-    res.json({ message: 'Vehículo eliminado correctamente' });
+    await vehicleService.deleteVehicle(id, req.user!.userId);
+    res.json({ message: 'Vehículo dado de baja correctamente' });
   }),
 );
 

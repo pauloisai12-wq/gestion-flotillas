@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# PERFIL LEGADO: no usar para el entorno vigente.
+# Produccion/QA publico corre en Hetzner Cloud mediante ./deploy-public.sh.
 #
 # deploy.sh — despliegue de un solo comando para flotillas-v2 (QA/Staging).
 #
@@ -24,29 +26,53 @@ cd "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly SCRIPT_NAME="deploy.sh"
 readonly ENV_TEMPLATE="env.staging.plantilla.txt"
 readonly COMPOSE_OVERRIDE="docker-compose.staging.yml"
-readonly COMPOSE_OLD_DIE_MSG="actualiza Compose o aplica el fallback de puertos y reintenta."
+readonly COMPOSE_OLD_DIE_MSG="actualiza Compose y reintenta; no se permite publicar servicios internos como fallback."
+readonly BACKUP_PROFILE="staging"
+readonly DEFAULT_BACKUP_DIR="/srv/backups/flotillas"
+readonly DEFAULT_BACKUP_REQUIRE_MOUNT="/srv/backups"
+readonly PRIMARY_DATA_MOUNT="/srv/datos"
 # Staging persiste Postgres/Redis/uploads/reports en el disco cifrado LUKS bajo
 # /srv/datos (bind mounts del override). deploy-common.sh aborta si NO está montado,
 # para no inicializar una base fantasma vacía en el disco raíz.
 readonly REQUIRE_MOUNT="/srv/datos"
+readonly REQUIRE_LUKS_BACKING="true"
 
 # Ayuda mostrada si Docker Compose es < 2.24 (Gotcha 3: `ports: !reset []`).
 gotcha_reset_help() {
   cat >&2 <<'GOTCHA3'
 
   El override docker-compose.staging.yml usa `ports: !reset []`, que requiere
-  Compose >= 2.24. NO lo aplico automáticamente. Opciones:
-    a) Actualiza Docker Compose a >= 2.24 (recomendado), o
-    b) edita docker-compose.staging.yml y reemplaza cada `ports: !reset []`
-       por un bind a la IP VPN, p.ej.:
-           ports:
-             - "10.10.0.2:5432:5432"
-       (postgres/redis/api/web) — manteniéndolos en la interfaz WireGuard.
+  Compose >= 2.24. Actualiza Docker Compose antes de continuar. Publicar
+  postgres/redis/api/web, incluso en la IP VPN, no es un fallback aceptado.
 GOTCHA3
+}
+
+# API y worker usan el mismo UID/GID numérico en staging para compartir reports.
+# Como usuario no-root solo verifica; si falta ownership imprime comandos sudo
+# exactos. Como root repara idempotentemente, nunca abre permisos 777.
+prepare_persistent_storage() {
+  bash ./scripts/ops/prepare-staging-storage.sh
+  "${COMPOSE[@]}" run --rm --no-deps -T --entrypoint sh api -ceu '
+    upload_probe="/app/uploads/.flotillas-write-probe-$$"
+    report_probe="/app/storage/reports/.flotillas-api-write-probe-$$"
+    trap '\''rm -f "$upload_probe" "$report_probe"'\'' EXIT
+    : > "$upload_probe"
+    : > "$report_probe"
+  '
+  "${COMPOSE[@]}" run --rm --no-deps -T --entrypoint sh worker-python -ceu '
+    report_probe="/app/storage/reports/.flotillas-worker-write-probe-$$"
+    trap '\''rm -f "$report_probe"'\'' EXIT
+    : > "$report_probe"
+  '
 }
 
 # ── Pasos comunes (validar .env, Compose, build, migrate, smoke test) ───────
 source ./deploy-common.sh
+
+# Verifica el estado EFECTIVO del host tras el up, no solo el YAML: Caddy solo
+# en WireGuard, servicios internos sin ports, mounts LUKS y red sin vecinos.
+step "Validando puertos, mounts e aislamiento efectivos de staging"
+bash ./scripts/ops/validate-staging-host.sh -- "${COMPOSE[@]}"
 
 # ── Banner final (específico de staging) ────────────────────────────────────
 cat <<EOF

@@ -7,6 +7,7 @@ import React from 'react';
 import { Document, Page, View, Text, StyleSheet, renderToBuffer } from '@react-pdf/renderer';
 import { UserRole, FailureCategory, MaintenanceTicketStatus } from '@prisma/client';
 import type { SolicitudData } from './queries';
+import { formatBusinessDate } from '../../lib/businessTime';
 
 const el = React.createElement;
 
@@ -34,10 +35,7 @@ const CATEGORIA_FALLA: Record<FailureCategory, string> = {
 
 function fmtDate(value: Date | null | undefined): string {
   if (!value) return '—';
-  const d = new Date(value);
-  const dd = String(d.getDate()).padStart(2, '0');
-  const mm = String(d.getMonth() + 1).padStart(2, '0');
-  return `${dd}/${mm}/${d.getFullYear()}`;
+  return formatBusinessDate(new Date(value));
 }
 
 function estatusAutorizacion(status: MaintenanceTicketStatus, approvedAt: Date | null): string {

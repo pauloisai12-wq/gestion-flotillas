@@ -7,6 +7,7 @@ import { formatCurrency } from '@/lib/formatters';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
+import { businessPeriodForDate } from '@/lib/businessTime';
 import {
   Table,
   TableBody,
@@ -24,9 +25,9 @@ export default function BudgetPage() {
   const [newAmount, setNewAmount] = useState('');
   const [showCreateForm, setShowCreateForm] = useState(false);
 
-  const now = new Date();
-  const currentMonth = now.getMonth() + 1;
-  const currentYear = now.getFullYear();
+  const currentPeriod = businessPeriodForDate();
+  const currentMonth = currentPeriod.month;
+  const currentYear = currentPeriod.year;
 
   const monthNames = [
     '', 'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',

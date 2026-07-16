@@ -2,6 +2,13 @@
 
 import prisma from '../lib/prisma';
 import { Prisma } from '@prisma/client';
+import {
+  businessDateRange,
+  businessPeriodForDate,
+  businessPeriodStart,
+  type BusinessDateRange,
+} from '../lib/businessTime';
+import { BadRequest } from '../middlewares/errorHandler';
 
 // Interfaz de filtros
 export interface DashboardFilters {
@@ -13,6 +20,14 @@ export interface DashboardFilters {
 
 function hasFilters(filters: DashboardFilters): boolean {
   return !!(filters.vehicleTypeId || filters.operatorId || filters.dateFrom || filters.dateTo);
+}
+
+function dashboardDateRange(filters: DashboardFilters): BusinessDateRange {
+  try {
+    return businessDateRange(filters.dateFrom, filters.dateTo);
+  } catch {
+    throw BadRequest('Rango de fechas inválido');
+  }
 }
 
 // ─── Resumen general ───
@@ -42,19 +57,33 @@ export async function getDashboardSummary(filters: DashboardFilters = {}) {
   // Con filtros: consultar tablas base
   const now = new Date();
   const thirtyDays = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
-  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  const monthStart = businessPeriodStart(businessPeriodForDate(now));
+  const range = dashboardDateRange(filters);
 
   const vehicleWhere: Prisma.VehicleWhereInput = {};
   if (filters.vehicleTypeId) vehicleWhere.vehicleTypeId = filters.vehicleTypeId;
 
+  // Los conteos de flota/documentos son estado operativo y excluyen bajas. En
+  // cambio, gasto, litros, cargas y rendimiento son hechos del periodo: dar de
+  // baja una unidad no puede hacer desaparecer combustible ya aprobado.
   const fuelWhere: Prisma.FuelLoadWhereInput = {
-    loadDate: { gte: filters.dateFrom ? new Date(filters.dateFrom) : monthStart, ...(filters.dateTo ? { lte: new Date(filters.dateTo) } : {}) },
+    status: 'APPROVED',
+    loadDate: {
+      gte: range.from ?? monthStart,
+      ...(range.toExclusive ? { lt: range.toExclusive } : {}),
+    },
+    ...(filters.vehicleTypeId
+      ? { vehicle: { vehicleTypeId: filters.vehicleTypeId } }
+      : {}),
   };
-  if (filters.vehicleTypeId) fuelWhere.vehicle = { vehicleTypeId: filters.vehicleTypeId };
   if (filters.operatorId) fuelWhere.operatorId = filters.operatorId;
 
-  const docWhere: Prisma.DocumentWhereInput = {};
-  if (filters.vehicleTypeId) docWhere.vehicle = { vehicleTypeId: filters.vehicleTypeId };
+  const docWhere: Prisma.DocumentWhereInput = {
+    vehicle: {
+      isActive: true,
+      ...(filters.vehicleTypeId ? { vehicleTypeId: filters.vehicleTypeId } : {}),
+    },
+  };
 
   const [totalVehicles, blockedVehicles, docsExpiring, docsExpired, fuelAgg, kmlAgg] = await Promise.all([
     prisma.vehicle.count({ where: { ...vehicleWhere, isActive: true } }),
@@ -91,17 +120,25 @@ export async function getFuelMonthlyTrend(filters: DashboardFilters = {}) {
   }
 
   // Con filtros: consulta parametrizada (segura contra inyección SQL)
-  const conds: Prisma.Sql[] = [Prisma.sql`fl."loadDate" >= NOW() - INTERVAL '12 months'`];
+  const conds: Prisma.Sql[] = [
+    Prisma.sql`fl.status = 'APPROVED'::"FuelLoadStatus"`,
+    Prisma.sql`fl."loadDate" >= (CURRENT_TIMESTAMP - INTERVAL '12 months') AT TIME ZONE 'UTC'`,
+  ];
+  const range = dashboardDateRange(filters);
   if (filters.vehicleTypeId) conds.push(Prisma.sql`v."vehicleTypeId" = ${Number(filters.vehicleTypeId)}`);
   if (filters.operatorId)    conds.push(Prisma.sql`fl."operatorId" = ${Number(filters.operatorId)}`);
-  if (filters.dateFrom)      conds.push(Prisma.sql`fl."loadDate" >= ${new Date(filters.dateFrom)}`);
-  if (filters.dateTo)        conds.push(Prisma.sql`fl."loadDate" <= ${new Date(filters.dateTo)}`);
+  if (range.from)            conds.push(Prisma.sql`fl."loadDate" >= ${range.from}`);
+  if (range.toExclusive)     conds.push(Prisma.sql`fl."loadDate" < ${range.toExclusive}`);
 
   const where = Prisma.join(conds, ' AND ');
+  const businessMonth = Prisma.sql`date_trunc(
+    'month',
+    (fl."loadDate" AT TIME ZONE 'UTC') AT TIME ZONE 'America/Mexico_City'
+  )`;
 
   const result = await prisma.$queryRaw<any[]>`
     SELECT
-      to_char(date_trunc('month', fl."loadDate"), 'YYYY-MM') AS month_label,
+      to_char(${businessMonth}, 'YYYY-MM') AS month_label,
       SUM(fl.amount) AS total_spent,
       SUM(fl.liters) AS total_liters,
       COUNT(*) AS total_loads,
@@ -109,8 +146,8 @@ export async function getFuelMonthlyTrend(filters: DashboardFilters = {}) {
     FROM fuel_loads fl
     JOIN vehicles v ON v.id = fl."vehicleId"
     WHERE ${where}
-    GROUP BY date_trunc('month', fl."loadDate")
-    ORDER BY date_trunc('month', fl."loadDate") ASC
+    GROUP BY ${businessMonth}
+    ORDER BY ${businessMonth} ASC
   `;
   return result.map(formatTrendRow);
 }
@@ -146,12 +183,19 @@ export async function getOperatorRanking(limit: number = 10, filters: DashboardF
     return result.map(formatOperatorRow);
   }
 
-  const conds: Prisma.Sql[] = [Prisma.sql`fl."kmPerLiter" IS NOT NULL`];
+  const conds: Prisma.Sql[] = [
+    Prisma.sql`fl.status = 'APPROVED'::"FuelLoadStatus"`,
+    Prisma.sql`fl."kmPerLiter" IS NOT NULL`,
+    Prisma.sql`v."isActive" = true`,
+  ];
+  const range = dashboardDateRange(filters);
   if (filters.vehicleTypeId) conds.push(Prisma.sql`v."vehicleTypeId" = ${Number(filters.vehicleTypeId)}`);
   if (filters.operatorId)    conds.push(Prisma.sql`o.id = ${Number(filters.operatorId)}`);
-  if (filters.dateFrom)      conds.push(Prisma.sql`fl."loadDate" >= ${new Date(filters.dateFrom)}`);
-  if (filters.dateTo)        conds.push(Prisma.sql`fl."loadDate" <= ${new Date(filters.dateTo)}`);
-  if (!filters.dateFrom && !filters.dateTo) conds.push(Prisma.sql`fl."loadDate" >= date_trunc('month', NOW())`);
+  if (range.from)            conds.push(Prisma.sql`fl."loadDate" >= ${range.from}`);
+  if (range.toExclusive)     conds.push(Prisma.sql`fl."loadDate" < ${range.toExclusive}`);
+  if (!filters.dateFrom && !filters.dateTo) {
+    conds.push(Prisma.sql`fl."loadDate" >= ${businessPeriodStart(businessPeriodForDate())}`);
+  }
 
   const where = Prisma.join(conds, ' AND ');
 
@@ -182,10 +226,12 @@ export async function getBudgetProgress(filters: DashboardFilters = {}) {
   // propio kind/year/month y baseAmount+rolloverIn (NO existe assignedAmount ni
   // un join a fuel_budgets). Replicamos la vista mv_budget_progress:
   // kind='FUEL', mes/año actuales, assigned = baseAmount + rolloverIn.
+  const currentPeriod = businessPeriodForDate();
   const conds: Prisma.Sql[] = [
     Prisma.sql`vb.kind = 'FUEL'`,
-    Prisma.sql`vb.month = EXTRACT(MONTH FROM NOW())::int`,
-    Prisma.sql`vb.year = EXTRACT(YEAR FROM NOW())::int`,
+    Prisma.sql`vb.month = ${currentPeriod.month}`,
+    Prisma.sql`vb.year = ${currentPeriod.year}`,
+    Prisma.sql`v."isActive" = true`,
   ];
   if (filters.vehicleTypeId) conds.push(Prisma.sql`v."vehicleTypeId" = ${Number(filters.vehicleTypeId)}`);
 
@@ -253,12 +299,19 @@ function formatBudgetRow(row: any) {
 }
 
 async function queryVehicleRanking(limit: number, direction: 'ASC' | 'DESC', filters: DashboardFilters) {
-  const conds: Prisma.Sql[] = [Prisma.sql`fl."kmPerLiter" IS NOT NULL`];
+  const conds: Prisma.Sql[] = [
+    Prisma.sql`fl.status = 'APPROVED'::"FuelLoadStatus"`,
+    Prisma.sql`fl."kmPerLiter" IS NOT NULL`,
+    Prisma.sql`v."isActive" = true`,
+  ];
+  const range = dashboardDateRange(filters);
   if (filters.vehicleTypeId) conds.push(Prisma.sql`v."vehicleTypeId" = ${Number(filters.vehicleTypeId)}`);
   if (filters.operatorId)    conds.push(Prisma.sql`fl."operatorId" = ${Number(filters.operatorId)}`);
-  if (filters.dateFrom)      conds.push(Prisma.sql`fl."loadDate" >= ${new Date(filters.dateFrom)}`);
-  if (filters.dateTo)        conds.push(Prisma.sql`fl."loadDate" <= ${new Date(filters.dateTo)}`);
-  if (!filters.dateFrom && !filters.dateTo) conds.push(Prisma.sql`fl."loadDate" >= date_trunc('month', NOW())`);
+  if (range.from)            conds.push(Prisma.sql`fl."loadDate" >= ${range.from}`);
+  if (range.toExclusive)     conds.push(Prisma.sql`fl."loadDate" < ${range.toExclusive}`);
+  if (!filters.dateFrom && !filters.dateTo) {
+    conds.push(Prisma.sql`fl."loadDate" >= ${businessPeriodStart(businessPeriodForDate())}`);
+  }
 
   const where = Prisma.join(conds, ' AND ');
   // direction es identificador SQL (no valor), no es parametrizable: validamos con whitelist

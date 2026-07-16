@@ -14,6 +14,7 @@ import { BadRequest, NotFound, Forbidden } from '../middlewares/errorHandler';
 import { logger } from '../lib/logger';
 import { env } from '../config/env';
 import { runWithAuditContext } from '../lib/auditContext';
+import { businessPeriodForDate } from '../lib/businessTime';
 
 const router = Router();
 
@@ -142,21 +143,19 @@ router.get('/verify', verifyRateLimit, async (req: Request, res: Response, next:
       throw BadRequest(vehicle.blockReason || 'Vehículo bloqueado por documentos vencidos');
     }
 
-    const operator = await prisma.operator.findUnique({
-      where: { employeeNumber },
-      select: { id: true, fullName: true, isActive: true },
-    });
+    const operator = await fuelLoadService.getActiveAssignedPublicOperator(
+      employeeNumber,
+      vehicle.id,
+    );
 
-    if (operator && !operator.isActive) throw BadRequest('Operador dado de baja');
-
-    const now = new Date();
+    const period = businessPeriodForDate();
     const budget = await prisma.vehicleBudget.findUnique({
       where: {
         vehicleId_kind_year_month: {
           vehicleId: vehicle.id,
           kind: 'FUEL',
-          year: now.getFullYear(),
-          month: now.getMonth() + 1,
+          year: period.year,
+          month: period.month,
         },
       },
     });
@@ -173,7 +172,7 @@ router.get('/verify', verifyRateLimit, async (req: Request, res: Response, next:
         classification: vehicle.classification,
         type: vehicle.vehicleType.name,
       },
-      operator: operator ? { fullName: operator.fullName } : null,
+      operator: { fullName: operator.fullName },
       budget: budget
         ? {
             base: Number(budget.baseAmount),
@@ -224,23 +223,9 @@ router.post('/fuel-loads', async (req: Request, res: Response, next: NextFunctio
       if (!ok) throw Forbidden('Captcha inválido');
     }
 
-    // 3. Crear carga
-    try {
-      const result = await fuelLoadService.createPublicFuelLoad(parsed.data);
-      res.status(201).json({ data: result, message: 'Carga registrada, pendiente de revisión' });
-    } catch (error) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const e = error as any;
-      if (e.code === 'BUDGET_EXCEEDED') {
-        return res.status(402).json({
-          error: 'Sin presupuesto disponible',
-          code: 'BUDGET_EXCEEDED',
-          available: e.available,
-          message: e.message,
-        });
-      }
-      throw error;
-    }
+    // 3. Crear captura pendiente, sin reservar presupuesto ni alterar odómetro.
+    const result = await fuelLoadService.createPublicFuelLoad(parsed.data);
+    res.status(201).json({ data: result, message: 'Carga registrada, pendiente de revisión' });
   } catch (e) {
     next(e);
   }

@@ -4,7 +4,7 @@
 
 import { useAuth } from '@/contexts/AuthContext';
 import { usePathname, useRouter } from 'next/navigation';
-import { useEffect } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Sidebar from '@/components/layout/Sidebar';
 import Header from '@/components/layout/Header';
 import Footer from '@/components/layout/Footer';
@@ -18,6 +18,12 @@ export default function DashboardLayout({
   const { user, loading } = useAuth();
   const router = useRouter();
   const pathname = usePathname();
+  const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
+  const navigationTriggerRef = useRef<HTMLButtonElement>(null);
+
+  const closeMobileNavigation = useCallback(() => {
+    setMobileNavigationOpen(false);
+  }, []);
 
   useEffect(() => {
     if (loading) return;
@@ -54,11 +60,19 @@ export default function DashboardLayout({
 
   return (
     <div className="flex min-h-screen bg-background">
-      <Sidebar />
+      <Sidebar
+        mobileOpen={mobileNavigationOpen}
+        onMobileClose={closeMobileNavigation}
+        returnFocusRef={navigationTriggerRef}
+      />
       <div className="flex-1 flex flex-col min-w-0">
-        <Header />
+        <Header
+          navigationOpen={mobileNavigationOpen}
+          onOpenNavigation={() => setMobileNavigationOpen(true)}
+          navigationTriggerRef={navigationTriggerRef}
+        />
         <main className="flex-1 overflow-y-auto flex flex-col">
-          <div className="mx-auto w-full max-w-[1600px] px-4 xl:px-6 py-6 flex-1">
+          <div className="mx-auto w-full max-w-[1600px] px-3 py-4 sm:px-4 sm:py-6 xl:px-6 flex-1">
             {children}
           </div>
           <Footer />

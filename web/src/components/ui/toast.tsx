@@ -53,7 +53,7 @@ const ICONS: Record<ToastVariant, typeof Info> = {
 
 const STYLES: Record<ToastVariant, string> = {
   info: 'border-border bg-card text-card-foreground',
-  success: 'border-success/30 bg-success/10 text-success',
+  success: 'border-success/30 bg-success/10 text-success-readable',
   error: 'border-destructive/30 bg-destructive/10 text-destructive',
 };
 

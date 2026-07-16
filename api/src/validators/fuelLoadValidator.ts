@@ -2,6 +2,9 @@
 
 import { z } from 'zod/v4';
 
+// Límite técnico de PostgreSQL NUMERIC(12,2): 10 enteros + 2 decimales.
+export const MAX_FUEL_LOAD_AMOUNT = 9_999_999_999.99;
+
 /** Schema base con refinement para odometer/NF consistency */
 const baseFuelLoad = z.object({
   vehicleId: z.number().int().positive(),
@@ -10,13 +13,13 @@ const baseFuelLoad = z.object({
   operatorName: z.string().trim().min(1).max(150),
   stationId: z.number().int().positive(),
   liters: z.number().positive().optional().nullable(),
-  amount: z.number().positive(),
+  amount: z.number().positive().max(MAX_FUEL_LOAD_AMOUNT),
 
   /** Odómetro + estado */
   odometer: z.number().min(0).optional().nullable(),
   odometerStatus: z.enum(['OK', 'NF']).default('OK'),
 
-  loadDate: z.string().min(1).optional(),
+  loadDate: z.iso.date().optional(),
 });
 
 export const fuelLoadSchema = baseFuelLoad.refine(
@@ -63,3 +66,44 @@ export const publicFuelLoadSchema = baseFuelLoad
   );
 
 export type PublicFuelLoadInput = z.infer<typeof publicFuelLoadSchema>;
+
+/** Transición normal para capturas creadas con el flujo sin efectos de Sprint 1. */
+export const fuelLoadReviewSchema = z.object({
+  decision: z.enum(['APPROVE', 'REJECT']),
+  reason: z.string().trim().min(5).max(500),
+});
+
+export type FuelLoadReviewInput = z.infer<typeof fuelLoadReviewSchema>;
+
+/**
+ * Reconciliación excepcional de pendientes anteriores al state machine.
+ * Los hechos sobre presupuesto/odómetro son declarados por un administrador
+ * después de contrastarlos con BD/auditoría; el backend nunca los infiere.
+ */
+export const legacyFuelLoadReconciliationSchema = fuelLoadReviewSchema
+  .extend({
+    budgetEffect: z.enum(['APPLIED', 'NOT_APPLIED', 'NO_BUDGET']),
+    odometerEffect: z.enum(['APPLIED', 'NOT_APPLIED']),
+    correctedOdometer: z.number().min(0).optional(),
+  })
+  .superRefine((data, ctx) => {
+    const correctionRequired = data.decision === 'REJECT' && data.odometerEffect === 'APPLIED';
+    if (correctionRequired && data.correctedOdometer == null) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['correctedOdometer'],
+        message: 'El odómetro corregido es obligatorio al rechazar una carga cuyo efecto fue aplicado.',
+      });
+    }
+    if (!correctionRequired && data.correctedOdometer != null) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['correctedOdometer'],
+        message: 'El odómetro corregido solo aplica al rechazar una carga con efecto aplicado.',
+      });
+    }
+  });
+
+export type LegacyFuelLoadReconciliationInput = z.infer<
+  typeof legacyFuelLoadReconciliationSchema
+>;

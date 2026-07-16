@@ -22,11 +22,11 @@ const badgeVariants = cva(
 
         /* Semáforo operativo */
         operative:
-          "bg-success/12 text-success dark:bg-success/18 [a]:hover:bg-success/20",
+          "bg-success/12 text-success-readable dark:bg-success/18 [a]:hover:bg-success/20",
         blocked:
           "bg-destructive/12 text-destructive dark:bg-destructive/20 [a]:hover:bg-destructive/20",
         expiring:
-          "bg-warning/15 text-warning dark:bg-warning/20 [a]:hover:bg-warning/25",
+          "bg-warning/15 text-warning-readable dark:bg-warning/20 [a]:hover:bg-warning/25",
         maintenance:
           "bg-maintenance/12 text-maintenance dark:bg-maintenance/20 [a]:hover:bg-maintenance/20",
         info:

@@ -5,6 +5,8 @@ import prisma from '../../lib/prisma';
 import { Prisma, UserRole } from '@prisma/client';
 import { ListTicketsQuery, SearchTicketsQuery } from '../../validators/maintenanceTicketValidator';
 import { TicketError } from './shared';
+import { serializeTicketAttachment, serializeTicketQuote } from './fileAccess';
+import { businessPeriodForDate } from '../../lib/businessTime';
 
 // ─── Detalle de un ticket (filtrado por rol del consultante) ───────
 export async function getTicketById(ticketId: number, user: { userId: number; role: UserRole }) {
@@ -56,7 +58,14 @@ export async function getTicketById(ticketId: number, user: { userId: number; ro
   }
   // ADMIN y supervisores ven todo.
 
-  return ticket;
+  return {
+    ...ticket,
+    attachments: ticket.attachments.map(serializeTicketAttachment),
+    quotes: ticket.quotes.map(serializeTicketQuote),
+    selectedQuote: ticket.selectedQuote
+      ? serializeTicketQuote(ticket.selectedQuote)
+      : null,
+  };
 }
 
 // ─── Listado paginado con RBAC ─────────────────────────────────────
@@ -118,14 +127,14 @@ export async function getBudgetContext(ticketId: number) {
   });
   if (!ticket) throw new TicketError('NOT_FOUND', 'Ticket no existe');
 
-  const now = new Date();
+  const period = businessPeriodForDate();
   const budget = await prisma.vehicleBudget.findUnique({
     where: {
       vehicleId_kind_year_month: {
         vehicleId: ticket.vehicleId,
         kind: 'MAINTENANCE',
-        year: now.getFullYear(),
-        month: now.getMonth() + 1,
+        year: period.year,
+        month: period.month,
       },
     },
   });

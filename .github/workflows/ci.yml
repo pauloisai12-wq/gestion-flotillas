@@ -8,35 +8,84 @@ on:
 
 jobs:
   api:
-    name: API — typecheck + prisma validate
+    name: API — tests + live PostgreSQL/Redis smoke
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: flotillas_ci
+          POSTGRES_PASSWORD: flotillas_ci_password
+          POSTGRES_DB: flotillas_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U flotillas_ci -d flotillas_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     defaults:
       run:
         working-directory: api
-    # Variables dummy a nivel de job: env.ts (que se importa por tsc/build)
-    # aborta el proceso si DATABASE_URL/JWT_SECRET no existen o son débiles.
-    # En CI no nos conectamos a nada, solo necesitamos que el módulo cargue.
+    # Infraestructura efímera real: además de unit tests, CI aplica todas las
+    # migraciones y arranca API/BullMQ contra PostgreSQL y Redis limpios.
     env:
-      DATABASE_URL: postgresql://user:pass@localhost:5432/dummy
+      DATABASE_URL: postgresql://flotillas_ci:flotillas_ci_password@localhost:5432/flotillas_ci
       REDIS_URL: redis://localhost:6379
       JWT_SECRET: ci-dummy-secret-de-mas-de-32-caracteres-para-zod-validation
       NODE_ENV: test
-      # Captcha apagado: refleja el despliegue interno (§6.1) y evita exigir secret.
+      # Captcha apagado en CI; producción lo activa solo con claves reales.
       TURNSTILE_ENABLED: "false"
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
           cache-dependency-path: api/package-lock.json
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --engine-strict
+
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Sprint 1 security regressions
+        run: npm run test:sprint1-security
 
       - name: Generate Prisma client
         run: npx prisma generate
+
+      - name: Apply all migrations to clean PostgreSQL
+        run: npx prisma migrate deploy
+
+      - name: Sprint 2 API integration tests
+        run: npm run test:sprint2
+
+      - name: Sprint 3 data-job and thumbnail tests
+        run: npm run test:sprint3
+
+      - name: Sprint 3 import benchmark (1k/5k/10k)
+        run: npm run benchmark:sprint3
+
+      - name: Validate configuration references
+        run: npm run test:config-refs
+
+      - name: Validate migration safety
+        run: npm run test:migrations
+
+      - name: Validate QA ingest consistency
+        run: npm run test:qa-ingest
 
       - name: Validate Prisma schema
         run: npx prisma validate
@@ -46,6 +95,41 @@ jobs:
 
       - name: Build
         run: npm run build
+
+      - name: Live API, database, Redis and scheduler smoke
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          log_file="${RUNNER_TEMP}/flotillas-api.log"
+          node dist/index.js >"${log_file}" 2>&1 &
+          api_pid=$!
+          cleanup() {
+            kill -TERM "${api_pid}" 2>/dev/null || true
+            wait "${api_pid}" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          ready=0
+          for attempt in {1..60}; do
+            if curl --fail --silent --show-error http://127.0.0.1:3001/api/health >/dev/null; then
+              ready=1
+              break
+            fi
+            if ! kill -0 "${api_pid}" 2>/dev/null; then
+              cat "${log_file}"
+              exit 1
+            fi
+            sleep 1
+          done
+          if [ "${ready}" -ne 1 ]; then
+            cat "${log_file}"
+            exit 1
+          fi
+
+          node scripts/smoke-live-infrastructure.js
+
+      - name: Upload storage and cleanup regression
+        run: node scripts/test-upload-cleanup.js
 
   web:
     name: Web — typecheck + lint + build
@@ -58,12 +142,15 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
           cache-dependency-path: web/package-lock.json
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --engine-strict
+
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
 
       - name: Lint
         run: npm run lint --if-present
@@ -76,8 +163,64 @@ jobs:
         env:
           # En CI no hay backend, pero el build de Next no requiere API en runtime
           NEXT_PUBLIC_API_URL: http://localhost:3001
-          # Captcha apagado en el build (refleja el despliegue interno, §6.1).
+          # El build de CI no atiende tráfico; no necesita credenciales Turnstile.
           NEXT_PUBLIC_TURNSTILE_ENABLED: "false"
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Critical flow E2E tests
+        run: npm run test:e2e
+
+  operations:
+    name: Operations — Hetzner public profile + compatibility guards
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate shell syntax
+        run: |
+          bash -n deploy-common.sh
+          bash -n deploy.sh
+          bash -n deploy-public.sh
+          bash -n scripts/ops/alert-drill-public.sh
+          bash -n scripts/ops/backup.sh
+          bash -n scripts/ops/backup-public.sh
+          bash -n scripts/ops/operation-lock.sh
+          bash -n scripts/ops/predeploy-guard.sh
+          bash -n scripts/ops/prepare-staging-storage.sh
+          bash -n scripts/ops/restore-drill-public.sh
+          bash -n scripts/ops/verify-restore.sh
+          bash -n scripts/ops/validate-staging-host.sh
+
+      - name: Validate operations Python
+        run: |
+          python3 -m py_compile scripts/ops/backup_receipt.py scripts/ops/public_monitor.py scripts/ops/validate_public_compose.py
+          python3 -m unittest discover -s scripts/ops/tests -p "test_*.py" -v
+
+      - name: Exercise non-destructive operations checks
+        run: |
+          bash scripts/ops/alert-drill-public.sh --check
+          bash scripts/ops/backup.sh --check
+          bash scripts/ops/backup-public.sh --check
+          bash scripts/ops/operation-lock.sh --check
+          bash scripts/ops/predeploy-guard.sh --check
+          bash scripts/ops/prepare-staging-storage.sh --check
+          bash scripts/ops/restore-drill-public.sh --check
+          bash scripts/ops/verify-restore.sh --check
+          bash scripts/ops/validate-staging-host.sh --check
+          python3 scripts/ops/backup_receipt.py --check
+          python3 scripts/ops/public_monitor.py --check
+          python3 scripts/ops/validate_public_compose.py --check
+
+      - name: Validate staging Compose merge
+        run: docker compose --env-file env.staging.plantilla.txt -p flotillas -f docker-compose.yml -f docker-compose.staging.yml config --quiet
+
+      - name: Validate public Compose merge
+        run: |
+          docker compose --env-file .env.public.example -p flotillas -f docker-compose.yml -f docker-compose.public.yml config --quiet
+          docker compose --env-file .env.public.example -p flotillas -f docker-compose.yml -f docker-compose.public.yml config --format json |
+            python3 scripts/ops/validate_public_compose.py
 
   worker:
     name: Worker Python — import check
@@ -104,4 +247,10 @@ jobs:
 
       - name: Syntax check & imports
         run: |
-          python -m py_compile main.py db.py generate_pdf.py generate_excel.py
+          python -m py_compile main.py db.py generate_pdf.py generate_excel.py generate_qa_export.py qa_export_policy.py artifact_storage.py worker_health.py healthcheck.py
+
+      - name: Worker unit tests
+        run: python -m unittest discover -s tests -p "test_*.py" -v
+
+      - name: Sprint 3 QA export streaming benchmark (10k)
+        run: python benchmarks/benchmark_qa_export_streaming.py 10000

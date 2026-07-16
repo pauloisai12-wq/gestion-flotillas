@@ -2,10 +2,16 @@
 
 'use client';
 
-import { useState, useRef } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useEffect, useRef, useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import api from '@/lib/api';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Upload, FileSpreadsheet, CheckCircle2, AlertTriangle, X } from 'lucide-react';
 
@@ -20,55 +26,157 @@ interface ImportResult {
   warnings: { row: number; message: string }[];
 }
 
+type ImportJobStatus = 'QUEUED' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
+
+interface VehicleImportJob {
+  id: number;
+  type: 'VEHICLE_IMPORT';
+  status: ImportJobStatus;
+  progress: number;
+  originalFileName: string | null;
+  result: ImportResult | null;
+  errorMessage: string | null;
+}
+
+const PENDING_IMPORT_STORAGE_KEY = 'flotillas.pendingVehicleImportJobId';
+
 export default function VehicleImportDialog({
   open, onClose,
 }: { open: boolean; onClose: () => void }) {
   const [file, setFile] = useState<File | null>(null);
-  const [result, setResult] = useState<ImportResult | null>(null);
+  const [jobId, setJobId] = useState<number | null>(null);
+  const [localImportRestoreComplete, setLocalImportRestoreComplete] = useState(false);
   const [error, setError] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
   const qc = useQueryClient();
+
+  useEffect(() => {
+    const stored = Number(window.sessionStorage.getItem(PENDING_IMPORT_STORAGE_KEY));
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      if (Number.isInteger(stored) && stored > 0) setJobId(stored);
+      setLocalImportRestoreComplete(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const activeImportQuery = useQuery<VehicleImportJob | null>({
+    queryKey: ['vehicle-import-job', 'active'],
+    queryFn: async () => {
+      const res = await api.get('/vehicles/import/active');
+      return (res.data.data as VehicleImportJob | null) ?? null;
+    },
+    enabled: localImportRestoreComplete && jobId === null,
+    refetchOnWindowFocus: false,
+  });
+
+  useEffect(() => {
+    const activeJob = activeImportQuery.data;
+    if (activeImportQuery.isFetching || !activeJob || jobId !== null) return;
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      setJobId(activeJob.id);
+      setFile(null);
+      setError('');
+      window.sessionStorage.setItem(PENDING_IMPORT_STORAGE_KEY, String(activeJob.id));
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeImportQuery.data, activeImportQuery.isFetching, jobId]);
+
+  const {
+    data: job,
+    isError: jobQueryFailed,
+  } = useQuery<VehicleImportJob>({
+    queryKey: ['vehicle-import-job', jobId],
+    queryFn: async () => {
+      const res = await api.get(`/vehicles/import/${jobId}`);
+      return res.data.data as VehicleImportJob;
+    },
+    enabled: jobId !== null,
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      return status === 'COMPLETED' || status === 'FAILED' ? false : 1_500;
+    },
+  });
+
+  const result = job?.status === 'COMPLETED' ? job.result : null;
+  // Entre el POST 202 y el primer GET todavía no hay `job`; ese intervalo
+  // también es activo. Si se cerrara allí y se limpiara el id, el trabajo
+  // seguiría en backend pero el usuario ya no podría recuperar el resultado.
+  const isActiveJob = jobId !== null && (
+    job == null || job.status === 'QUEUED' || job.status === 'PROCESSING'
+  );
+
+  useEffect(() => {
+    if (job?.status === 'COMPLETED') {
+      qc.invalidateQueries({ queryKey: ['vehicles'] });
+    }
+  }, [job?.status, qc]);
 
   const uploadMut = useMutation({
     mutationFn: async (file: File) => {
       const fd = new FormData();
       fd.append('file', file);
-      // Timeout largo (10 min): un inventario de miles de filas tarda más que
-      // el timeout global de 30 s. Sin esto el cliente cortaba, el servidor
-      // seguía procesando, y el reintento del usuario lanzaba imports
-      // concurrentes que duplicaban todos los vehículos.
       const res = await api.post('/vehicles/import', fd, {
         headers: { 'Content-Type': 'multipart/form-data' },
-        timeout: 600_000,
+        timeout: 60_000,
       });
-      return res.data.data as ImportResult;
+      return res.data.data as VehicleImportJob;
     },
-    onSuccess: (data) => {
-      setResult(data);
-      qc.invalidateQueries({ queryKey: ['vehicles'] });
+    onSuccess: (createdJob) => {
+      setJobId(createdJob.id);
+      window.sessionStorage.setItem(PENDING_IMPORT_STORAGE_KEY, String(createdJob.id));
     },
-    onError: (err: { response?: { data?: { error?: string } } }) => {
+    onError: async (err: { response?: { status?: number; data?: { error?: string } } }) => {
+      if (err.response?.status === 409) {
+        try {
+          const res = await api.get('/vehicles/import/active');
+          const activeJob = (res.data.data as VehicleImportJob | null) ?? null;
+          if (activeJob) {
+            setJobId(activeJob.id);
+            setFile(null);
+            setError('');
+            window.sessionStorage.setItem(PENDING_IMPORT_STORAGE_KEY, String(activeJob.id));
+            if (fileInputRef.current) fileInputRef.current.value = '';
+            return;
+          }
+        } catch {
+          // El mensaje general cubre también un fallo al recuperar el job activo.
+        }
+      }
       setError(err.response?.data?.error || 'Error al subir archivo');
     },
   });
 
+  const waitingForActiveImport = jobId === null && (
+    !localImportRestoreComplete || activeImportQuery.isFetching
+  );
+
   function reset() {
     setFile(null);
-    setResult(null);
+    setJobId(null);
     setError('');
+    window.sessionStorage.removeItem(PENDING_IMPORT_STORAGE_KEY);
     if (fileInputRef.current) fileInputRef.current.value = '';
   }
 
   function close() {
-    reset();
+    if (!isActiveJob) reset();
     onClose();
   }
 
-  async function handleUpload(e: React.FormEvent) {
+  function handleUpload(e: React.FormEvent) {
     e.preventDefault();
     if (!file) return;
     setError('');
-    await uploadMut.mutateAsync(file);
+    uploadMut.mutate(file);
   }
 
   function handleDrop(e: React.DragEvent) {
@@ -82,9 +190,18 @@ export default function VehicleImportDialog({
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Importar vehículos desde Excel</DialogTitle>
+          <DialogDescription className="sr-only">
+            Sube el inventario; el procesamiento continuará en segundo plano y mostrará su progreso.
+          </DialogDescription>
         </DialogHeader>
 
-        {!result && (
+        {waitingForActiveImport && (
+          <div className="py-6 text-center text-sm text-muted-foreground" role="status">
+            Buscando importación activa…
+          </div>
+        )}
+
+        {!jobId && !waitingForActiveImport && !result && (
           <form onSubmit={handleUpload} className="space-y-4">
             <div className="text-sm text-muted-foreground">
               Sube un archivo .xlsx, .xls o .csv. El sistema mapeará las columnas automáticamente
@@ -151,10 +268,63 @@ export default function VehicleImportDialog({
                 Cancelar
               </Button>
               <Button type="submit" disabled={!file || uploadMut.isPending}>
-                {uploadMut.isPending ? 'Procesando…' : 'Importar'}
+                {uploadMut.isPending ? 'Encolando…' : 'Importar'}
               </Button>
             </div>
           </form>
+        )}
+
+        {jobId && !result && (
+          <div className="space-y-4" role="status" aria-live="polite">
+            {jobQueryFailed || job?.status === 'FAILED' || job?.status === 'COMPLETED' ? (
+              <div className="space-y-3">
+                <div className="flex items-start gap-2 rounded-md border border-destructive/20 bg-destructive/10 px-3 py-3 text-sm text-destructive">
+                  <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+                  <span>{job?.errorMessage || (job?.status === 'COMPLETED'
+                    ? 'La importación terminó sin un resultado legible.'
+                    : 'No se pudo consultar o completar la importación.')}</span>
+                </div>
+                <div className="flex justify-end gap-2">
+                  <Button type="button" variant="outline" onClick={close}>Cerrar</Button>
+                  <Button type="button" onClick={reset}>Elegir otro archivo</Button>
+                </div>
+              </div>
+            ) : (
+              <>
+                <div>
+                  <div className="flex items-center justify-between gap-3 text-sm">
+                    <span className="font-medium">
+                      {job?.status === 'PROCESSING' ? 'Procesando inventario' : 'Importación en cola'}
+                    </span>
+                    <span className="font-mono tabular-nums text-muted-foreground">
+                      {job?.progress ?? 0}%
+                    </span>
+                  </div>
+                  <div
+                    className="mt-2 h-2 overflow-hidden rounded-full bg-muted"
+                    role="progressbar"
+                    aria-label="Progreso de importación"
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={job?.progress ?? 0}
+                  >
+                    <div
+                      className="h-full rounded-full bg-primary transition-[width]"
+                      style={{ width: `${job?.progress ?? 0}%` }}
+                    />
+                  </div>
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    Puedes cerrar esta ventana; el trabajo continuará y se retomará al abrirla nuevamente.
+                  </p>
+                </div>
+                <div className="flex justify-end">
+                  <Button type="button" variant="outline" onClick={close}>
+                    Cerrar y continuar en segundo plano
+                  </Button>
+                </div>
+              </>
+            )}
+          </div>
         )}
 
         {result && (

@@ -92,6 +92,7 @@ export interface TicketAttachment {
   mimeType: string | null;
   sizeBytes: number | null;
   uploadedAt: string;
+  thumbnailUrl: string | null;
 }
 
 export interface MaintenanceTicket {

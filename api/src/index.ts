@@ -47,10 +47,12 @@ import { closeRedis } from './lib/redis';
 import { authMiddleware } from './middlewares/authMiddleware';
 import { deviceAuthMiddleware } from './middlewares/deviceAuthMiddleware';
 import { rateLimit } from './middlewares/rateLimit';
+import { RoleGroups } from './middlewares/roleMiddleware';
 import { ensureQaExternaDir } from './lib/qaExternaStorage';
 import { errorHandler } from './middlewares/errorHandler';
 import { logger, httpLoggerMiddleware } from './lib/logger';
 import { healthHandler } from './lib/health';
+import { ensureUploadDirectories } from './lib/uploadStorage';
 
 const app = express();
 
@@ -146,29 +148,69 @@ app.use(
 app.use(express.json({ limit: '2mb' }));
 app.use(httpLoggerMiddleware);
 
-// Archivos subidos (documentos vehiculares, evidencia, cotizaciones). Contienen
-// PII sensible (pólizas, tarjetas de circulación, facturas), por lo que se
+// Evidencias y cotizaciones de tickets nunca se sirven por ruta estática: cada
+// descarga pasa por el endpoint del recurso, que valida ownership/participación.
+app.use(
+  '/uploads/maintenance-tickets',
+  authMiddleware,
+  (_req: Request, res: Response) => {
+    res.status(404).json({ error: 'Archivo no encontrado', code: 'NOT_FOUND' });
+  },
+);
+
+// Los demás archivos subidos contienen PII sensible (pólizas, tarjetas de
+// circulación, facturas), por lo que se
 // exigen credenciales: authMiddleware ANTES de express.static. El frontend
 // accede vía proxy mismo-origen de Next (rewrite /uploads → API), por lo que la
 // cookie httpOnly viaja y el render de <img> sigue funcionando.
-// Headers de cache largos: cada upload genera un nombre UUID único, inmutable.
+// Caché privado y separado por cookie: evita que una sesión reutilice la
+// evidencia autenticada de otra y fuerza revalidación periódica.
 app.use(
   '/uploads',
   authMiddleware,
-  // El rol REVISOR_QA está aislado del resto de /uploads (documentos vehiculares,
-  // cotizaciones, etc.): solo accede a sus miniaturas qa_externa por el endpoint
-  // role-gated /api/qa-externa-registros/imagenes/:sha256.
+  // Los archivos estáticos conservan la misma frontera de rol que sus APIs.
+  // Normalizar tras decodificar evita saltarse el prefijo con %2f, %2e o "..".
   (req: Request, res: Response, next: NextFunction) => {
-    if (req.user?.role === 'REVISOR_QA') {
+    let uploadCategory: string;
+    try {
+      const decodedPath = decodeURIComponent(req.path).replace(/\\/g, '/');
+      uploadCategory = path.posix.normalize(`/${decodedPath}`).split('/')[1] ?? '';
+    } catch {
+      res.status(400).json({ error: 'Ruta de archivo inválida', code: 'BAD_REQUEST' });
+      return;
+    }
+
+    // Defensa adicional para variantes codificadas que no coincidan con el
+    // mount explícito anterior: jamás llegan a express.static.
+    if (uploadCategory === 'maintenance-tickets') {
+      res.status(404).json({ error: 'Archivo no encontrado', code: 'NOT_FOUND' });
+      return;
+    }
+
+    const scopedRoles =
+      uploadCategory === 'maintenance'
+        ? RoleGroups.MAINTENANCE_READERS
+        : uploadCategory === 'documents'
+          ? RoleGroups.VEHICLE_READERS
+          : null;
+
+    if (
+      req.user?.role === 'REVISOR_QA' ||
+      (scopedRoles != null && !scopedRoles.includes(req.user!.role))
+    ) {
       res.status(403).json({ error: 'Sin permisos', code: 'FORBIDDEN' });
       return;
     }
     next();
   },
   express.static(path.join(__dirname, '../uploads'), {
-    maxAge: '30d',
-    immutable: true,
+    maxAge: '1h',
+    immutable: false,
     etag: true,
+    setHeaders: (res) => {
+      res.setHeader('Cache-Control', 'private, max-age=3600, must-revalidate');
+      res.setHeader('Vary', 'Cookie');
+    },
   }),
 );
 
@@ -245,6 +287,13 @@ app.use(errorHandler);
 // ═══════════════════════════════════════════════════
 // 8. Graceful shutdown
 // ═══════════════════════════════════════════════════
+try {
+  ensureUploadDirectories();
+} catch (err) {
+  logger.fatal({ err }, 'No se pudo preparar el almacenamiento de uploads');
+  process.exit(1);
+}
+
 const server = app.listen(env.PORT, async () => {
   logger.info({ port: env.PORT, env: env.NODE_ENV }, 'API arriba');
   // Best-effort: que el directorio de qa_externa no se pueda crear (p. ej. el

@@ -9,6 +9,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from weasyprint import HTML
 
 from db import query_to_dataframe, query_single_value
+from artifact_storage import atomic_write, immutable_report_path
 
 # Carpeta donde se guardan los PDFs generados
 REPORTS_DIR = "/app/storage/reports"
@@ -38,14 +39,18 @@ def get_summary(month, year):
     last_day = f"{year}-{str(month).zfill(2)}-{last_day_num}"
 
     # Total de vehiculos
-    total_vehicles = query_single_value('SELECT COUNT(*) FROM vehicles') or 0
+    total_vehicles = query_single_value(
+        'SELECT COUNT(*) FROM vehicles WHERE "isActive" = true'
+    ) or 0
 
     # Vehiculos operativos vs bloqueados
     operative = query_single_value(
-        """SELECT COUNT(*) FROM vehicles WHERE status = 'OPERATIVE'"""
+        """SELECT COUNT(*) FROM vehicles
+           WHERE status = 'OPERATIVE' AND "isActive" = true"""
     ) or 0
     blocked = query_single_value(
-        """SELECT COUNT(*) FROM vehicles WHERE status = 'BLOCKED'"""
+        """SELECT COUNT(*) FROM vehicles
+           WHERE status = 'BLOCKED' AND "isActive" = true"""
     ) or 0
 
     # Cargas del mes
@@ -58,7 +63,7 @@ def get_summary(month, year):
             COALESCE(AVG("kmPerLiter"), 0) as avg_kml
         FROM fuel_loads
         WHERE "loadDate" >= %s AND "loadDate" <= %s
-            AND "kmPerLiter" IS NOT NULL
+            AND status = 'APPROVED'::"FuelLoadStatus"
         """,
         (first_day, last_day + " 23:59:59")
     )
@@ -84,14 +89,18 @@ def get_summary(month, year):
 
     # Documentos vencidos y por vencer
     expired_docs = query_single_value(
-        """SELECT COUNT(*) FROM documents WHERE "expiresAt" < CURRENT_DATE"""
+        """SELECT COUNT(*) FROM documents d
+           JOIN vehicles v ON d."vehicleId" = v.id
+           WHERE v."isActive" = true AND d."expiresAt" < CURRENT_DATE"""
     ) or 0
 
     expiring_docs = query_single_value(
         """
-        SELECT COUNT(*) FROM documents
-        WHERE "expiresAt" >= CURRENT_DATE
-            AND "expiresAt" <= (CURRENT_DATE + INTERVAL '30 days')
+        SELECT COUNT(*) FROM documents d
+        JOIN vehicles v ON d."vehicleId" = v.id
+        WHERE v."isActive" = true
+            AND d."expiresAt" >= CURRENT_DATE
+            AND d."expiresAt" <= (CURRENT_DATE + INTERVAL '30 days')
         """
     ) or 0
 
@@ -130,6 +139,7 @@ def get_fuel_by_type(month, year):
         JOIN vehicles v ON fl."vehicleId" = v.id
         JOIN vehicle_types vt ON v."vehicleTypeId" = vt.id
         WHERE fl."loadDate" >= %s AND fl."loadDate" <= %s
+            AND fl.status = 'APPROVED'::"FuelLoadStatus"
         GROUP BY vt.name, vt."expectedKmPerLiter"
         ORDER BY total_spent DESC
         """,
@@ -160,6 +170,7 @@ def get_top_consumers(month, year, limit=10):
         JOIN vehicles v ON fl."vehicleId" = v.id
         JOIN vehicle_types vt ON v."vehicleTypeId" = vt.id
         WHERE fl."loadDate" >= %s AND fl."loadDate" <= %s
+            AND fl.status = 'APPROVED'::"FuelLoadStatus"
         GROUP BY v."economicNumber", v.plate, vt.name
         ORDER BY total_spent DESC
         LIMIT %s
@@ -190,6 +201,7 @@ def get_kml_ranking(month, year):
         JOIN vehicles v ON fl."vehicleId" = v.id
         JOIN vehicle_types vt ON v."vehicleTypeId" = vt.id
         WHERE fl."loadDate" >= %s AND fl."loadDate" <= %s
+            AND fl.status = 'APPROVED'::"FuelLoadStatus"
             AND fl."kmPerLiter" IS NOT NULL
             AND fl."kmPerLiter" > 0
         GROUP BY v."economicNumber", v.plate, vt.name, vt."expectedKmPerLiter"
@@ -217,21 +229,27 @@ def get_docs_summary():
     """
     valid = query_single_value(
         """
-        SELECT COUNT(*) FROM documents
-        WHERE "expiresAt" > (CURRENT_DATE + INTERVAL '30 days')
+        SELECT COUNT(*) FROM documents d
+        JOIN vehicles v ON d."vehicleId" = v.id
+        WHERE v."isActive" = true
+          AND d."expiresAt" > (CURRENT_DATE + INTERVAL '30 days')
         """
     ) or 0
 
     expiring = query_single_value(
         """
-        SELECT COUNT(*) FROM documents
-        WHERE "expiresAt" >= CURRENT_DATE
-            AND "expiresAt" <= (CURRENT_DATE + INTERVAL '30 days')
+        SELECT COUNT(*) FROM documents d
+        JOIN vehicles v ON d."vehicleId" = v.id
+        WHERE v."isActive" = true
+            AND d."expiresAt" >= CURRENT_DATE
+            AND d."expiresAt" <= (CURRENT_DATE + INTERVAL '30 days')
         """
     ) or 0
 
     expired = query_single_value(
-        """SELECT COUNT(*) FROM documents WHERE "expiresAt" < CURRENT_DATE"""
+        """SELECT COUNT(*) FROM documents d
+           JOIN vehicles v ON d."vehicleId" = v.id
+           WHERE v."isActive" = true AND d."expiresAt" < CURRENT_DATE"""
     ) or 0
 
     return {"valid": valid, "expiring": expiring, "expired": expired}
@@ -251,7 +269,7 @@ def get_expired_docs_list():
             (CURRENT_DATE - d."expiresAt"::date) as days_overdue
         FROM documents d
         JOIN vehicles v ON d."vehicleId" = v.id
-        WHERE d."expiresAt" < CURRENT_DATE
+        WHERE v."isActive" = true AND d."expiresAt" < CURRENT_DATE
         ORDER BY days_overdue DESC
         """
     )
@@ -328,6 +346,7 @@ def get_maintenance_pending():
         FROM vehicles v
         JOIN vehicle_types vt ON v."vehicleTypeId" = vt.id
         JOIN service_catalog sc ON sc."vehicleTypeId" = vt.id
+        WHERE v."isActive" = true
         ORDER BY v."economicNumber", sc.name
         """
     )
@@ -360,29 +379,45 @@ def get_maintenance_pending():
     return result
 
 
-def generate_pdf(month, year, requested_by="sistema"):
+def collect_report_data(month, year):
+    """Obtiene una sola colección para renderizar ambos formatos."""
+    best_kml, worst_kml = get_kml_ranking(month, year)
+    return {
+        "summary": get_summary(month, year),
+        "fuel_by_type": get_fuel_by_type(month, year),
+        "top_consumers": get_top_consumers(month, year),
+        "best_kml": best_kml,
+        "worst_kml": worst_kml,
+        "docs_summary": get_docs_summary(),
+        "expired_docs_list": get_expired_docs_list(),
+        "maintenance_done": get_maintenance_done(month, year),
+        "maintenance_pending": get_maintenance_pending(),
+    }
+
+
+def generate_pdf(
+    month,
+    year,
+    requested_by="sistema",
+    artifact_id=None,
+    attempt_token=None,
+    report_data=None,
+):
     """
     Funcion principal: genera el reporte PDF del mes indicado.
-    
+
     Parametros:
         month: Numero del mes (1-12)
         year: Ano (ej: 2026)
         requested_by: Email del usuario que solicito el reporte
-    
+
     Retorna:
         Ruta del archivo PDF generado
     """
     print(f"  [PDF] Recopilando datos para {month}/{year}...")
 
     # 1. Recopilar todos los datos
-    summary = get_summary(month, year)
-    fuel_by_type = get_fuel_by_type(month, year)
-    top_consumers = get_top_consumers(month, year)
-    best_kml, worst_kml = get_kml_ranking(month, year)
-    docs_summary = get_docs_summary()
-    expired_docs_list = get_expired_docs_list()
-    maintenance_done = get_maintenance_done(month, year)
-    maintenance_pending = get_maintenance_pending()
+    data = report_data if report_data is not None else collect_report_data(month, year)
 
     print("  [PDF] Datos recopilados. Renderizando plantilla...")
 
@@ -395,15 +430,15 @@ def generate_pdf(month, year, requested_by="sistema"):
         "last_day": last_day_num,
         "generated_at": datetime.now().strftime("%d/%m/%Y %H:%M hrs"),
         "requested_by": requested_by,
-        "summary": summary,
-        "fuel_by_type": fuel_by_type,
-        "top_consumers": top_consumers,
-        "best_kml": best_kml,
-        "worst_kml": worst_kml,
-        "docs_summary": docs_summary,
-        "expired_docs_list": expired_docs_list,
-        "maintenance_done": maintenance_done,
-        "maintenance_pending": maintenance_pending
+        "summary": data["summary"],
+        "fuel_by_type": data["fuel_by_type"],
+        "top_consumers": data["top_consumers"],
+        "best_kml": data["best_kml"],
+        "worst_kml": data["worst_kml"],
+        "docs_summary": data["docs_summary"],
+        "expired_docs_list": data["expired_docs_list"],
+        "maintenance_done": data["maintenance_done"],
+        "maintenance_pending": data["maintenance_pending"]
     }
 
     # 3. Cargar y renderizar la plantilla con Jinja2
@@ -416,11 +451,18 @@ def generate_pdf(month, year, requested_by="sistema"):
 
     # 4. Generar PDF con WeasyPrint
     os.makedirs(REPORTS_DIR, exist_ok=True)
-    filename = f"reporte_mensual_{year}_{str(month).zfill(2)}.pdf"
-    filepath = os.path.join(REPORTS_DIR, filename)
+    filepath = immutable_report_path(
+        REPORTS_DIR,
+        year,
+        month,
+        artifact_id,
+        "pdf",
+        attempt_token,
+    )
+    filename = os.path.basename(filepath)
 
     print(f"  [PDF] Generando PDF: {filename}...")
-    HTML(string=html_content).write_pdf(filepath)
+    atomic_write(filepath, lambda temp_path: HTML(string=html_content).write_pdf(temp_path))
 
     print(f"  [PDF] PDF generado: {filepath}")
     return filepath

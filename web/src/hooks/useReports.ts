@@ -61,29 +61,23 @@ export function useGenerateReport() {
   });
 }
 
-// Descargar archivo.
-// Usa el cliente axios (withCredentials → cookie httpOnly de sesión). El método
-// anterior leía el JWT de document.cookie, pero la cookie es httpOnly y JS NUNCA
-// la ve: el token quedaba 'undefined' y la petición SIEMPRE devolvía 401,
-// descargando el JSON de error como archivo corrupto. Con responseType:'blob'
-// axios rechaza en respuestas no-2xx, así que no se genera archivo corrupto.
+// Valida primero que el artefacto siga disponible y luego deja que el navegador
+// lo descargue de forma nativa. Evita duplicar el reporte completo en memoria;
+// la URL same-origin conserva la cookie httpOnly de sesión.
 export async function downloadReport(reportId: number, type: 'pdf' | 'excel') {
+  const apiPath = `/reports/${reportId}/download/${type}`;
   try {
-    const res = await api.get(`/reports/${reportId}/download/${type}`, {
-      responseType: 'blob',
-    });
+    await api.head(apiPath);
     const ext = type === 'pdf' ? '.pdf' : '.xlsx';
-    const blobUrl = URL.createObjectURL(res.data as Blob);
     const link = document.createElement('a');
-    link.href = blobUrl;
+    link.href = `/api${apiPath}`;
     link.download = `reporte_${reportId}${ext}`;
     document.body.appendChild(link);
     link.click();
     link.remove();
-    URL.revokeObjectURL(blobUrl);
   } catch {
     // El interceptor de api.ts ya redirige a /login en 401; para otros errores
-    // avisamos en vez de bajar un archivo corrupto.
+    // avisamos antes de iniciar la descarga nativa.
     toast.error('No se pudo descargar el reporte. Intenta de nuevo.');
   }
 }

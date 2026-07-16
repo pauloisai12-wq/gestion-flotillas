@@ -21,6 +21,10 @@ export const RoleGroups = {
   ADMIN_ONLY: [Roles.ADMIN] as UserRole[],
   FUEL_MANAGERS: [Roles.ADMIN, Roles.SUP_FUEL] as UserRole[],
   MAINT_MANAGERS: [Roles.ADMIN, Roles.SUP_MAINT] as UserRole[],
+  /// Lectura de mantenimiento: responsables del dominio y de la ficha vehicular.
+  MAINTENANCE_READERS: [Roles.ADMIN, Roles.SUP_VEHICLES, Roles.SUP_MAINT] as UserRole[],
+  /// Lectura financiera: cada supervisor queda restringido por kind en la ruta.
+  BUDGET_READERS: [Roles.ADMIN, Roles.SUP_FUEL, Roles.SUP_MAINT] as UserRole[],
   /// Quienes administran presupuestos (FUEL o MAINTENANCE). El handler restringe luego por kind.
   BUDGET_MANAGERS: [Roles.ADMIN, Roles.SUP_FUEL, Roles.SUP_MAINT] as UserRole[],
   VEHICLE_READERS: [Roles.ADMIN, Roles.SUP_VEHICLES, Roles.SUP_FUEL, Roles.SUP_MAINT] as UserRole[],

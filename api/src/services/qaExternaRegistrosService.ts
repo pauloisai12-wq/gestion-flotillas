@@ -24,6 +24,7 @@ export interface QaRegistroImagenDto {
   bytes: number;
   width: number | null;
   height: number | null;
+  thumbnailUrl: string;
 }
 
 /** Registro serializado para el listado del revisor. */
@@ -42,14 +43,6 @@ export interface QaRegistroDto {
   dispositivo: { id: number; identificador: string };
   imagenes: QaRegistroImagenDto[];
 }
-
-/** Fila cruda con relaciones para el listado y el export (tipada por Prisma). */
-export type QaRegistroWithRelations = Prisma.QaExternaRegistroGetPayload<{
-  include: {
-    dispositivo: { select: { id: true; identificador: true } };
-    imagenes: { include: { imagen: true } };
-  };
-}>;
 
 export async function list(params: QaRegistrosListQuery) {
   const page = params.page || 1;
@@ -101,22 +94,9 @@ export async function list(params: QaRegistrosListQuery) {
       bytes: ri.imagen.bytes,
       width: ri.imagen.width,
       height: ri.imagen.height,
+      thumbnailUrl: `/api/qa-externa-registros/imagenes/${ri.imagen.programa}/${ri.imagen.sha256}/thumbnail`,
     })),
   }));
 
   return { data, pagination: { page, limit, total, totalPages: Math.ceil(total / limit) } };
-}
-
-/** Todos los registros (sin paginar) con relaciones, para construir el ZIP. */
-export async function getAllForExport(
-  programa: QaExternaPrograma,
-): Promise<QaRegistroWithRelations[]> {
-  return prisma.qaExternaRegistro.findMany({
-    where: { programa },
-    orderBy: { capturadoAt: 'desc' },
-    include: {
-      dispositivo: { select: { id: true, identificador: true } },
-      imagenes: { include: { imagen: true } },
-    },
-  });
 }

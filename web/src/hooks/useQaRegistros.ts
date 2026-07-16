@@ -20,6 +20,7 @@ export interface QaRegistroImagen {
   width: number | null;
   height: number | null;
   programa: QaPrograma;
+  thumbnailUrl: string;
 }
 
 export interface QaRegistro {
@@ -41,6 +42,21 @@ export interface QaRegistro {
 export interface QaRegistrosResponse {
   data: QaRegistro[];
   pagination: { page: number; limit: number; total: number; totalPages: number };
+}
+
+export type DataJobStatus = 'QUEUED' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
+
+export interface QaExportJob {
+  id: number;
+  type: 'QA_EXPORT';
+  status: DataJobStatus;
+  progress: number;
+  artifactName: string | null;
+  artifactSize: number | null;
+  result: unknown;
+  errorMessage: string | null;
+  completedAt: string | null;
+  expiresAt: string;
 }
 
 interface QaRegistroQuery {
@@ -70,28 +86,62 @@ export function useQaRegistros(query: QaRegistroQuery = {}) {
   });
 }
 
-// Descarga el ZIP de evidencias de un programa. Usa el cliente axios
-// (withCredentials → cookie httpOnly de sesión) con responseType:'blob' para
-// que axios rechace respuestas no-2xx en vez de bajar un archivo de error
-// corrupto (mismo patrón que downloadReport en useReports.ts). El export exige
-// ?programa porque cada programa se exporta por separado.
-export async function downloadQaZip(programa: QaPrograma) {
+export async function createQaExport(
+  programa: QaPrograma,
+  dateFrom: string,
+  dateTo: string,
+): Promise<QaExportJob> {
+  const res = await api.post('/qa-externa-registros/exports', undefined, {
+    params: { programa, dateFrom, dateTo },
+  });
+  return res.data.data as QaExportJob;
+}
+
+export function useQaExportJob(jobId: number | null) {
+  return useQuery<QaExportJob>({
+    queryKey: ['qa-export-job', jobId],
+    queryFn: async () => {
+      const res = await api.get(`/qa-externa-registros/exports/${jobId}`);
+      return res.data.data as QaExportJob;
+    },
+    enabled: jobId !== null,
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      return status === 'COMPLETED' || status === 'FAILED' ? false : 1_500;
+    },
+  });
+}
+
+export async function getActiveQaExport(): Promise<QaExportJob | null> {
+  const res = await api.get('/qa-externa-registros/exports/active');
+  return (res.data.data as QaExportJob | null) ?? null;
+}
+
+export function useActiveQaExport(enabled: boolean) {
+  return useQuery<QaExportJob | null>({
+    queryKey: ['qa-export-job', 'active'],
+    queryFn: getActiveQaExport,
+    enabled,
+    refetchOnWindowFocus: false,
+  });
+}
+
+// Valida primero que el artefacto siga disponible y luego deja que el navegador
+// lo descargue de forma nativa. Evita materializar en memoria ZIPs que pueden ser
+// muy grandes; la URL same-origin conserva la cookie httpOnly de sesión.
+export async function downloadQaZip(job: QaExportJob) {
+  const apiPath = `/qa-externa-registros/exports/${job.id}/download`;
   try {
-    const res = await api.get('/qa-externa-registros/export', {
-      params: { programa },
-      responseType: 'blob',
-    });
-    const blobUrl = URL.createObjectURL(res.data as Blob);
+    await api.head(apiPath);
     const link = document.createElement('a');
-    link.href = blobUrl;
-    link.download = `evidencias-qa-${programa.toLowerCase()}.zip`;
+    link.href = `/api${apiPath}`;
+    link.download = job.artifactName || `evidencias-qa-${job.id}.zip`;
     document.body.appendChild(link);
     link.click();
     link.remove();
-    URL.revokeObjectURL(blobUrl);
   } catch {
     // El interceptor de api.ts ya redirige a /revision/login en 401; para otros
-    // errores avisamos en vez de bajar un archivo corrupto.
+    // errores avisamos antes de iniciar la descarga nativa.
     toast.error('No se pudo descargar el ZIP. Intenta de nuevo.');
   }
 }

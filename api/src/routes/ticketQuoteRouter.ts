@@ -6,7 +6,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import multer from 'multer';
 import path from 'path';
 import crypto from 'crypto';
-import { RoleGroups, requireRole } from '../middlewares/roleMiddleware';
+import { RoleGroups, Roles, requireRole } from '../middlewares/roleMiddleware';
 import * as ticketService from '../services/maintenanceTicketService';
 import { TicketError } from '../services/maintenanceTicketService';
 import {
@@ -18,6 +18,17 @@ import {
 import { validateBody } from '../middlewares/validate';
 import { parseId, parsePagination } from '../lib/http';
 import prisma from '../lib/prisma';
+import { sendPrivateFile } from '../lib/privateFileResponse';
+import {
+  cleanupUploadedFilesOnError,
+  removeUploadedFiles,
+  UPLOAD_DIRS,
+  uploadRateLimit,
+} from '../lib/uploadStorage';
+import {
+  getTicketQuoteFile,
+  serializeTicketQuote,
+} from '../services/tickets/fileAccess';
 
 const router = Router();
 
@@ -26,7 +37,7 @@ const router = Router();
 // ═══════════════════════════════════════════════════════════════
 const pdfStorage = multer.diskStorage({
   destination: (_req, _file, cb) => {
-    cb(null, path.join(__dirname, '../../uploads/maintenance-tickets/quotes'));
+    cb(null, UPLOAD_DIRS.maintenanceTicketQuotes);
   },
   filename: (_req, file, cb) => {
     // Renombrado seguro con UUID; el filtro de abajo ya garantiza extensión .pdf.
@@ -36,7 +47,13 @@ const pdfStorage = multer.diskStorage({
 
 const pdfUpload = multer({
   storage: pdfStorage,
-  limits: { fileSize: 10 * 1024 * 1024, files: 1 },
+  limits: {
+    fileSize: 10 * 1024 * 1024,
+    files: 1,
+    fields: 2,
+    parts: 3,
+    fieldSize: 16 * 1024,
+  },
   fileFilter: (_req, file, cb) => {
     if (path.extname(file.originalname).toLowerCase() === '.pdf') return cb(null, true);
     cb(new Error('La cotización debe ser un archivo PDF'));
@@ -57,6 +74,39 @@ function handleTicketError(err: unknown, res: Response, next?: NextFunction) {
   if (next) return next(err);
   return res.status(500).json({ error: 'Error interno' });
 }
+
+async function serveQuotePdf(req: Request, res: Response, next: NextFunction) {
+  try {
+    const quoteId = parseId(req);
+    const file = await getTicketQuoteFile(quoteId, {
+      userId: req.user!.userId,
+      role: req.user!.role,
+    });
+    const sent = await sendPrivateFile(req, res, file.filePath, {
+      contentType: 'application/pdf',
+      cacheControl: 'private, no-store',
+      varyCookie: true,
+    });
+    if (!sent) {
+      res.status(404).json({ error: 'Cotización no encontrada', code: 'NOT_FOUND' });
+    }
+  } catch (err) {
+    handleTicketError(err, res, next);
+  }
+}
+
+// Descarga privada: los ejecutores no ven precios/PDF y cada taller queda
+// restringido a la cotización vinculada a su propia cuenta.
+router.head(
+  '/:id/pdf',
+  requireRole([...RoleGroups.TICKET_ADMINS, Roles.WORKSHOP]),
+  serveQuotePdf,
+);
+router.get(
+  '/:id/pdf',
+  requireRole([...RoleGroups.TICKET_ADMINS, Roles.WORKSHOP]),
+  serveQuotePdf,
+);
 
 // ═══════════════════════════════════════════════════════════════
 // TALLER — listar mis cotizaciones (pendientes y resueltas)
@@ -94,7 +144,7 @@ router.get(
         take: limit,
       });
 
-      res.json({ quotes });
+      res.json({ quotes: quotes.map(serializeTicketQuote) });
     } catch (err) {
       handleTicketError(err, res, next);
     }
@@ -107,6 +157,7 @@ router.get(
 router.post(
   '/:id/submit',
   requireRole(RoleGroups.WORKSHOP_ONLY),
+  uploadRateLimit,
   pdfUpload.single('pdf'),
   // validateBody va tras multer: los campos multipart llegan como strings y
   // submitQuoteSchema ya los coercea (z.coerce.number en amount).
@@ -125,11 +176,13 @@ router.post(
           fileName: req.file.originalname,
         },
       );
-      res.json(quote);
+      res.json(serializeTicketQuote(quote));
     } catch (err) {
+      await removeUploadedFiles(req);
       handleTicketError(err, res, next);
     }
   },
+  cleanupUploadedFilesOnError,
 );
 
 // ═══════════════════════════════════════════════════════════════

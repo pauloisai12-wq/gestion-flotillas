@@ -7,6 +7,7 @@ import pandas as pd
 from psycopg2 import pool
 from psycopg2.extras import RealDictCursor
 from contextlib import contextmanager
+from contextvars import ContextVar
 
 # Silenciar el UserWarning de pandas respecto a SQLAlchemy
 warnings.filterwarnings('ignore', category=UserWarning, module='pandas')
@@ -27,14 +28,21 @@ if not DATABASE_URL:
 _POOL_MIN = int(os.environ.get("DB_POOL_MIN", 1))
 _POOL_MAX = int(os.environ.get("DB_POOL_MAX", 5))
 
-_pool: pool.SimpleConnectionPool | None = None
+_pool: pool.ThreadedConnectionPool | None = None
+_snapshot_connection: ContextVar[object | None] = ContextVar(
+    "report_snapshot_connection",
+    default=None,
+)
 
 
-def _get_pool() -> pool.SimpleConnectionPool:
+def _get_pool() -> pool.ThreadedConnectionPool:
     """Inicializa el pool lazy. Reutiliza la misma instancia para todo el proceso."""
     global _pool
     if _pool is None:
-        _pool = pool.SimpleConnectionPool(_POOL_MIN, _POOL_MAX, dsn=DATABASE_URL)
+        # La generación corre en asyncio.to_thread mientras el heartbeat de la
+        # concesión usa otro thread. ThreadedConnectionPool protege getconn /
+        # putconn ante ese acceso concurrente.
+        _pool = pool.ThreadedConnectionPool(_POOL_MIN, _POOL_MAX, dsn=DATABASE_URL)
     return _pool
 
 
@@ -72,6 +80,11 @@ def _checkout(cursor_factory=RealDictCursor):
         except Exception:
             broken = True
         p.putconn(conn, close=broken)
+
+
+def connection(cursor_factory=RealDictCursor):
+    """Context manager público para una conexión transaccional del pool."""
+    return _checkout(cursor_factory=cursor_factory)
 
 
 def get_connection():
@@ -112,10 +125,35 @@ def get_raw_connection():
     return conn
 
 
+@contextmanager
+def repeatable_read_snapshot():
+    """Comparte un snapshot read-only entre todas las consultas del reporte."""
+    with _checkout(cursor_factory=None) as conn:
+        conn.set_session(
+            isolation_level="REPEATABLE READ",
+            readonly=True,
+            autocommit=False,
+        )
+        token = _snapshot_connection.set(conn)
+        try:
+            yield
+        finally:
+            _snapshot_connection.reset(token)
+            conn.rollback()
+            conn.set_session(
+                isolation_level="READ COMMITTED",
+                readonly=False,
+                autocommit=False,
+            )
+
+
 def query_to_dataframe(sql, params=None):
     """
     Ejecuta una consulta SQL y retorna el resultado como un DataFrame de pandas.
     """
+    snapshot_conn = _snapshot_connection.get()
+    if snapshot_conn is not None:
+        return pd.read_sql_query(sql, snapshot_conn, params=params)
     with _checkout(cursor_factory=None) as conn:
         return pd.read_sql_query(sql, conn, params=params)
 
@@ -124,6 +162,15 @@ def query_single_value(sql, params=None):
     """
     Ejecuta una consulta que retorna un solo valor (como COUNT o SUM).
     """
+    snapshot_conn = _snapshot_connection.get()
+    if snapshot_conn is not None:
+        cursor = snapshot_conn.cursor(cursor_factory=RealDictCursor)
+        try:
+            cursor.execute(sql, params)
+            result = cursor.fetchone()
+            return list(result.values())[0] if result else None
+        finally:
+            cursor.close()
     with _checkout() as conn:
         cursor = conn.cursor()
         cursor.execute(sql, params)

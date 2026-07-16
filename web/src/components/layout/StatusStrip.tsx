@@ -4,6 +4,7 @@
 'use client';
 
 import { useDashboardSummary } from '@/hooks/useDashboard';
+import { useAuth, type UserRole } from '@/contexts/AuthContext';
 import { formatNumber } from '@/lib/formatters';
 import { cn } from '@/lib/utils';
 
@@ -20,6 +21,13 @@ const colorClasses: Record<PillProps['color'], { dot: string; text: string }> = 
   destructive: { dot: 'bg-destructive', text: 'text-destructive' },
   maintenance: { dot: 'bg-maintenance', text: 'text-maintenance' },
 };
+
+const DASHBOARD_ROLES: ReadonlySet<UserRole> = new Set([
+  'ADMIN',
+  'SUPERVISOR_VEHICLES',
+  'SUPERVISOR_FUEL',
+  'SUPERVISOR_MAINTENANCE',
+]);
 
 function Pill({ count, label, color, pulse }: PillProps) {
   const c = colorClasses[color];
@@ -44,7 +52,11 @@ function Pill({ count, label, color, pulse }: PillProps) {
 }
 
 export default function StatusStrip() {
-  const { data, isLoading } = useDashboardSummary();
+  const { user } = useAuth();
+  const canViewDashboard = !!user && DASHBOARD_ROLES.has(user.role);
+  const { data, isLoading } = useDashboardSummary(canViewDashboard);
+
+  if (!canViewDashboard) return null;
 
   if (isLoading || !data) {
     return (

@@ -118,6 +118,17 @@ export async function startRepair(ticketId: number, workshopUserId: number) {
     throw new TicketError('INVALID_STATE', `Solo se puede iniciar en APPROVED_FOR_REPAIR (actual: ${ticket.status})`);
   }
 
+  // Defensa para datos legacy: la baja normal ya se rechaza mientras exista
+  // cualquier ticket abierto, pero una inconsistencia previa nunca debe permitir
+  // iniciar trabajo sobre una unidad inactiva.
+  const vehicle = await prisma.vehicle.findUnique({
+    where: { id: ticket.vehicleId },
+    select: { isActive: true },
+  });
+  if (!vehicle?.isActive) {
+    throw new TicketError('INVALID_STATE', 'El vehículo está dado de baja');
+  }
+
   const updated = await prisma.maintenanceTicket.update({
     where: { id: ticketId },
     data: { status: 'IN_REPAIR', repairStartedAt: new Date() },
@@ -174,6 +185,21 @@ export async function completeRepair(
   const now = new Date();
 
   const result = await prisma.$transaction(async (tx) => {
+    const lockedVehicles = await tx.$queryRaw<Array<{
+      id: number;
+      isActive: boolean;
+      currentOdometer: number;
+    }>>`
+      SELECT id, "isActive", "currentOdometer"
+      FROM vehicles
+      WHERE id = ${ticket.vehicleId}
+      FOR UPDATE
+    `;
+    const lockedVehicle = lockedVehicles[0];
+    if (!lockedVehicle || !lockedVehicle.isActive) {
+      throw new TicketError('INVALID_STATE', 'El vehículo fue dado de baja');
+    }
+
     const record = await tx.maintenanceRecord.create({
       data: {
         vehicleId: ticket.vehicleId,
@@ -192,10 +218,12 @@ export async function completeRepair(
     // solo si la lectura es válida (OK) y mayor al actual. Así los semáforos de
     // servicio (getUpcomingServices/getAllPendingServices) no quedan desfasados.
     if (input.finalOdometerStatus === 'OK' && input.finalOdometer != null) {
-      await tx.vehicle.updateMany({
-        where: { id: ticket.vehicleId, currentOdometer: { lt: input.finalOdometer } },
-        data: { currentOdometer: input.finalOdometer },
-      });
+      if (input.finalOdometer > lockedVehicle.currentOdometer) {
+        await tx.vehicle.update({
+          where: { id: ticket.vehicleId },
+          data: { currentOdometer: input.finalOdometer },
+        });
+      }
     }
 
     // CAS atómico IN_REPAIR -> COMPLETED (con los campos que exige el CHECK

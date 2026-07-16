@@ -10,12 +10,14 @@ import { useQuery } from '@tanstack/react-query';
 import api from '@/lib/api';
 import { formatCurrency, formatDate, formatNumber } from '@/lib/formatters';
 import { DashboardGreeting } from '@/components/dashboard/DashboardGreeting';
+import { DashboardErrorAlert } from '@/components/dashboard/DashboardErrorAlert';
 import { KpiCard } from '@/components/ui/kpi-card';
 import { SkeletonKpi, SkeletonTable } from '@/components/ui/skeleton';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Wrench, AlertTriangle, Wallet, CheckCircle2, Clock } from 'lucide-react';
+import { businessPeriodForDate } from '@/lib/businessTime';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyRec = any;
@@ -41,12 +43,12 @@ function useRecentMaintenance() {
 }
 
 function useBudgetsMaintenance() {
-  const now = new Date();
+  const currentPeriod = businessPeriodForDate();
   return useQuery({
-    queryKey: ['budgets', 'MAINTENANCE', now.getFullYear(), now.getMonth() + 1],
+    queryKey: ['budgets', 'MAINTENANCE', currentPeriod.year, currentPeriod.month],
     queryFn: async () => {
       const res = await api.get('/budgets', {
-        params: { kind: 'MAINTENANCE', year: now.getFullYear(), month: now.getMonth() + 1 },
+        params: { kind: 'MAINTENANCE', year: currentPeriod.year, month: currentPeriod.month },
       });
       return (res.data.data as AnyRec[]) || [];
     },
@@ -54,9 +56,23 @@ function useBudgetsMaintenance() {
 }
 
 export default function DashboardMantenimiento() {
-  const { data: pending, isLoading: loadingPending } = usePendingMaintenance();
-  const { data: recent, isLoading: loadingRecent } = useRecentMaintenance();
-  const { data: budgets, isLoading: loadingBudgets, dataUpdatedAt, refetch } = useBudgetsMaintenance();
+  const pendingQuery = usePendingMaintenance();
+  const recentQuery = useRecentMaintenance();
+  const budgetsQuery = useBudgetsMaintenance();
+  const { data: pending, isLoading: loadingPending } = pendingQuery;
+  const { data: recent, isLoading: loadingRecent } = recentQuery;
+  const { data: budgets, isLoading: loadingBudgets, dataUpdatedAt } = budgetsQuery;
+
+  const failedSections = [
+    pendingQuery.isError ? 'servicios pendientes' : null,
+    recentQuery.isError ? 'historial reciente' : null,
+    budgetsQuery.isError ? 'presupuesto de mantenimiento' : null,
+  ].filter((section): section is string => section !== null);
+  const retryFailed = () => {
+    if (pendingQuery.isError) void pendingQuery.refetch();
+    if (recentQuery.isError) void recentQuery.refetch();
+    if (budgetsQuery.isError) void budgetsQuery.refetch();
+  };
 
   const overdue = (pending || []).filter((p: AnyRec) => p.status === 'OVERDUE');
   const warning = (pending || []).filter((p: AnyRec) => p.status === 'WARNING');
@@ -76,7 +92,17 @@ export default function DashboardMantenimiento() {
         title="Control de mantenimiento"
         description="Servicios pendientes, talleres y presupuesto"
         updatedAt={dataUpdatedAt}
-        onRefresh={() => { refetch(); }}
+        onRefresh={() => {
+          void pendingQuery.refetch();
+          void recentQuery.refetch();
+          void budgetsQuery.refetch();
+        }}
+      />
+
+      <DashboardErrorAlert
+        failedSections={failedSections}
+        isRetrying={pendingQuery.isFetching || recentQuery.isFetching || budgetsQuery.isFetching}
+        onRetry={retryFailed}
       />
 
       {/* Z-TOP */}
@@ -85,9 +111,9 @@ export default function DashboardMantenimiento() {
           Estado de la flota
         </h2>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-          {loadingPending || loadingBudgets ? (
+          {loadingPending || loadingRecent || loadingBudgets ? (
             Array.from({ length: 4 }).map((_, i) => <SkeletonKpi key={i} />)
-          ) : (
+          ) : failedSections.length === 0 ? (
             <>
               <KpiCard
                 label="Servicios vencidos" value={formatNumber(overdue.length)}
@@ -110,6 +136,10 @@ export default function DashboardMantenimiento() {
                 hint="realizados" icon={Wrench}
               />
             </>
+          ) : (
+            <p className="col-span-full rounded-md border border-dashed p-4 text-sm text-muted-foreground">
+              Indicadores de mantenimiento incompletos.
+            </p>
           )}
         </div>
       </section>
@@ -126,6 +156,10 @@ export default function DashboardMantenimiento() {
           <CardContent>
             {loadingPending ? (
               <SkeletonTable rows={4} cols={4} />
+            ) : pendingQuery.isError ? (
+              <p className="py-8 text-center text-sm text-muted-foreground">
+                Servicios vencidos no disponibles.
+              </p>
             ) : overdue.length === 0 ? (
               <div className="text-center py-8 text-muted-foreground">
                 <CheckCircle2 className="size-6 mx-auto mb-2 text-success" />
@@ -168,6 +202,10 @@ export default function DashboardMantenimiento() {
               <div className="space-y-2">
                 {Array.from({ length: 4 }).map((_, i) => <div key={i} className="h-8 bg-muted rounded animate-pulse" />)}
               </div>
+            ) : pendingQuery.isError ? (
+              <p className="py-6 text-center text-sm text-muted-foreground">
+                Próximos servicios no disponibles.
+              </p>
             ) : warning.length === 0 ? (
               <p className="text-sm text-muted-foreground text-center py-6">Sin próximos a vencer</p>
             ) : (
@@ -197,6 +235,10 @@ export default function DashboardMantenimiento() {
           <CardContent>
             {loadingRecent ? (
               <SkeletonTable rows={6} cols={5} />
+            ) : recentQuery.isError ? (
+              <p className="py-8 text-center text-sm text-muted-foreground">
+                Historial no disponible.
+              </p>
             ) : !recent || recent.length === 0 ? (
               <p className="text-sm text-muted-foreground text-center py-8">Sin registros aún</p>
             ) : (

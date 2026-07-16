@@ -2,6 +2,12 @@
 // Definiciones y helpers comunes al flujo de tickets de mantenimiento.
 
 import prisma, { type Tx } from '../../lib/prisma';
+import { businessPeriodForDate } from '../../lib/businessTime';
+import {
+  assertBudgetPeriodOpen,
+  lockBudgetPeriod,
+  lockBudgetTimelineShared,
+} from '../budgetPeriodLock';
 
 export const MAX_ATTACHMENTS = 5;
 
@@ -49,14 +55,35 @@ export async function loadTicketForWinningWorkshop(ticketId: number, workshopUse
  * Misma semántica que checkAndReserveFuelBudget de budgetService pero para MAINTENANCE.
  */
 export async function reserveMaintenanceBudget(tx: Tx, vehicleId: number, amount: number) {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = now.getMonth() + 1;
+  const { year, month } = businessPeriodForDate();
+  await lockBudgetTimelineShared(tx, 'MAINTENANCE');
+  await lockBudgetPeriod(tx, 'MAINTENANCE', year, month);
+  await assertBudgetPeriodOpen(tx, 'MAINTENANCE', year, month);
+
+  // Misma jerarquía que distribución: timeline -> periodo -> vehículo -> budget.
+  // Así una reducción de base no puede leer spentAmount antes de esta reserva.
+  const vehicles = await tx.$queryRaw<Array<{ id: number; isActive: boolean }>>`
+    SELECT id, "isActive"
+    FROM vehicles
+    WHERE id = ${vehicleId}
+    FOR UPDATE
+  `;
+  if (vehicles.length === 0 || !vehicles[0].isActive) {
+    throw new TicketError('INVALID_STATE', 'El vehículo no existe o está dado de baja');
+  }
 
   const rows = await tx.$queryRaw<
-    Array<{ id: number; baseAmount: string; rolloverIn: string; spentAmount: string }>
+    Array<{
+      id: number;
+      baseAmount: string;
+      rolloverIn: string;
+      spentAmount: string;
+      isClosed: boolean;
+      isCutOff: boolean;
+    }>
   >`
-    SELECT id, "baseAmount"::text, "rolloverIn"::text, "spentAmount"::text
+    SELECT id, "baseAmount"::text, "rolloverIn"::text, "spentAmount"::text,
+           "isClosed", "isCutOff"
     FROM vehicle_budgets
     WHERE "vehicleId" = ${vehicleId}
       AND kind = 'MAINTENANCE'::"BudgetKind"
@@ -71,7 +98,10 @@ export async function reserveMaintenanceBudget(tx: Tx, vehicleId: number, amount
 
   const b = rows[0];
   const available = Number(b.baseAmount) + Number(b.rolloverIn) - Number(b.spentAmount);
-  if (amount > available) {
+  if (b.isClosed) {
+    throw new TicketError('INVALID_STATE', 'El periodo de mantenimiento ya está cerrado');
+  }
+  if (b.isCutOff || amount > available) {
     return { allowed: false, available };
   }
 

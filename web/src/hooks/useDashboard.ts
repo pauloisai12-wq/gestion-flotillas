@@ -19,13 +19,16 @@ export interface DashboardSummary {
   refreshedAt: string | null;
 }
 
-export function useDashboardSummary() {
+export function useDashboardSummary(enabled = true) {
   return useQuery<DashboardSummary>({
-    queryKey: ['dashboard-summary'],
+    // La misma clave que useDashboardSummaryFiltered({}) evita que el header
+    // y el dashboard lancen dos solicitudes/pollings para el mismo resumen.
+    queryKey: ['dashboard', 'summary', {}],
     queryFn: async () => {
       const { data } = await api.get('/dashboard/summary');
       return data;
     },
+    enabled,
     refetchInterval: 60000,
   });
 }

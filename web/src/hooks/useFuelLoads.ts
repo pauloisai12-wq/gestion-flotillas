@@ -15,9 +15,14 @@ export interface FuelLoad {
   kmPerLiter: number | null;
   isApproved: boolean;
   status: 'APPROVED' | 'PENDING_REVIEW' | 'REJECTED';
+  reviewedAt: string | null;
+  reviewReason: string | null;
+  requiresReconciliation: boolean;
   loadDate: string;
   vehicle: {
-    id: number; plate: string; economicNumber: string;
+    id: number;
+    plate: string;
+    economicNumber: string;
     classification?: string;
     vehicleType: { expectedKmPerLiter: number };
   };
@@ -47,6 +52,7 @@ interface FuelLoadQuery {
   limit?: number;
   vehicleId?: number;
   operatorId?: number;
+  status?: FuelLoad['status'];
   dateFrom?: string;
   dateTo?: string;
 }
@@ -57,6 +63,7 @@ export function useFuelLoads(query: FuelLoadQuery = {}) {
   if (query.limit) params.set('limit', query.limit.toString());
   if (query.vehicleId) params.set('vehicleId', query.vehicleId.toString());
   if (query.operatorId) params.set('operatorId', query.operatorId.toString());
+  if (query.status) params.set('status', query.status);
   if (query.dateFrom) params.set('dateFrom', query.dateFrom);
   if (query.dateTo) params.set('dateTo', query.dateTo);
 
@@ -92,6 +99,62 @@ export function useCreateFuelLoad() {
       qc.invalidateQueries({ queryKey: ['fuel-loads-vehicle'] });
       qc.invalidateQueries({ queryKey: ['vehicles'] });
       qc.invalidateQueries({ queryKey: ['vehicle'] });
+    },
+  });
+}
+
+export function useReviewFuelLoad() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async function(input: {
+      id: number;
+      decision: 'APPROVE' | 'REJECT';
+      reason: string;
+    }) {
+      const res = await api.patch(`/fuel-loads/${input.id}/review`, {
+        decision: input.decision,
+        reason: input.reason,
+      });
+      return res.data;
+    },
+    onSuccess: function() {
+      qc.invalidateQueries({ queryKey: ['fuel-loads'] });
+      qc.invalidateQueries({ queryKey: ['fuel-loads-vehicle'] });
+      qc.invalidateQueries({ queryKey: ['vehicles'] });
+      qc.invalidateQueries({ queryKey: ['vehicle'] });
+      qc.invalidateQueries({ queryKey: ['budgets'] });
+      qc.invalidateQueries({ queryKey: ['dashboard'] });
+      qc.invalidateQueries({ queryKey: ['dashboard-summary'] });
+    },
+  });
+}
+
+export type LegacyFuelBudgetEffect = 'APPLIED' | 'NOT_APPLIED' | 'NO_BUDGET';
+export type LegacyFuelOdometerEffect = 'APPLIED' | 'NOT_APPLIED';
+
+export function useReconcileLegacyFuelLoad() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async function(input: {
+      id: number;
+      decision: 'APPROVE' | 'REJECT';
+      reason: string;
+      budgetEffect: LegacyFuelBudgetEffect;
+      odometerEffect: LegacyFuelOdometerEffect;
+      correctedOdometer?: number;
+    }) {
+      const { id, ...body } = input;
+      const res = await api.patch(`/fuel-loads/${id}/reconcile`, body);
+      return res.data;
+    },
+    onSuccess: function() {
+      qc.invalidateQueries({ queryKey: ['fuel-loads'] });
+      qc.invalidateQueries({ queryKey: ['fuel-loads-vehicle'] });
+      qc.invalidateQueries({ queryKey: ['vehicles'] });
+      qc.invalidateQueries({ queryKey: ['vehicle'] });
+      qc.invalidateQueries({ queryKey: ['budgets'] });
+      qc.invalidateQueries({ queryKey: ['dashboard'] });
+      qc.invalidateQueries({ queryKey: ['dashboard-summary'] });
     },
   });
 }

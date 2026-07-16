@@ -17,10 +17,18 @@ export interface Vehicle {
   vin: string | null;
   color: string | null;
   currentOdometer: number;
+  classification: 'POLICIAL' | 'ESTATAL' | 'VIAL';
   status: 'OPERATIVE' | 'BLOCKED';
   blockReason: string | null;
   isActive: boolean;
+  updatedAt: string;
   documents: { expiresAt: string }[];
+  assignments?: Array<{
+    id: number;
+    operator?: { fullName?: string; licenseNumber?: string };
+    startDate: string;
+    endDate?: string | null;
+  }>;
   _count: {
     fuelLoads: number;
     maintenanceRecords: number;
@@ -31,6 +39,7 @@ export interface VehicleInput {
   plate: string;
   economicNumber: string;
   vehicleTypeId: number;
+  classification: Vehicle['classification'];
   brand: string;
   model: string;
   year: number;
@@ -38,6 +47,17 @@ export interface VehicleInput {
   color?: string | null;
   currentOdometer?: number;
   isActive?: boolean;
+}
+
+export interface VehicleUpdateInput
+  extends Omit<VehicleInput, 'currentOdometer' | 'isActive'> {
+  expectedUpdatedAt: string;
+}
+
+export interface OdometerCorrectionInput {
+  newOdometer: number;
+  reason: string;
+  expectedUpdatedAt: string;
 }
 
 interface VehiclesResponse {
@@ -85,7 +105,7 @@ export function useVehicles(query: VehicleQuery = {}) {
  * Hook para obtener un vehículo por ID.
  */
 export function useVehicle(id: number | null) {
-  return useQuery({
+  return useQuery<Vehicle>({
     queryKey: ['vehicle', id],
     queryFn: async () => {
       const { data } = await api.get(`/vehicles/${id}`);
@@ -111,7 +131,7 @@ export function useCreateVehicle() {
 export function useUpdateVehicle() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async ({ id, input }: { id: number; input: VehicleInput }) => {
+    mutationFn: async ({ id, input }: { id: number; input: VehicleUpdateInput }) => {
       const { data } = await api.put(`/vehicles/${id}`, input);
       return data;
     },
@@ -130,6 +150,20 @@ export function useDeleteVehicle() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['vehicles'] });
+    },
+  });
+}
+
+export function useCorrectVehicleOdometer() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, input }: { id: number; input: OdometerCorrectionInput }) => {
+      const { data } = await api.patch(`/vehicles/${id}/odometer-correction`, input);
+      return data as Pick<Vehicle, 'id' | 'currentOdometer' | 'updatedAt'>;
+    },
+    onSuccess: (_vehicle, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['vehicles'] });
+      queryClient.invalidateQueries({ queryKey: ['vehicle', variables.id] });
     },
   });
 }

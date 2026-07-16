@@ -1,7 +1,18 @@
 // Operaciones CRUD de documentos vehiculares con semáforo
-import prisma from '../lib/prisma';
+import prisma, { Tx } from '../lib/prisma';
 import { DocumentInput } from '../validators/documentValidator';
 import { NotFound, Conflict } from '../middlewares/errorHandler';
+
+async function lockActiveVehicle(tx: Tx, vehicleId: number): Promise<void> {
+  const rows = await tx.$queryRaw<Array<{ id: number; isActive: boolean }>>`
+    SELECT id, "isActive"
+    FROM vehicles
+    WHERE id = ${vehicleId}
+    FOR UPDATE
+  `;
+  if (rows.length === 0) throw NotFound('Vehículo');
+  if (!rows[0].isActive) throw Conflict('El vehículo está dado de baja; su historial es de solo lectura');
+}
 
 /**
  * Calcula el estado del semáforo basado en la fecha de vencimiento.
@@ -69,37 +80,36 @@ export async function createDocument(
   data: DocumentInput,
   file?: { filename: string; originalname: string }
 ) {
-  // Verificar que el vehículo existe
-  const vehicle = await prisma.vehicle.findUnique({ where: { id: data.vehicleId } });
-  if (!vehicle) throw NotFound('Vehículo');
+  const doc = await prisma.$transaction(async (tx) => {
+    await lockActiveVehicle(tx, data.vehicleId);
 
-  // Verificar que no exista un documento del mismo tipo ya vigente
-  const existing = await prisma.document.findFirst({
-    where: {
-      vehicleId: data.vehicleId,
-      type: data.type,
-      expiresAt: { gt: new Date() },
-    },
-  });
+    const existing = await tx.document.findFirst({
+      where: {
+        vehicleId: data.vehicleId,
+        type: data.type,
+        expiresAt: { gt: new Date() },
+      },
+    });
 
-  if (existing) {
-    throw Conflict(
-      `Ya existe un documento de tipo "${docTypeLabel(data.type)}" vigente para este vehículo. ` +
-      `Vence el ${existing.expiresAt.toLocaleDateString('es-MX')}. ` +
-      `Puede editarlo o esperar a que venza.`
-    );
-  }
+    if (existing) {
+      throw Conflict(
+        `Ya existe un documento de tipo "${docTypeLabel(data.type)}" vigente para este vehículo. ` +
+        `Vence el ${existing.expiresAt.toLocaleDateString('es-MX')}. ` +
+        `Puede editarlo o esperar a que venza.`
+      );
+    }
 
-  const doc = await prisma.document.create({
-    data: {
-      vehicleId: data.vehicleId,
-      type: data.type,
-      issuedAt: new Date(data.issuedAt),
-      expiresAt: new Date(data.expiresAt),
-      fileUrl: file ? `/uploads/documents/${file.filename}` : null,
-      fileName: file ? file.originalname : null,
-      notes: data.notes || null,
-    },
+    return tx.document.create({
+      data: {
+        vehicleId: data.vehicleId,
+        type: data.type,
+        issuedAt: new Date(data.issuedAt),
+        expiresAt: new Date(data.expiresAt),
+        fileUrl: file ? `/uploads/documents/${file.filename}` : null,
+        fileName: file ? file.originalname : null,
+        notes: data.notes || null,
+      },
+    });
   });
 
   return {
@@ -117,24 +127,31 @@ export async function updateDocument(
   data: DocumentInput,
   file?: { filename: string; originalname: string }
 ) {
-  const existing = await getDocumentById(id);
+  const doc = await prisma.$transaction(async (tx) => {
+    const existing = await tx.document.findUnique({ where: { id } });
+    if (!existing) throw NotFound('Documento');
+    await lockActiveVehicle(tx, existing.vehicleId);
 
-  const updateData: any = {
-    type: data.type,
-    issuedAt: new Date(data.issuedAt),
-    expiresAt: new Date(data.expiresAt),
-    notes: data.notes || null,
-  };
+    const updateData: {
+      type: DocumentInput['type'];
+      issuedAt: Date;
+      expiresAt: Date;
+      notes: string | null;
+      fileUrl?: string;
+      fileName?: string;
+    } = {
+      type: data.type,
+      issuedAt: new Date(data.issuedAt),
+      expiresAt: new Date(data.expiresAt),
+      notes: data.notes || null,
+    };
 
-  // Solo actualizar archivo si se envió uno nuevo
-  if (file) {
-    updateData.fileUrl = `/uploads/documents/${file.filename}`;
-    updateData.fileName = file.originalname;
-  }
+    if (file) {
+      updateData.fileUrl = `/uploads/documents/${file.filename}`;
+      updateData.fileName = file.originalname;
+    }
 
-  const doc = await prisma.document.update({
-    where: { id },
-    data: updateData,
+    return tx.document.update({ where: { id }, data: updateData });
   });
 
   return {
@@ -148,8 +165,12 @@ export async function updateDocument(
  * Eliminar un documento.
  */
 export async function deleteDocument(id: number) {
-  await getDocumentById(id);
-  return prisma.document.delete({ where: { id } });
+  return prisma.$transaction(async (tx) => {
+    const existing = await tx.document.findUnique({ where: { id } });
+    if (!existing) throw NotFound('Documento');
+    await lockActiveVehicle(tx, existing.vehicleId);
+    return tx.document.delete({ where: { id } });
+  });
 }
 
 /**

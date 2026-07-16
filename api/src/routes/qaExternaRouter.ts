@@ -11,6 +11,7 @@ import { BadRequest } from '../middlewares/errorHandler';
 import { qaExternaIngestSchema } from '../validators/qaExternaValidator';
 import * as qaExternaService from '../services/qaExternaService';
 import { env } from '../config/env';
+import { enqueueQaThumbnail } from '../services/mediaThumbnailService';
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -112,6 +113,12 @@ router.post(
       metadataRaw: req.body.metadata,
       buffers: files.map((f) => f.buffer),
     });
+
+    await Promise.all(
+      result.imagenes.map((image) =>
+        enqueueQaThumbnail(req.device!.programa, image.sha256),
+      ),
+    );
 
     res.status(200).json({ registro_id: result.registroId, imagenes: result.imagenes });
   }),

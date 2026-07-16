@@ -4,17 +4,17 @@
 #   - Prod:                                      docker build --target prod -t flotillas-api:prod .
 
 # ─── STAGE 1: dependencias compartidas ───────────────────────────
-FROM node:20-alpine AS deps
+FROM node:22-alpine AS deps
 WORKDIR /app
 # Toolchain para compilar módulos nativos (bcrypt) desde fuente: en Alpine (musl)
 # no existe binario precompilado de bcrypt, así que node-pre-gyp compila.
 RUN apk add --no-cache python3 make g++
 COPY package*.json ./
 # npm ci respeta el lockfile exactamente y es más rápido que npm install
-RUN npm ci
+RUN npm ci --engine-strict
 
 # ─── STAGE 2: build (TypeScript → JS + Prisma client) ────────────
-FROM node:20-alpine AS builder
+FROM node:22-alpine AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
@@ -22,7 +22,7 @@ RUN npx prisma generate || true
 RUN npm run build
 
 # ─── STAGE 3: imagen de desarrollo (hot-reload con tsx watch) ────
-FROM node:20-alpine AS dev
+FROM node:22-alpine AS dev
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
@@ -31,7 +31,7 @@ EXPOSE 3001
 CMD ["npm", "run", "dev"]
 
 # ─── STAGE 4: imagen de producción (slim, solo runtime deps) ─────
-FROM node:20-alpine AS prod
+FROM node:22-alpine AS prod
 WORKDIR /app
 ENV NODE_ENV=production
 
@@ -39,7 +39,7 @@ ENV NODE_ENV=production
 # para compilar bcrypt y se elimina después (imagen final slim).
 COPY package*.json ./
 RUN apk add --no-cache --virtual .build-deps python3 make g++ \
-  && npm ci --omit=dev && npm cache clean --force \
+  && npm ci --omit=dev --engine-strict && npm cache clean --force \
   && apk del .build-deps
 
 # Artefactos compilados
@@ -48,12 +48,21 @@ COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
 COPY --from=builder /app/node_modules/@prisma ./node_modules/@prisma
 COPY prisma ./prisma
 
-# Usuario no-root por seguridad. Creamos /app/uploads ANTES del chown para que
-# exista en la imagen con dueño `api`: un volumen nombrado nuevo montado ahí
-# hereda ese dueño y el proceso (no-root) puede escribir uploads (documentos,
-# evidencias y qa_externa). Sin esto, un volumen vacío nace root → EACCES.
-RUN mkdir -p /app/uploads \
-  && addgroup -S nodejs && adduser -S api -G nodejs && chown -R api:nodejs /app
+# Usuario no-root estable en ambos perfiles. UID/GID 10001 coincide con worker
+# para compartir reports y con el preflight de bind mounts de staging.
+RUN addgroup -S -g 10001 appgroup \
+  && adduser -S -D -u 10001 -G appgroup -h /home/api api \
+  && mkdir -p \
+    /app/uploads/documents \
+    /app/uploads/maintenance \
+    /app/uploads/maintenance-tickets/photos \
+    /app/uploads/maintenance-tickets/quotes \
+    /app/uploads/qa-externa/buffalo \
+    /app/uploads/qa-externa/lx \
+    /app/storage/reports \
+    /home/api \
+  && chown -R api:appgroup /app /home/api
+ENV HOME=/home/api
 USER api
 
 EXPOSE 3001

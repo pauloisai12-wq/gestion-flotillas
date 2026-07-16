@@ -1,6 +1,7 @@
 'use client';
 
-import { useRef } from 'react';
+import { useRef, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { toast } from '@/components/ui/toast';
 import {
   Dialog,
@@ -16,8 +17,10 @@ import {
   useUpdateVehicle,
   Vehicle,
   VehicleInput,
+  VehicleUpdateInput,
 } from '@/hooks/useVehicles';
 import { useVehicleTypes } from '@/hooks/useVehicleTypes';
+import { getApiError } from '@/lib/api';
 
 interface Props {
   open: boolean;
@@ -27,6 +30,8 @@ interface Props {
 
 export default function VehicleFormDialog({ open, onClose, vehicle }: Props) {
   const formRef = useRef<HTMLFormElement>(null);
+  const queryClient = useQueryClient();
+  const [concurrentConflict, setConcurrentConflict] = useState(false);
   const createMutation = useCreateVehicle();
   const updateMutation = useUpdateVehicle();
   const { data: vehicleTypes } = useVehicleTypes();
@@ -34,53 +39,79 @@ export default function VehicleFormDialog({ open, onClose, vehicle }: Props) {
   const isEditing = !!vehicle;
   const isLoading = createMutation.isPending || updateMutation.isPending;
 
+  function closeDialog() {
+    setConcurrentConflict(false);
+    onClose();
+  }
+
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const fd = new FormData(e.currentTarget);
 
-    const input: VehicleInput = {
+    const commonInput = {
       plate: (fd.get('plate') as string)?.trim().toUpperCase(),
       economicNumber: (fd.get('economicNumber') as string)?.trim(),
       vehicleTypeId: parseInt(fd.get('vehicleTypeId') as string),
+      classification: fd.get('classification') as Vehicle['classification'],
       brand: (fd.get('brand') as string)?.trim(),
       model: (fd.get('model') as string)?.trim(),
       year: parseInt(fd.get('year') as string),
       vin: (fd.get('vin') as string)?.trim() || null,
       color: (fd.get('color') as string)?.trim() || null,
-      currentOdometer: parseFloat(fd.get('currentOdometer') as string) || 0,
     };
 
     // Validación básica
-    if (!input.plate || !input.economicNumber || !input.brand || !input.model) {
+    if (!commonInput.plate || !commonInput.economicNumber || !commonInput.brand || !commonInput.model) {
       toast.error('Placa, número económico, marca y modelo son obligatorios');
       return;
     }
 
-    if (isNaN(input.vehicleTypeId) || input.vehicleTypeId <= 0) {
+    if (isNaN(commonInput.vehicleTypeId) || commonInput.vehicleTypeId <= 0) {
       toast.error('Debe seleccionar un tipo de vehículo');
       return;
     }
 
-    if (isNaN(input.year) || input.year < 1990) {
+    if (isNaN(commonInput.year) || commonInput.year < 1990) {
       toast.error('El año debe ser un número válido (mínimo 1990)');
       return;
     }
 
     try {
       if (isEditing && vehicle) {
+        const input: VehicleUpdateInput = {
+          ...commonInput,
+          expectedUpdatedAt: vehicle.updatedAt,
+        };
         await updateMutation.mutateAsync({ id: vehicle.id, input });
       } else {
+        const input: VehicleInput = {
+          ...commonInput,
+          currentOdometer: parseFloat(fd.get('currentOdometer') as string) || 0,
+        };
         await createMutation.mutateAsync(input);
       }
-      onClose();
+      closeDialog();
     } catch (err: unknown) {
-      const error = err as { response?: { data?: { error?: string } } };
-      toast.error(error.response?.data?.error || 'Error al guardar');
+      const error = getApiError(err);
+      if (error.status === 409) {
+        setConcurrentConflict(true);
+        toast.error('Otro usuario actualizó este vehículo. Recarga antes de guardar.');
+        return;
+      }
+      toast.error(error.data?.error || 'Error al guardar');
     }
   }
 
+  async function reloadAfterConflict() {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['vehicles'] }),
+      vehicle ? queryClient.invalidateQueries({ queryKey: ['vehicle', vehicle.id] }) : Promise.resolve(),
+    ]);
+    closeDialog();
+  }
+
   return (
-    <Dialog open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
+    <Dialog open={open} onOpenChange={(isOpen) => !isOpen && closeDialog()}>
       <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>
@@ -132,6 +163,22 @@ export default function VehicleFormDialog({ open, onClose, vehicle }: Props) {
                   {type.name} ({type.expectedKmPerLiter} km/l)
                 </option>
               ))}
+            </select>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="classification">Clasificación *</Label>
+            <select
+              id="classification"
+              name="classification"
+              defaultValue={vehicle?.classification ?? 'ESTATAL'}
+              key={`classification-${vehicle?.id ?? 'new'}`}
+              disabled={isLoading}
+              className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm"
+            >
+              <option value="POLICIAL">Policial</option>
+              <option value="ESTATAL">Estatal</option>
+              <option value="VIAL">Vial</option>
             </select>
           </div>
 
@@ -211,17 +258,31 @@ export default function VehicleFormDialog({ open, onClose, vehicle }: Props) {
                 min="0"
                 defaultValue={vehicle?.currentOdometer?.toString() ?? '0'}
                 key={`odo-${vehicle?.id ?? 'new'}`}
-                disabled={isLoading}
+                disabled={isLoading || isEditing}
               />
+              {isEditing && (
+                <p className="text-xs text-muted-foreground">
+                  Las correcciones de odómetro requieren una operación administrativa auditada.
+                </p>
+              )}
             </div>
           </div>
 
+          {concurrentConflict && (
+            <div role="alert" className="rounded-md border border-warning/30 bg-warning/10 p-3 text-sm">
+              <p>El registro cambió mientras lo editabas. Tus cambios no se guardaron.</p>
+              <Button type="button" variant="outline" size="sm" className="mt-2" onClick={reloadAfterConflict}>
+                Cerrar y recargar datos
+              </Button>
+            </div>
+          )}
+
           {/* Botones */}
           <div className="flex justify-end gap-2 pt-2">
-            <Button type="button" variant="outline" onClick={onClose} disabled={isLoading}>
+            <Button type="button" variant="outline" onClick={closeDialog} disabled={isLoading}>
               Cancelar
             </Button>
-            <Button type="submit" disabled={isLoading}>
+            <Button type="submit" disabled={isLoading || concurrentConflict}>
               {isLoading ? 'Guardando...' : isEditing ? 'Guardar cambios' : 'Crear'}
             </Button>
           </div>

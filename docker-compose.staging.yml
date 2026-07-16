@@ -1,3 +1,6 @@
+# PERFIL LEGADO: no usar para el entorno vigente en Hetzner Cloud.
+# Para Hetzner use docker-compose.public.yml mediante ./deploy-public.sh.
+#
 # /docker-compose.staging.yml — override para QA/Staging en el servidor de casa
 #
 # Reorienta el stack del modo "prod-para-ngrok" al patrón del servidor de casa
@@ -5,33 +8,45 @@
 # sin puertos publicados al host, datos persistentes en el disco cifrado LUKS
 # bajo /srv/datos/flotillas/, y la API endurecida (NODE_ENV=production).
 #
-# Uso (en el servidor 10.10.0.2):   ./deploy.sh     (o, manualmente:)
-#   export COMPOSE="docker compose -f docker-compose.yml -f docker-compose.staging.yml"
-#   $COMPOSE build
-#   $COMPOSE up -d
+# Uso soportado en el servidor 10.10.0.2: ./deploy.sh
+# El servicio migrate rechaza un `docker compose up` directo sin el token que
+# deploy-common emite después de la guardia de backup.
 #
 # Las migraciones ya NO son un paso manual: el servicio one-shot `migrate` (abajo)
 # corre `prisma migrate deploy` y termina ANTES de que arranquen api/worker
 # (depends_on: service_completed_successfully). Servir tráfico sin esquema es
-# imposible (Gotcha 5). `migrate deploy` es idempotente: re-ejecutar `up` es seguro.
+# imposible (Gotcha 5). `migrate deploy` es idempotente: re-ejecutar `./deploy.sh` es seguro.
 #
 # NOTA: `!reset []` (limpiar la lista de ports heredada del base) requiere
-# Docker Compose >= 2.24. Si el servidor tiene una versión anterior, reemplaza
-# cada `ports: !reset []` por un bind a la interfaz VPN, p.ej.:
-#   ports:
-#     - "10.10.0.2:5432:5432"
+# Docker Compose >= 2.24. No hay fallback que publique servicios internos:
+# actualiza Compose antes de desplegar.
+
+# Rotación exclusiva de staging. El driver local rota y comprime; evita que un
+# servicio verboso llene el disco compartido. El perfil público conserva su
+# configuración propia en docker-compose.public.yml.
+x-staging-logging: &staging-logging
+  driver: local
+  options:
+    max-size: "10m"
+    max-file: "3"
 
 services:
   # === BASE DE DATOS — Postgres 16 dedicado, datos en disco cifrado ===
   postgres:
     image: postgres:16
     ports: !reset []                       # no publicar 5433 al host
+    mem_limit: 768m
+    cpus: "1.0"
+    logging: *staging-logging
     volumes:
       - /srv/datos/flotillas/postgres:/var/lib/postgresql/data
 
   # === REDIS dedicado (aísla las colas BullMQ de las colas RQ del SAS) ===
   redis:
     ports: !reset []                       # no publicar 6379 al host
+    mem_limit: 256m
+    cpus: "0.5"
+    logging: *staging-logging
     volumes:
       - /srv/datos/flotillas/redis:/data
 
@@ -41,7 +56,13 @@ services:
     # que el servicio one-shot `migrate` reuse exactamente la misma imagen (sin
     # rebuild ni imagen duplicada).
     image: flotillas-api:staging
+    # UID/GID compartido con worker exclusivamente en staging: ambos escriben
+    # reports; prepare-staging-storage.sh garantiza ownership y modos del bind.
+    user: "10001:10001"
     ports: !reset []                       # no publicar 3001; el web la proxya por red interna
+    mem_limit: 768m
+    cpus: "1.0"
+    logging: *staging-logging
     environment:
       # NODE_ENV=production ACTIVA las validaciones estrictas de env.ts:
       #   JWT_SECRET >= 64, BCRYPT_ROUNDS >= 12, CORS sin localhost,
@@ -77,9 +98,18 @@ services:
   # === WEB (Next.js standalone) — solo accesible a través de Caddy ===
   web:
     ports: !reset []                       # Caddy llega a web:3000 por la red interna de compose
+    mem_limit: 512m
+    cpus: "0.75"
+    logging: *staging-logging
 
   # === WORKER Python (reportería WeasyPrint/openpyxl) ===
   worker-python:
+    # pandas/WeasyPrint pueden tener picos; este límite protege al servicio
+    # vecino. Ajustar con métricas reales antes de aumentar concurrencia.
+    mem_limit: 1536m
+    cpus: "1.5"
+    logging: *staging-logging
+    user: "10001:10001"
     volumes:
       - /srv/datos/flotillas/reports:/app/storage/reports
     depends_on:
@@ -99,10 +129,24 @@ services:
   migrate:
     image: flotillas-api:staging
     restart: "no"
-    command: ["npx", "prisma", "migrate", "deploy"]
+    mem_limit: 768m
+    cpus: "1.0"
+    logging: *staging-logging
+    command:
+      - sh
+      - -ceu
+      - |
+        printenv FLOTILLAS_PREDEPLOY_GUARD | grep -Fvxq UNGUARDED || {
+          echo "migrate bloqueado: ejecuta ./deploy.sh para pasar la guardia de backup" >&2
+          exit 78
+        }
+        exec npx prisma migrate deploy
     environment:
       # Mismo patrón derivado que la API; migrate solo necesita DATABASE_URL.
       DATABASE_URL: ${DATABASE_URL:-postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}}
+      # Default deliberadamente inválido: deploy-common lo reemplaza solo después
+      # de backup correcto o excepción de primer deploy verificada.
+      FLOTILLAS_PREDEPLOY_GUARD: ${FLOTILLAS_PREDEPLOY_GUARD:-UNGUARDED}
     depends_on:
       postgres:
         condition: service_healthy
@@ -112,6 +156,9 @@ services:
     image: caddy:2-alpine
     container_name: flotillas_caddy
     restart: unless-stopped
+    mem_limit: 192m
+    cpus: "0.25"
+    logging: *staging-logging
     depends_on:
       web:
         condition: service_healthy

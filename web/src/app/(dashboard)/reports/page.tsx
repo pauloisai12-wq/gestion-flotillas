@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
@@ -18,6 +19,7 @@ import { SkeletonTable } from '@/components/ui/skeleton';
 import { toast } from '@/components/ui/toast';
 import { formatDate } from '@/lib/formatters';
 import { FileBarChart } from 'lucide-react';
+import { previousBusinessPeriod } from '@/lib/businessTime';
 
 const MONTH_NAMES: Record<number, string> = {
   1: 'Enero', 2: 'Febrero', 3: 'Marzo', 4: 'Abril',
@@ -35,7 +37,7 @@ function formatBytes(bytes: number | null): string {
 export default function ReportsPage() {
   const [page, setPage] = useState(1);
   const [showDialog, setShowDialog] = useState(false);
-  const { data, isLoading } = useReports(page);
+  const { data, isLoading, isError, refetch } = useReports(page);
   const generateMutation = useGenerateReport();
 
   const handleGenerate = (e: React.FormEvent<HTMLFormElement>) => {
@@ -62,9 +64,9 @@ export default function ReportsPage() {
   };
 
   // Valores por defecto: mes anterior
-  const now = new Date();
-  const defaultMonth = now.getMonth() === 0 ? 12 : now.getMonth();
-  const defaultYear = now.getMonth() === 0 ? now.getFullYear() - 1 : now.getFullYear();
+  const previousPeriod = previousBusinessPeriod();
+  const defaultMonth = previousPeriod.month;
+  const defaultYear = previousPeriod.year;
 
   return (
     <div className="flex flex-col gap-6">
@@ -81,6 +83,13 @@ export default function ReportsPage() {
       {/* Tabla de reportes */}
       {isLoading ? (
         <SkeletonTable rows={5} cols={6} />
+      ) : isError ? (
+        <EmptyState
+          icon={FileBarChart}
+          title="No se pudo cargar el historial"
+          description="Revisa tu conexión e intenta nuevamente."
+          action={<Button onClick={() => refetch()}>Reintentar</Button>}
+        />
       ) : !data?.data?.length ? (
         <EmptyState
           icon={FileBarChart}
@@ -90,7 +99,7 @@ export default function ReportsPage() {
         />
       ) : (
         <>
-          <div className="bg-card rounded-lg border shadow-sm overflow-hidden">
+          <div className="bg-card rounded-lg border shadow-sm overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-muted/50 border-b">
@@ -111,15 +120,20 @@ export default function ReportsPage() {
                     </td>
 
                     {/* Estado */}
-                    <td className="px-4 py-3">
+                    <td className="px-4 py-3" aria-live="polite">
                       {report.status === 'COMPLETED' && (
-                        <Badge className="bg-success/15 text-success">Completado</Badge>
+                        <Badge className="bg-success/15 text-success-readable">Completado</Badge>
                       )}
                       {report.status === 'PROCESSING' && (
                         <Badge className="bg-primary-subtle text-primary">Procesando...</Badge>
                       )}
                       {report.status === 'FAILED' && (
-                        <Badge className="bg-destructive/15 text-destructive">Error</Badge>
+                        <Badge
+                          className="bg-destructive/15 text-destructive"
+                          title={report.errorMessage || 'La generación no pudo completarse'}
+                        >
+                          Error
+                        </Badge>
                       )}
                     </td>
 
@@ -158,7 +172,7 @@ export default function ReportsPage() {
                       {report.status === 'COMPLETED' && report.excelPath ? (
                         <button
                           onClick={() => downloadReport(report.id, 'excel')}
-                          className="text-success hover:text-success hover:underline text-sm"
+                          className="text-success-readable hover:text-success-readable hover:underline text-sm"
                         >
                           Excel ({formatBytes(report.excelSize)})
                         </button>
@@ -204,6 +218,9 @@ export default function ReportsPage() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Generar Reporte Mensual</DialogTitle>
+            <DialogDescription className="sr-only">
+              Selecciona el periodo que se procesará en segundo plano.
+            </DialogDescription>
           </DialogHeader>
           <form onSubmit={handleGenerate} className="space-y-4 mt-4">
             <div>

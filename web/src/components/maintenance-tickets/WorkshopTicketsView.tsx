@@ -13,6 +13,7 @@ import {
 } from '@/hooks/useMaintenanceTickets';
 import { formatCurrency } from '@/lib/formatters';
 import { Loader2, ChevronRight, FileUp, Hourglass, Wrench, PackageCheck, Ban } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 
 type Bucket =
   | 'TO_QUOTE'
@@ -59,7 +60,7 @@ function money(amount: TicketQuote['amount']): string | null {
 }
 
 export function WorkshopTicketsView() {
-  const { data: quotes, isLoading, error } = useMyQuotes();
+  const { data: quotes, isLoading, error, refetch } = useMyQuotes();
 
   const grouped = (quotes ?? []).reduce<Record<Bucket, TicketQuote[]>>(
     (acc, q) => {
@@ -70,7 +71,7 @@ export function WorkshopTicketsView() {
   );
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="space-y-6 p-0 sm:p-6">
       <div>
         <h1 className="text-2xl font-bold">Unidades asignadas a mi taller</h1>
         <p className="text-sm text-muted-foreground mt-1">
@@ -79,14 +80,15 @@ export function WorkshopTicketsView() {
       </div>
 
       {isLoading && (
-        <div className="flex items-center gap-2 text-sm text-muted-foreground p-8 justify-center">
+        <div role="status" className="flex items-center gap-2 text-sm text-muted-foreground p-8 justify-center">
           <Loader2 className="size-4 animate-spin" /> Cargando unidades…
         </div>
       )}
 
       {error && (
-        <div className="text-sm text-rose-600 dark:text-rose-400 p-4 bg-rose-50 dark:bg-rose-950/30 rounded-md">
-          Error al cargar tus unidades. Recarga la página o vuelve a iniciar sesión.
+        <div role="alert" className="flex flex-col items-center gap-3 rounded-md border border-destructive/30 bg-destructive/5 p-6 text-center text-sm">
+          <p>Error al cargar tus unidades. Revisa tu conexión e intenta de nuevo.</p>
+          <Button type="button" variant="outline" onClick={() => void refetch()}>Reintentar</Button>
         </div>
       )}
 
@@ -130,7 +132,7 @@ export function WorkshopTicketsView() {
                           : 'border-border hover:border-primary/60'
                       }`}
                     >
-                      <div className="flex items-center gap-3">
+                      <div className="flex flex-col items-stretch gap-3 sm:flex-row sm:items-center">
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 flex-wrap">
                             <span className="text-xs text-muted-foreground font-mono">
@@ -170,7 +172,7 @@ export function WorkshopTicketsView() {
                           </div>
                         </div>
                         {section.cta ? (
-                          <span className="shrink-0 inline-flex items-center gap-1.5 rounded-md bg-primary text-primary-foreground text-sm font-medium px-3 py-2 group-hover:opacity-90 transition-opacity">
+                          <span className="inline-flex min-h-11 shrink-0 items-center justify-center gap-1.5 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground transition-opacity group-hover:opacity-90">
                             {section.cta}
                             <ChevronRight className="size-4" />
                           </span>

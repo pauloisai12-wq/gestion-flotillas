@@ -13,13 +13,28 @@ import {
   closeMonthSchema,
   monthlyPoolSchema,
   listBudgetsQuerySchema,
+  distributeTargetBudgetSchema,
+  distributionTargetsQuerySchema,
   AssignBudgetInput,
   DistributeBudgetInput,
   CloseMonthInput,
   MonthlyPoolInput,
+  DistributeTargetBudgetInput,
+  DistributionTargetsQuery,
 } from '../validators/budgetValidator';
 import { closeMonthAndRollover } from '../services/budgetService';
+import {
+  assignBudgetToVehicle,
+  decimalTextToCents,
+  distributeExplicitBudgets,
+  distributeBudgetToTarget,
+  getDistributionTargetCounts,
+  lockMonthlyPoolCents,
+  moneyAmountToCents,
+} from '../services/budgetDistributionService';
 import { BadRequest, Forbidden } from '../middlewares/errorHandler';
+import { lockOpenBudgetPeriod } from '../services/budgetPeriodLock';
+import { businessPeriodForDate } from '../lib/businessTime';
 
 const router = Router();
 
@@ -37,8 +52,8 @@ function assertCanManageKind(role: string, kind: BudgetKind): void {
 }
 
 /** GET / — lista presupuestos con filtros (kind, year, month, vehicleId) */
-router.get('/', requireRole(RoleGroups.ANY_AUTH), validateQuery(listBudgetsQuerySchema), ah(async (req: Request, res: Response) => {
-  const { kind, year, month, vehicleId } = req.query as unknown as z.infer<typeof listBudgetsQuerySchema>;
+router.get('/', requireRole(RoleGroups.BUDGET_READERS), validateQuery(listBudgetsQuerySchema), ah(async (req: Request, res: Response) => {
+  const { kind, year, month, vehicleId, search, page, limit } = req.query as unknown as z.infer<typeof listBudgetsQuerySchema>;
 
   const user = req.user!;
 
@@ -55,18 +70,32 @@ router.get('/', requireRole(RoleGroups.ANY_AUTH), validateQuery(listBudgetsQuery
     ...(year ? { year } : {}),
     ...(month ? { month } : {}),
     ...(vehicleId ? { vehicleId } : {}),
+    ...(search
+      ? {
+          vehicle: {
+            OR: [
+              { economicNumber: { contains: search, mode: 'insensitive' as const } },
+              { plate: { contains: search, mode: 'insensitive' as const } },
+            ],
+          },
+        }
+      : {}),
   };
 
-  const budgets = await prisma.vehicleBudget.findMany({
-    where,
-    include: {
-      vehicle: { select: { id: true, plate: true, economicNumber: true, classification: true } },
-      creator: { select: { id: true, fullName: true } },
-      editor: { select: { id: true, fullName: true } },
-    },
-    orderBy: [{ year: 'desc' }, { month: 'desc' }, { vehicleId: 'asc' }],
-    take: 2000, // tope de seguridad: el listado crece cada mes; no cargar todo el histórico sin límite
-  });
+  const [budgets, total] = await Promise.all([
+    prisma.vehicleBudget.findMany({
+      where,
+      include: {
+        vehicle: { select: { id: true, plate: true, economicNumber: true, classification: true } },
+        creator: { select: { id: true, fullName: true } },
+        editor: { select: { id: true, fullName: true } },
+      },
+      orderBy: [{ year: 'desc' }, { month: 'desc' }, { vehicleId: 'asc' }],
+      skip: (page - 1) * limit,
+      take: limit,
+    }),
+    prisma.vehicleBudget.count({ where }),
+  ]);
 
   const serialized = budgets.map((b) => ({
     ...b,
@@ -76,63 +105,21 @@ router.get('/', requireRole(RoleGroups.ANY_AUTH), validateQuery(listBudgetsQuery
     available: Number(b.baseAmount) + Number(b.rolloverIn) - Number(b.spentAmount),
   }));
 
-  res.json({ data: serialized });
+  res.json({
+    data: serialized,
+    pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+  });
 }));
 
 /** POST /assign — asignar baseAmount a UN vehículo en un periodo.
  *  requireRole(BUDGET_MANAGERS) como primera barrera; el check por kind afina luego. */
 router.post('/assign', requireRole(RoleGroups.BUDGET_MANAGERS), validateBody(assignBudgetSchema), ah(async (req: Request, res: Response) => {
-  const { vehicleId, kind, year, month, baseAmount } = req.body as AssignBudgetInput;
+  const input = req.body as AssignBudgetInput;
 
   const user = req.user!;
 
-  assertCanManageKind(user.role, kind);
-
-  // Pre-check (UX): mensaje detallado para el caso común.
-  const pool = await prisma.monthlyBudget.findUnique({
-    where: { kind_year_month: { kind, year, month } },
-  });
-  if (pool) {
-    const agg = await prisma.vehicleBudget.aggregate({
-      where: { kind, year, month, NOT: { vehicleId } },
-      _sum: { baseAmount: true },
-    });
-    const othersSum = Number(agg._sum.baseAmount ?? 0);
-    const newTotal = othersSum + baseAmount;
-    const poolAmount = Number(pool.totalAmount);
-    if (newTotal > poolAmount) {
-      return res.status(400).json({
-        error: 'Excede el pote mensual',
-        message: `La suma asignada ($${newTotal.toLocaleString('es-MX')}) excede el pote del mes ($${poolAmount.toLocaleString('es-MX')}). Sin asignar: $${(poolAmount - othersSum).toLocaleString('es-MX')}.`,
-      });
-    }
-  }
-
-  // Escritura con guard de concurrencia: lockeamos el pote del periodo (FOR UPDATE)
-  // y re-validamos DENTRO de la tx, para que dos asignaciones simultáneas al mismo
-  // pote no lo excedan (el pre-check de arriba puede ver datos obsoletos bajo carrera).
-  const budget = await prisma.$transaction(async (tx) => {
-    const poolRows = await tx.$queryRaw<Array<{ totalAmount: string }>>`
-      SELECT "totalAmount"::text FROM monthly_budgets
-      WHERE kind = ${kind}::"BudgetKind" AND year = ${year} AND month = ${month}
-      FOR UPDATE
-    `;
-    if (poolRows.length > 0) {
-      const agg = await tx.vehicleBudget.aggregate({
-        where: { kind, year, month, NOT: { vehicleId } },
-        _sum: { baseAmount: true },
-      });
-      const newTotal = Number(agg._sum.baseAmount ?? 0) + baseAmount;
-      if (newTotal > Number(poolRows[0].totalAmount)) {
-        throw BadRequest('Excede el pote mensual (otra asignación concurrente consumió el saldo). Refresca e intenta de nuevo.');
-      }
-    }
-    return tx.vehicleBudget.upsert({
-      where: { vehicleId_kind_year_month: { vehicleId, kind, year, month } },
-      create: { vehicleId, kind, year, month, baseAmount, createdBy: user.userId, updatedBy: user.userId },
-      update: { baseAmount, updatedBy: user.userId },
-    });
-  });
+  assertCanManageKind(user.role, input.kind);
+  const budget = await assignBudgetToVehicle(input, user.userId);
 
   res.json({
     data: {
@@ -144,70 +131,48 @@ router.post('/assign', requireRole(RoleGroups.BUDGET_MANAGERS), validateBody(ass
   });
 }));
 
+/** GET /distribution-targets — conteos autoritativos, sin paginar vehículos. */
+router.get(
+  '/distribution-targets',
+  requireRole(RoleGroups.BUDGET_READERS),
+  validateQuery(distributionTargetsQuerySchema),
+  ah(async (req: Request, res: Response) => {
+    const { kind, year, month } = req.query as unknown as DistributionTargetsQuery;
+    const user = req.user!;
+    if (kind === 'FUEL' && user.role === Roles.SUP_MAINT) throw Forbidden('Sin acceso');
+    if (kind === 'MAINTENANCE' && user.role === Roles.SUP_FUEL) throw Forbidden('Sin acceso');
+
+    const counts = await getDistributionTargetCounts(kind, year, month);
+    res.json({ data: counts });
+  }),
+);
+
+/**
+ * POST /distribute-target — el backend resuelve ALL/UNASSIGNED/CLASSIFICATION
+ * y calcula los montos dentro de la misma transacción que escribe.
+ */
+router.post(
+  '/distribute-target',
+  requireRole(RoleGroups.BUDGET_MANAGERS),
+  validateBody(distributeTargetBudgetSchema),
+  ah(async (req: Request, res: Response) => {
+    const input = req.body as DistributeTargetBudgetInput;
+    const user = req.user!;
+    assertCanManageKind(user.role, input.kind);
+
+    const result = await distributeBudgetToTarget(input, user.userId);
+    res.json({ data: result });
+  }),
+);
+
 /** POST /distribute — asignación masiva (valida contra pote) */
 router.post('/distribute', requireRole(RoleGroups.BUDGET_MANAGERS), validateBody(distributeBudgetSchema), ah(async (req: Request, res: Response) => {
-  const { kind, year, month, distributions } = req.body as DistributeBudgetInput;
+  const input = req.body as DistributeBudgetInput;
   const user = req.user!;
 
-  assertCanManageKind(user.role, kind);
-
-  const userId = user.userId;
-  const targetIds = distributions.map((d) => d.vehicleId);
-  const distSum = distributions.reduce((s, d) => s + d.baseAmount, 0);
-
-  // Pre-check (UX): mensaje detallado para el caso común.
-  const pool = await prisma.monthlyBudget.findUnique({
-    where: { kind_year_month: { kind, year, month } },
-  });
-  if (pool) {
-    const agg = await prisma.vehicleBudget.aggregate({
-      where: { kind, year, month, NOT: { vehicleId: { in: targetIds } } },
-      _sum: { baseAmount: true },
-    });
-    const othersSum = Number(agg._sum.baseAmount ?? 0);
-    const newTotal = othersSum + distSum;
-    const poolAmount = Number(pool.totalAmount);
-    if (newTotal > poolAmount) {
-      return res.status(400).json({
-        error: 'Excede el pote mensual',
-        message: `La asignación masiva ($${newTotal.toLocaleString('es-MX')}) excede el pote del mes ($${poolAmount.toLocaleString('es-MX')}).`,
-      });
-    }
-  }
-
-  // Escritura con guard de concurrencia: lock del pote + re-validación dentro de
-  // la tx (igual que /assign), para que distribuciones concurrentes no lo excedan.
-  const count = await prisma.$transaction(async (tx) => {
-    const poolRows = await tx.$queryRaw<Array<{ totalAmount: string }>>`
-      SELECT "totalAmount"::text FROM monthly_budgets
-      WHERE kind = ${kind}::"BudgetKind" AND year = ${year} AND month = ${month}
-      FOR UPDATE
-    `;
-    if (poolRows.length > 0) {
-      const agg = await tx.vehicleBudget.aggregate({
-        where: { kind, year, month, NOT: { vehicleId: { in: targetIds } } },
-        _sum: { baseAmount: true },
-      });
-      if (Number(agg._sum.baseAmount ?? 0) + distSum > Number(poolRows[0].totalAmount)) {
-        throw BadRequest('Excede el pote mensual (asignación concurrente). Refresca e intenta de nuevo.');
-      }
-    }
-    let n = 0;
-    for (const d of distributions) {
-      await tx.vehicleBudget.upsert({
-        where: { vehicleId_kind_year_month: { vehicleId: d.vehicleId, kind, year, month } },
-        create: {
-          vehicleId: d.vehicleId, kind, year, month,
-          baseAmount: d.baseAmount, createdBy: userId, updatedBy: userId,
-        },
-        update: { baseAmount: d.baseAmount, updatedBy: userId },
-      });
-      n++;
-    }
-    return n;
-  });
-
-  res.json({ data: { count } });
+  assertCanManageKind(user.role, input.kind);
+  const result = await distributeExplicitBudgets(input, user.userId);
+  res.json({ data: result });
 }));
 
 /** POST /close-month — cerrar mes + rollover idempotente (admin) */
@@ -221,10 +186,11 @@ router.post('/close-month', requireRole(RoleGroups.ADMIN_ONLY), validateBody(clo
 // ─────────────────────────────────────────────
 
 /** GET /monthly-pool — pote declarado + suma asignada + resumen */
-router.get('/monthly-pool', requireRole(RoleGroups.ANY_AUTH), ah(async (req: Request, res: Response) => {
+router.get('/monthly-pool', requireRole(RoleGroups.BUDGET_READERS), ah(async (req: Request, res: Response) => {
   const kind = (req.query.kind as BudgetKind) || 'FUEL';
-  const year = Number(req.query.year) || new Date().getFullYear();
-  const month = Number(req.query.month) || new Date().getMonth() + 1;
+  const currentPeriod = businessPeriodForDate();
+  const year = Number(req.query.year) || currentPeriod.year;
+  const month = Number(req.query.month) || currentPeriod.month;
 
   const user = req.user!;
   if (kind === 'FUEL' && user.role === Roles.SUP_MAINT) {
@@ -238,7 +204,9 @@ router.get('/monthly-pool', requireRole(RoleGroups.ANY_AUTH), ah(async (req: Req
     where: { kind_year_month: { kind, year, month } },
   });
 
-  // Suma asignada a vehículos en ese periodo
+  // Incluye la porción consumida de unidades dadas de baja. Su saldo disponible
+  // ya fue liberado al desactivarlas; omitir toda la fila duplicaría esa
+  // liberación y haría que el pote pareciera mayor al dinero realmente restante.
   const agg = await prisma.vehicleBudget.aggregate({
     where: { kind, year, month },
     _sum: { baseAmount: true, rolloverIn: true, spentAmount: true },
@@ -275,16 +243,36 @@ router.put('/monthly-pool', requireRole(RoleGroups.BUDGET_MANAGERS), validateBod
   const user = req.user!;
   assertCanManageKind(user.role, kind);
 
-  const pool = await prisma.monthlyBudget.upsert({
-    where: { kind_year_month: { kind, year, month } },
-    create: {
-      kind, year, month,
-      totalAmount, notes: notes ?? null,
-      createdBy: user.userId, updatedBy: user.userId,
-    },
-    update: {
-      totalAmount, notes: notes ?? null, updatedBy: user.userId,
-    },
+  const pool = await prisma.$transaction(async (tx) => {
+    await lockOpenBudgetPeriod(tx, kind, year, month);
+    await lockMonthlyPoolCents(tx, kind, year, month);
+
+    // Misma regla financiera del GET: el gasto hundido de una baja sigue
+    // respaldado por el pote aunque la unidad ya no sea un indicador operativo.
+    const aggregate = await tx.vehicleBudget.aggregate({
+      where: { kind, year, month },
+      _sum: { baseAmount: true },
+    });
+    const assignedCents = decimalTextToCents(String(aggregate._sum.baseAmount ?? 0));
+    const requestedCents = moneyAmountToCents(totalAmount);
+    if (requestedCents < assignedCents) {
+      throw BadRequest(
+        'El pote mensual no puede ser menor que el presupuesto ya asignado a vehículos',
+        { assignedAmount: Number(assignedCents) / 100 },
+      );
+    }
+
+    return tx.monthlyBudget.upsert({
+      where: { kind_year_month: { kind, year, month } },
+      create: {
+        kind, year, month,
+        totalAmount: Number(requestedCents) / 100, notes: notes ?? null,
+        createdBy: user.userId, updatedBy: user.userId,
+      },
+      update: {
+        totalAmount: Number(requestedCents) / 100, notes: notes ?? null, updatedBy: user.userId,
+      },
+    });
   });
 
   res.json({ data: { ...pool, totalAmount: Number(pool.totalAmount) } });

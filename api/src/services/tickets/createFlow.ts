@@ -12,25 +12,38 @@ import {
 import { createNotification } from '../notificationService';
 import { logger } from '../../lib/logger';
 import { TicketError, MAX_ATTACHMENTS, notifyTicketAdmins } from './shared';
+import { businessPeriodForDate } from '../../lib/businessTime';
 
 // ─── EJECUTOR: crear ticket ────────────────────────────────────────
 export async function createTicket(executorId: number, input: CreateTicketInput) {
-  const vehicle = await prisma.vehicle.findUnique({
-    where: { id: input.vehicleId },
-    select: { id: true, executorId: true, isActive: true, economicNumber: true, plate: true },
-  });
-
-  if (!vehicle) throw new TicketError('NOT_FOUND', 'Vehículo no existe');
-  if (!vehicle.isActive) throw new TicketError('BAD_REQUEST', 'Vehículo inactivo');
-  if (vehicle.executorId !== executorId) {
-    throw new TicketError('FORBIDDEN', 'No eres el ejecutor asignado a este vehículo');
-  }
-
   // Folio único concurrency-safe: el UPSERT atómico del contador anual
   // (ON CONFLICT DO UPDATE bloquea la fila) corre en la MISMA transacción que la
   // inserción del ticket, así dos creaciones simultáneas nunca obtienen el mismo folio.
-  const ticket = await prisma.$transaction(async (tx) => {
-    const year = new Date().getFullYear();
+  const result = await prisma.$transaction(async (tx) => {
+    // Este lock debe preceder al folio y al INSERT. Es compatible con lectores,
+    // pero entra en conflicto con el FOR UPDATE de la baja lógica: si la baja
+    // gana, aquí se observa isActive=false; si la creación gana, la baja verá el
+    // ticket no terminal y abortará sin liberar presupuesto ni asignaciones.
+    const vehicles = await tx.$queryRaw<Array<{
+      id: number;
+      executorId: number | null;
+      isActive: boolean;
+      economicNumber: string;
+      plate: string;
+    }>>`
+      SELECT id, "executorId", "isActive", "economicNumber", plate
+      FROM vehicles
+      WHERE id = ${input.vehicleId}
+      FOR KEY SHARE
+    `;
+    const vehicle = vehicles[0];
+    if (!vehicle) throw new TicketError('NOT_FOUND', 'Vehículo no existe');
+    if (!vehicle.isActive) throw new TicketError('BAD_REQUEST', 'Vehículo inactivo');
+    if (vehicle.executorId !== executorId) {
+      throw new TicketError('FORBIDDEN', 'No eres el ejecutor asignado a este vehículo');
+    }
+
+    const { year } = businessPeriodForDate();
     const rows = await tx.$queryRaw<{ lastValue: number }[]>`
       INSERT INTO "maintenance_folio_counters" ("year", "lastValue")
       VALUES (${year}, 1)
@@ -39,7 +52,7 @@ export async function createTicket(executorId: number, input: CreateTicketInput)
       RETURNING "lastValue"`;
     const folio = `SM-${year}-${String(rows[0].lastValue).padStart(5, '0')}`;
 
-    return tx.maintenanceTicket.create({
+    const ticket = await tx.maintenanceTicket.create({
       data: {
         folio,
         vehicleId: input.vehicleId,
@@ -50,16 +63,17 @@ export async function createTicket(executorId: number, input: CreateTicketInput)
         odometerStatus: input.odometerStatus,
       },
     });
+    return { ticket, vehicle };
   });
 
   await notifyTicketAdmins({
     type: 'MAINTENANCE_TICKET_CREATED',
     title: 'Nuevo ticket de mantenimiento',
-    message: `Vehículo ${vehicle.economicNumber} (${vehicle.plate}) — ${input.description.slice(0, 80)}`,
-    entityRef: `ticket:${ticket.id}`,
+    message: `Vehículo ${result.vehicle.economicNumber} (${result.vehicle.plate}) — ${input.description.slice(0, 80)}`,
+    entityRef: `ticket:${result.ticket.id}`,
   });
 
-  return ticket;
+  return result.ticket;
 }
 
 // ─── EJECUTOR: subir foto al ticket ────────────────────────────────

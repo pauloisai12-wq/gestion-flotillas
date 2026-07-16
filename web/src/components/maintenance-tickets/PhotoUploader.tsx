@@ -15,6 +15,7 @@ import { useUploadAttachment } from '@/hooks/useMaintenanceTickets';
 const MAX_FILES = 5;
 const MAX_SIZE = 5 * 1024 * 1024; // 5 MB
 const ALLOWED = ['image/jpeg', 'image/png'];
+const NO_FILES: File[] = [];
 
 type Props =
   | {
@@ -40,7 +41,7 @@ export function PhotoUploader(props: Props) {
   const uploadHook = useUploadAttachment();
   const upload = props.mode === 'upload' ? uploadHook : null;
 
-  const currentFiles = props.mode === 'collect' ? props.files : [];
+  const currentFiles = props.mode === 'collect' ? props.files : NO_FILES;
 
   // Previews memoizados: una blob URL estable por archivo, revocada en cleanup
   // para no fugar object URLs en cada re-render del formulario padre.
@@ -121,6 +122,7 @@ export function PhotoUploader(props: Props) {
         <input
           ref={inputRef}
           type="file"
+          aria-label="Agregar fotos"
           accept="image/jpeg,image/png"
           multiple
           className="hidden"
@@ -137,7 +139,7 @@ export function PhotoUploader(props: Props) {
             type="button"
             onClick={() => inputRef.current?.click()}
             disabled={!canAdd}
-            className="font-medium text-primary hover:underline disabled:no-underline disabled:text-muted-foreground"
+            className="min-h-11 rounded-md px-2 font-medium text-primary hover:underline disabled:no-underline disabled:text-muted-foreground"
           >
             Selecciona fotos
           </button>{' '}
@@ -149,7 +151,7 @@ export function PhotoUploader(props: Props) {
       </label>
 
       {error && (
-        <div className="mt-2 text-xs text-rose-600 dark:text-rose-400 flex items-center gap-1.5">
+        <div role="alert" className="mt-2 text-xs text-rose-600 dark:text-rose-400 flex items-center gap-1.5">
           <AlertCircle className="size-3.5" />
           {error}
         </div>

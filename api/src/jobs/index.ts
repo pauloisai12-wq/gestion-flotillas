@@ -5,9 +5,30 @@ import { runDailyComplianceCheck } from '../services/blockingService';
 import { getAllPendingServices } from '../services/maintenanceService';
 import { notifyManyByRole } from '../services/notificationService';
 import { refreshMaterializedViews } from './refreshViewsJob';
-import { closeMonthAndRollover } from '../services/budgetService';
+import { closeOverdueBudgetPeriods } from '../services/budgetService';
+import { BUSINESS_TIME_ZONE, businessPeriodForDate } from '../lib/businessTime';
+import {
+  closeReportGenerationQueue,
+  dispatchPendingReportGenerationOutbox,
+  recoverExpiredReportGenerations,
+  requestReportGeneration,
+} from '../services/reportService';
 import { logger } from '../lib/logger';
+import { AppError } from '../middlewares/errorHandler';
 import type { Queue, Worker } from 'bullmq';
+import {
+  cleanupExpiredDataJobs,
+  cleanupOrphanedDataJobArtifacts,
+  closeDataJobQueues,
+  createVehicleImportWorker,
+  dispatchQueuedDataJobs,
+  recoverStaleDataJobs,
+} from '../services/dataJobService';
+import {
+  closeMediaThumbnailQueue,
+  createMediaThumbnailWorker,
+  scheduleThumbnailBackfill,
+} from '../services/mediaThumbnailService';
 
 // Refs vivas de colas/workers para cierre ordenado (graceful shutdown, SIGTERM).
 const queues: Queue[] = [];
@@ -21,22 +42,21 @@ export async function shutdownJobs(): Promise<void> {
   logger.info('Cerrando workers y colas de BullMQ...');
   await Promise.allSettled(workers.map((w) => w.close()));
   await Promise.allSettled(queues.map((q) => q.close()));
+  await closeReportGenerationQueue();
+  await closeDataJobQueues();
+  await closeMediaThumbnailQueue();
   logger.info('Workers y colas de BullMQ cerrados');
 }
 
 /**
- * Calcula año/mes del MES ANTERIOR de forma robusta, sin importar
- * cuándo se dispare el cron (resistente a timezone drift y disparos tardíos).
- * Estrategia: tomar el día 1 del mes actual y restarle 1 día → estamos en el
- * último día del mes anterior. Más confiable que aritmética manual con offsets.
+ * Calcula el mes anterior usando la misma zona horaria del negocio que los
+ * presupuestos; el huso UTC del host Hetzner no decide el periodo contable.
  */
 function getPreviousMonth(now: Date = new Date()): { year: number; month: number } {
-  const firstOfCurrent = new Date(now.getFullYear(), now.getMonth(), 1);
-  const lastOfPrevious = new Date(firstOfCurrent.getTime() - 24 * 60 * 60 * 1000);
-  return {
-    year: lastOfPrevious.getFullYear(),
-    month: lastOfPrevious.getMonth() + 1,
-  };
+  const current = businessPeriodForDate(now);
+  return current.month === 1
+    ? { year: current.year - 1, month: 12 }
+    : { year: current.year, month: current.month - 1 };
 }
 
 export async function initializeJobs(): Promise<void> {
@@ -90,6 +110,7 @@ export async function initializeJobs(): Promise<void> {
     'daily-compliance-check',
     {
       pattern: '1 0 * * *',
+      tz: BUSINESS_TIME_ZONE,
     },
     {
       name: 'daily-compliance-check',
@@ -129,22 +150,73 @@ export async function initializeJobs(): Promise<void> {
 
   logger.info('Job "refresh-views" programado: cada 15 minutos');
 
-  // ─── Cola 3: Reportes mensuales (día 1 a las 06:00) ───
-  // NOTA: Esta cola solo ENCOLA el job en Redis.
-  // El worker Python (worker/main.py) es quien lo PROCESA.
-  const reportsQueue = createQueue('reports');
-  queues.push(reportsQueue);
+  // ─── Cola 3: despacho mensual de reportes (día 1 a las 06:00) ───
+  // El scheduler anterior escribía directamente en `reports`, por lo que el
+  // worker Python recibía jobs sin ReportHistory. Ahora un worker Node crea
+  // primero la fila PROCESSING y solo después encola el trabajo real.
+  const legacyReportsQueue = createQueue('reports');
+  await legacyReportsQueue.removeJobScheduler('monthly-report-scheduler');
+  await legacyReportsQueue.close();
 
-  await reportsQueue.upsertJobScheduler(
+  const reportDispatchQueue = createQueue('report-dispatch');
+  queues.push(reportDispatchQueue);
+  const reportDispatchWorker = createWorker('report-dispatch', async (job) => {
+    if (job.name === 'flush-report-outbox') {
+      const recovered = await recoverExpiredReportGenerations(25);
+      const result = await dispatchPendingReportGenerationOutbox({ limit: 50 });
+      const staleDataJobs = await recoverStaleDataJobs(25);
+      const dataJobsPublished = await dispatchQueuedDataJobs(50);
+      const dataJobsExpired = await cleanupExpiredDataJobs(25);
+      const dataJobArtifactsOrphaned = await cleanupOrphanedDataJobArtifacts(100);
+      if (
+        recovered > 0
+        || result.published > 0
+        || result.deferred > 0
+        || dataJobsPublished > 0
+        || dataJobsExpired > 0
+        || dataJobArtifactsOrphaned > 0
+        || staleDataJobs.exportsRequeued > 0
+        || staleDataJobs.importsFailed > 0
+      ) {
+        logger.info(
+          {
+            recovered,
+            ...result,
+            staleDataJobs,
+            dataJobsPublished,
+            dataJobsExpired,
+            dataJobArtifactsOrphaned,
+          },
+          'Barrido de outbox/reportes/DataJobs completado',
+        );
+      }
+      return;
+    }
+
+    const { year, month } = getPreviousMonth();
+    try {
+      await requestReportGeneration(month, year, 'cron-mensual');
+    } catch (err) {
+      // Si un admin ya solicitó ese periodo, la barrera única cumplió su
+      // objetivo: el cron no debe fallar/reintentar ni duplicar el trabajo.
+      if (err instanceof AppError && err.statusCode === 409) {
+        logger.info({ month, year }, 'Reporte mensual ya estaba en proceso; despacho omitido');
+        return;
+      }
+      throw err;
+    }
+  });
+  workers.push(reportDispatchWorker);
+
+  await reportDispatchQueue.upsertJobScheduler(
     'monthly-report-scheduler',
     {
       pattern: '0 6 1 * *',
+      tz: BUSINESS_TIME_ZONE,
     },
     {
-      name: 'generate-monthly-report',
-      data: {
-        autoCalculateMonth: true,
-      },
+      name: 'dispatch-monthly-report',
+      data: {},
       opts: {
         removeOnComplete: { count: 12 },
         removeOnFail: { count: 12 },
@@ -152,24 +224,54 @@ export async function initializeJobs(): Promise<void> {
     }
   );
 
-  logger.info('Job "reports" programado: día 1 de cada mes a las 06:00');
+  await reportDispatchQueue.upsertJobScheduler(
+    'report-outbox-scheduler',
+    { pattern: '* * * * *' },
+    {
+      name: 'flush-report-outbox',
+      data: {},
+      opts: {
+        removeOnComplete: { count: 10 },
+        removeOnFail: { count: 20 },
+      },
+    },
+  );
 
-  // ─── Cola 4: Rollover de presupuestos (día 1 a las 00:05) ───
+  logger.info('Jobs de reportes: mensual 06:00 + outbox cada minuto');
+
+  // Importaciones pesadas: una sola en paralelo. El parser XLSX usa un worker
+  // thread y las búsquedas de identificadores se precargan en lotes.
+  const vehicleImportWorker = createVehicleImportWorker();
+  workers.push(vehicleImportWorker);
+  logger.info('Worker de importación de vehículos inicializado (concurrency=1)');
+
+  const mediaThumbnailWorker = createMediaThumbnailWorker();
+  workers.push(mediaThumbnailWorker);
+  await scheduleThumbnailBackfill();
+  logger.info('Worker de miniaturas WebP inicializado + backfill cada 15 minutos');
+
+  // ─── Cola 4: Rollover de presupuestos (ventana tras revisión) ───
   const rolloverQueue = createQueue('budget-rollover');
   queues.push(rolloverQueue);
 
   const rolloverWorker = createWorker('budget-rollover', async () => {
-    const { year: prevYear, month: prevMonth } = getPreviousMonth();
-    logger.info({ year: prevYear, month: prevMonth }, 'Cerrando mes y aplicando rollover');
-    const result = await closeMonthAndRollover({ year: prevYear, month: prevMonth });
-    logger.info({ results: result.results }, 'Rollover aplicado');
+    const result = await closeOverdueBudgetPeriods();
+    logger.info(
+      { periods: result.periods, currentPeriod: result.currentPeriod },
+      'Barrido de periodos presupuestales vencidos completado',
+    );
   });
 
   workers.push(rolloverWorker);
 
   await rolloverQueue.upsertJobScheduler(
     'monthly-rollover-scheduler',
-    { pattern: '5 0 1 * *' },
+    {
+      // El cierre se difiere mientras existan cargas pendientes. El barrido
+      // diario conserva meses atrasados incluso después de cambiar de mes.
+      pattern: '0 6 * * *',
+      tz: BUSINESS_TIME_ZONE,
+    },
     {
       name: 'budget-rollover',
       data: {},
@@ -177,6 +279,6 @@ export async function initializeJobs(): Promise<void> {
     },
   );
 
-  logger.info('Job "budget-rollover" programado: día 1 de cada mes a las 00:05');
+  logger.info('Job "budget-rollover": barrido diario 06:00 CDMX de periodos vencidos');
   logger.info('Jobs de BullMQ inicializados');
 }

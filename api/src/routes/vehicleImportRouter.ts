@@ -1,30 +1,43 @@
-// Import de Excel/CSV con validación de magic bytes (no solo MIME type)
+// Importación asíncrona de Excel/CSV. La petición solo valida y persiste el
+// archivo; BullMQ procesa el libro fuera del ciclo HTTP y publica progreso.
 
 import { Router, Request, Response, NextFunction } from 'express';
 import multer from 'multer';
-// `file-type` v18+ es ESM puro y el proyecto compila con `module: commonjs`,
-// así que usamos dynamic import en lugar de un require/import sincrónico
-// (que falla en typecheck y en runtime).
+import path from 'path';
+import crypto from 'crypto';
+import { promises as fs } from 'fs';
 import { requireRole, RoleGroups } from '../middlewares/roleMiddleware';
-import { importVehiclesFromBuffer } from '../services/vehicleImportService';
-import { refreshMaterializedViews } from '../jobs/refreshViewsJob';
-import { BadRequest, Conflict } from '../middlewares/errorHandler';
+import { BadRequest } from '../middlewares/errorHandler';
 import { ah } from '../lib/asyncHandler';
 import { logger } from '../lib/logger';
+import { parseId } from '../lib/http';
+import {
+  cleanupUploadedFilesOnError,
+  UPLOAD_DIRS,
+  uploadRateLimit,
+} from '../lib/uploadStorage';
+import {
+  createVehicleImportJob,
+  getLatestOwnedActiveDataJob,
+  getOwnedDataJob,
+  serializeDataJob,
+} from '../services/dataJobService';
 
 const router = Router();
+const MAX_IMPORT_FILE_BYTES = 10 * 1024 * 1024;
+export const MAX_VEHICLE_IMPORT_ROWS = 10_000;
 
-// Candado de concurrencia: una importación de vehículos puede tardar más que el
-// timeout del cliente. Si el navegador corta y el usuario reintenta, se lanzarían
-// imports SOLAPADOS que (al leer la BD antes de que el otro haga commit) crean
-// todos los vehículos por duplicado. Este flag a nivel de módulo —un único proceso
-// de API— garantiza que solo corra UNA importación a la vez; las demás reciben 409.
-let importRunning = false;
+const storage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, UPLOAD_DIRS.vehicleImports),
+  filename: (_req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    cb(null, `${crypto.randomUUID()}${ext}`);
+  },
+});
 
-// Multer en memoria, max 10MB
 const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 10 * 1024 * 1024, files: 1 },
+  storage,
+  limits: { fileSize: MAX_IMPORT_FILE_BYTES, files: 1, fields: 0, parts: 1 },
   fileFilter: (_req, file, cb) => {
     if (!/\.(xlsx|xls|csv)$/i.test(file.originalname)) {
       return cb(new Error('Solo se permiten .xlsx, .xls o .csv'));
@@ -33,55 +46,71 @@ const upload = multer({
   },
 });
 
-const ALLOWED_EXTS = new Set(['xlsx', 'xls', 'csv', 'zip']); // xlsx internamente es zip
+const ALLOWED_EXTS = new Set(['xlsx', 'xls', 'csv', 'zip', 'cfb']);
+
+async function readSample(filePath: string, length = 8192): Promise<Buffer> {
+  const handle = await fs.open(filePath, 'r');
+  try {
+    const buffer = Buffer.alloc(length);
+    const { bytesRead } = await handle.read(buffer, 0, length, 0);
+    return buffer.subarray(0, bytesRead);
+  } finally {
+    await handle.close();
+  }
+}
 
 router.post(
   '/import',
   requireRole(RoleGroups.VEHICLE_WRITERS),
+  uploadRateLimit,
   upload.single('file'),
   ah(async (req: Request, res: Response, next: NextFunction) => {
     if (!req.file) return next(BadRequest('Sube un archivo en el campo "file"'));
 
-    // Validar MAGIC BYTES (no confiar en mimetype/extensión)
+    const sample = await readSample(req.file.path);
     const { fileTypeFromBuffer } = await import('file-type');
-    const type = await fileTypeFromBuffer(req.file.buffer);
-    const isCsv = !type && /[,;\t]/.test(req.file.buffer.toString('utf8', 0, 200));
+    const type = await fileTypeFromBuffer(sample);
+    const isCsv = !type && /[,;\t]/.test(sample.toString('utf8'));
 
     if (!isCsv && (!type || !ALLOWED_EXTS.has(type.ext))) {
       logger.warn(
         { detected: type?.ext, mime: req.file.mimetype, size: req.file.size },
-        'Archivo rechazado por magic bytes',
+        'Archivo de importación rechazado por magic bytes',
       );
-      return next(BadRequest('El archivo no parece ser un Excel/CSV válido'));
+      throw BadRequest('El archivo no parece ser un Excel/CSV válido');
     }
+    if (req.file.size < 50) throw BadRequest('Archivo demasiado pequeño');
 
-    // Rechazar archivos sospechosamente pequeños o vacíos
-    if (req.file.size < 50) {
-      return next(BadRequest('Archivo demasiado pequeño'));
-    }
+    const job = await createVehicleImportJob({
+      requestedById: req.user!.userId,
+      inputPath: req.file.path,
+      originalFileName: req.file.originalname,
+      maxRows: MAX_VEHICLE_IMPORT_ROWS,
+    });
+    res.status(202).json({ data: serializeDataJob(job) });
+  }),
+  cleanupUploadedFilesOnError,
+);
 
-    // No permitir imports solapados (evita duplicación masiva por reintentos).
-    if (importRunning) {
-      return next(Conflict('Ya hay una importación en curso. Espera a que termine antes de subir otra.'));
-    }
-    importRunning = true;
-    try {
-      const result = await importVehiclesFromBuffer(req.file.buffer);
-      // Refrescar las vistas materializadas del dashboard tras la importación para
-      // que la cuenta de "unidades" refleje el nuevo total de inmediato (si no,
-      // mostraría el valor anterior hasta el cron de 15 min). Un fallo del refresco
-      // no debe tumbar la respuesta del import (los datos ya se escribieron).
-      try {
-        await refreshMaterializedViews();
-      } catch (err) {
-        logger.warn({ err }, 'Import OK pero falló el refresco de vistas materializadas');
-      }
-      res.json({ data: result });
-    } finally {
-      importRunning = false;
-    }
+router.get(
+  '/import/active',
+  requireRole(RoleGroups.VEHICLE_WRITERS),
+  ah(async (req: Request, res: Response) => {
+    const job = await getLatestOwnedActiveDataJob(req.user!.userId, 'VEHICLE_IMPORT');
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json({ data: job ? serializeDataJob(job) : null });
+  }),
+);
+
+router.get(
+  '/import/:jobId',
+  requireRole(RoleGroups.VEHICLE_WRITERS),
+  ah(async (req: Request, res: Response) => {
+    const id = parseId(req, 'jobId');
+    const job = await getOwnedDataJob(id, req.user!.userId, 'VEHICLE_IMPORT');
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json({ data: serializeDataJob(job) });
   }),
 );
 
 export default router;
-

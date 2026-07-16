@@ -415,6 +415,7 @@ async function main() {
         kmPerLiter: !nf && i >= 30 ? Math.round((kmDriven / liters) * 100) / 100 : null,
         isApproved: !isUnapproved,
         status,
+        requiresReconciliation: false,
         loadDate,
       },
     });

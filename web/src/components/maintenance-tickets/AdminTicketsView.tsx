@@ -10,7 +10,8 @@ import {
   type MaintenanceTicketStatus,
 } from '@/hooks/useMaintenanceTickets';
 import { TicketList } from '@/components/maintenance-tickets/TicketList';
-import { Loader2 } from 'lucide-react';
+import { AlertTriangle, Loader2 } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 
 const STATUS_FILTERS: { value: 'ALL' | MaintenanceTicketStatus; label: string }[] = [
   { value: 'ALL', label: 'Todos' },
@@ -25,12 +26,12 @@ const STATUS_FILTERS: { value: 'ALL' | MaintenanceTicketStatus; label: string }[
 export function AdminTicketsView() {
   const [statusFilter, setStatusFilter] = useState<'ALL' | MaintenanceTicketStatus>('ALL');
 
-  const { data, isLoading, error } = useTickets(
+  const { data, isLoading, error, refetch } = useTickets(
     statusFilter === 'ALL' ? {} : { status: statusFilter },
   );
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="space-y-6 p-0 sm:p-6">
       <div>
         <h1 className="text-2xl font-bold">Tickets de reparación</h1>
         <p className="text-sm text-muted-foreground mt-1">
@@ -44,7 +45,8 @@ export function AdminTicketsView() {
             key={f.value}
             type="button"
             onClick={() => setStatusFilter(f.value)}
-            className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
+            aria-pressed={statusFilter === f.value}
+            className={`min-h-11 rounded-full border px-3 py-2 text-xs transition-colors sm:min-h-0 sm:py-1.5 ${
               statusFilter === f.value
                 ? 'bg-primary text-primary-foreground border-primary'
                 : 'border-border hover:border-primary/60 text-muted-foreground'
@@ -56,14 +58,16 @@ export function AdminTicketsView() {
       </div>
 
       {isLoading && (
-        <div className="flex items-center gap-2 text-sm text-muted-foreground p-8 justify-center">
+        <div role="status" className="flex items-center gap-2 text-sm text-muted-foreground p-8 justify-center">
           <Loader2 className="size-4 animate-spin" /> Cargando tickets…
         </div>
       )}
 
       {error && (
-        <div className="text-sm text-rose-600 dark:text-rose-400 p-4 bg-rose-50 dark:bg-rose-950/30 rounded-md">
-          Error al cargar tickets. Recarga la página o vuelve a iniciar sesión.
+        <div role="alert" className="flex flex-col items-center gap-3 rounded-md border border-destructive/30 bg-destructive/5 p-6 text-center text-sm">
+          <AlertTriangle className="size-7 text-destructive" aria-hidden="true" />
+          <p>Error al cargar tickets. Revisa tu conexión e intenta de nuevo.</p>
+          <Button type="button" variant="outline" onClick={() => void refetch()}>Reintentar</Button>
         </div>
       )}
 

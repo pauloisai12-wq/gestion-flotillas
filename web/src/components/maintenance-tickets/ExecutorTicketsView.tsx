@@ -31,11 +31,11 @@ export function ExecutorTicketsView() {
   const { user } = useAuth();
   const [filter, setFilter] = useState<'ALL' | ExecutorStatus>('ALL');
 
-  const { data: fleet, isLoading: fleetLoading } = useVehicles({
+  const { data: fleet, isLoading: fleetLoading, isError: fleetError, refetch: refetchFleet } = useVehicles({
     executorId: user?.id,
     limit: 100,
   });
-  const { data: ticketsResp, isLoading: ticketsLoading } = useTickets({});
+  const { data: ticketsResp, isLoading: ticketsLoading, isError: ticketsError, refetch: refetchTickets } = useTickets({});
 
   const tickets = ticketsResp?.tickets ?? [];
   const filtered =
@@ -44,7 +44,7 @@ export function ExecutorTicketsView() {
       : tickets.filter((t) => toExecutorStatus(t.status) === filter);
 
   return (
-    <div className="p-6 space-y-8">
+    <div className="space-y-8 p-0 sm:p-6">
       <div>
         <h1 className="text-2xl font-bold">Mantenimiento de mi flotilla</h1>
         <p className="text-sm text-muted-foreground mt-1">
@@ -64,7 +64,8 @@ export function ExecutorTicketsView() {
               key={f.value}
               type="button"
               onClick={() => setFilter(f.value)}
-              className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
+              aria-pressed={filter === f.value}
+              className={`min-h-11 rounded-full border px-3 py-2 text-xs transition-colors sm:min-h-0 sm:py-1.5 ${
                 filter === f.value
                   ? 'bg-primary text-primary-foreground border-primary'
                   : 'border-border hover:border-primary/60 text-muted-foreground'
@@ -76,8 +77,15 @@ export function ExecutorTicketsView() {
         </div>
 
         {ticketsLoading ? (
-          <div className="flex items-center gap-2 text-sm text-muted-foreground p-6 justify-center">
+          <div role="status" className="flex items-center gap-2 text-sm text-muted-foreground p-6 justify-center">
             <Loader2 className="size-4 animate-spin" /> Cargando solicitudes…
+          </div>
+        ) : ticketsError ? (
+          <div role="alert" className="rounded-md border border-destructive/30 bg-destructive/5 p-4 text-center text-sm">
+            <p>No pudimos cargar tus solicitudes.</p>
+            <button type="button" onClick={() => void refetchTickets()} className="mt-2 min-h-11 rounded-md border border-border px-4 font-medium hover:bg-muted">
+              Reintentar
+            </button>
           </div>
         ) : filtered.length === 0 ? (
           <div className="border border-dashed border-border rounded-md p-8 text-center">
@@ -97,7 +105,7 @@ export function ExecutorTicketsView() {
                   href={`/tickets/${t.id}`}
                   className="block rounded-md border border-border bg-card hover:border-primary transition-colors p-4 group"
                 >
-                  <div className="flex items-center gap-3">
+                  <div className="flex flex-wrap items-center gap-3">
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="text-xs text-muted-foreground font-mono">#{t.id}</span>
@@ -141,8 +149,15 @@ export function ExecutorTicketsView() {
         </h2>
 
         {fleetLoading ? (
-          <div className="flex items-center gap-2 text-sm text-muted-foreground p-6 justify-center">
+          <div role="status" className="flex items-center gap-2 text-sm text-muted-foreground p-6 justify-center">
             <Loader2 className="size-4 animate-spin" /> Cargando unidades…
+          </div>
+        ) : fleetError ? (
+          <div role="alert" className="rounded-md border border-destructive/30 bg-destructive/5 p-4 text-center text-sm">
+            <p>No pudimos cargar tus vehículos asignados.</p>
+            <button type="button" onClick={() => void refetchFleet()} className="mt-2 min-h-11 rounded-md border border-border px-4 font-medium hover:bg-muted">
+              Reintentar
+            </button>
           </div>
         ) : (fleet?.data.length ?? 0) === 0 ? (
           <div className="border border-dashed border-border rounded-md p-8 text-center">
@@ -153,7 +168,7 @@ export function ExecutorTicketsView() {
         ) : (
           <div className="rounded-lg border border-border bg-card divide-y divide-border">
             {(fleet?.data ?? []).map((v) => (
-              <div key={v.id} className="flex items-center gap-3 px-4 py-3">
+              <div key={v.id} className="flex flex-col items-stretch gap-3 px-4 py-3 sm:flex-row sm:items-center">
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className="font-semibold">{v.economicNumber}</span>
@@ -181,7 +196,7 @@ export function ExecutorTicketsView() {
 
                 <Link
                   href={`/tickets/nuevo?vehicleId=${v.id}`}
-                  className="shrink-0 inline-flex items-center justify-center gap-1.5 rounded-md bg-primary text-primary-foreground text-sm font-medium px-3 py-2 hover:opacity-90 transition-opacity"
+                  className="inline-flex min-h-11 shrink-0 items-center justify-center gap-1.5 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90"
                 >
                   <Plus className="size-4" /> Solicitar mantenimiento
                 </Link>

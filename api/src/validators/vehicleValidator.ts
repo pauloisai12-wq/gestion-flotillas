@@ -24,7 +24,18 @@ export const vehicleSchema = z.object({
   isActive: z.boolean().optional(),
 });
 
-export const vehicleUpdateSchema = vehicleSchema.partial();
+// El odómetro maestro y el estado lógico no se editan junto con los datos
+// generales. expectedUpdatedAt hace obligatoria la escritura optimista.
+export const vehicleUpdateSchema = vehicleSchema
+  .omit({ currentOdometer: true, isActive: true })
+  .extend({ expectedUpdatedAt: z.iso.datetime() });
+
+export const odometerCorrectionSchema = z.object({
+  newOdometer: z.number().finite().min(0),
+  reason: z.string().trim().min(10).max(500),
+  expectedUpdatedAt: z.iso.datetime(),
+});
 
 export type VehicleInput = z.infer<typeof vehicleSchema>;
 export type VehicleUpdateInput = z.infer<typeof vehicleUpdateSchema>;
+export type OdometerCorrectionInput = z.infer<typeof odometerCorrectionSchema>;

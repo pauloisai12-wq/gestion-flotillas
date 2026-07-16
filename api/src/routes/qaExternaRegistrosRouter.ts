@@ -1,42 +1,87 @@
-// Router del lado REVISOR_QA. Monta en /api/qa-externa-registros (NUNCA bajo
-// /api/qa-externa/*, que pertenece al router de ingesta con guard por API key).
-// Todas las rutas exigen el rol REVISOR_QA (JWT + RBAC).
-//
-//   GET /                       listado paginado + filtros
-//   GET /imagenes/:sha256       miniatura/imagen confinada a QA_EXTERNA_DIR
-//   GET /export                 ZIP (datos.xlsx + fotos/) de TODA la evidencia
+// Router de revisión QA. Exportaciones grandes se registran como DataJob y se
+// procesan por lotes en el worker Python; ninguna petición materializa el XLSX.
 
 import { Router, Request, Response } from 'express';
 import path from 'path';
-import fs from 'fs';
-import archiver from 'archiver';
-import * as XLSX from 'xlsx';
 import { ah } from '../lib/asyncHandler';
+import { sendPrivateFile } from '../lib/privateFileResponse';
 import { requireRole, Roles } from '../middlewares/roleMiddleware';
 import { validateQuery } from '../middlewares/validate';
-import { parsePagination } from '../lib/http';
-import { BadRequest } from '../middlewares/errorHandler';
+import { parseId, parsePagination } from '../lib/http';
+import { BadRequest, Conflict, NotFound } from '../middlewares/errorHandler';
 import {
+  qaExportQuerySchema,
+  QaExportQueryInput,
   qaRegistrosQuerySchema,
   QaRegistrosQueryInput,
 } from '../validators/qaExternaRegistrosValidator';
 import * as service from '../services/qaExternaRegistrosService';
-import { QaExternaPrograma } from '@prisma/client';
-import prisma from '../lib/prisma';
+import {
+  createQaExportJob,
+  getLatestOwnedActiveDataJob,
+  getOwnedDataJob,
+  serializeDataJob,
+} from '../services/dataJobService';
 import { env } from '../config/env';
-import { logger } from '../lib/logger';
+import {
+  enqueueQaThumbnail,
+  qaThumbnailPath,
+} from '../services/mediaThumbnailService';
 
 const router = Router();
+export const MAX_QA_EXPORT_RECORDS = 50_000;
 
-/** "2026-06-16T14:30:05.000Z" → "20260616-143005" (UTC). */
-function stamp(d: Date): string {
-  const iso = d.toISOString(); // YYYY-MM-DDTHH:mm:ss.sssZ
-  return iso.slice(0, 10).replace(/-/g, '') + '-' + iso.slice(11, 19).replace(/:/g, '');
-}
+const serveQaThumbnail = ah(async (req: Request, res: Response) => {
+  const { programa, sha256 } = req.params;
+  if (programa !== 'BUFFALO' && programa !== 'LX') throw BadRequest('Programa inválido');
+  if (!/^[a-f0-9]{64}$/.test(sha256)) throw BadRequest('Hash inválido');
+  const thumbnailPath = qaThumbnailPath(programa, sha256);
+  const sent = await sendPrivateFile(req, res, thumbnailPath, {
+    contentType: 'image/webp',
+    cacheControl: 'private, max-age=3600, must-revalidate',
+    varyCookie: true,
+  });
+  if (sent) return;
 
-// ───────────────────────────────────────────────────────────
-// GET / — listado paginado con filtros (tipo, dispositivo, fechas)
-// ───────────────────────────────────────────────────────────
+  await enqueueQaThumbnail(programa, sha256);
+  res.setHeader('Retry-After', '3');
+  res.status(404).json({ error: 'Miniatura en proceso', code: 'THUMBNAIL_PENDING' });
+});
+
+const serveQaImage = ah(async (req: Request, res: Response) => {
+  const { programa, sha256 } = req.params;
+  if (programa !== 'BUFFALO' && programa !== 'LX') throw BadRequest('Programa inválido');
+  if (!/^[a-f0-9]{64}$/.test(sha256)) throw BadRequest('Hash inválido');
+
+  const sub = programa === 'BUFFALO' ? 'buffalo' : 'lx';
+  const baseDir = path.resolve(env.QA_EXTERNA_DIR, sub);
+  const safePath = path.resolve(baseDir, path.basename(`${sha256}.jpg`)); // nosemgrep
+  if (!safePath.startsWith(baseDir + path.sep)) throw BadRequest('Ruta inválida');
+  const sent = await sendPrivateFile(req, res, safePath, {
+    contentType: 'image/jpeg',
+    cacheControl: 'private, max-age=3600, must-revalidate',
+    varyCookie: true,
+  });
+  if (!sent) throw NotFound('Imagen');
+});
+
+const downloadQaExport = ah(async (req: Request, res: Response) => {
+  const id = parseId(req, 'jobId');
+  const job = await getOwnedDataJob(id, req.user!.userId, 'QA_EXPORT');
+  if (job.status !== 'COMPLETED') throw Conflict('La exportación aún no está lista');
+  if (job.expiresAt <= new Date()) throw NotFound('Exportación');
+  if (!job.artifactPath || !job.artifactName) throw NotFound('Archivo de exportación');
+
+  const baseDir = path.resolve(env.REPORTS_DIR, 'data-jobs');
+  const safePath = path.resolve(baseDir, path.basename(job.artifactPath));
+  if (!safePath.startsWith(baseDir + path.sep)) throw BadRequest('Ruta de artefacto inválida');
+  const sent = await sendPrivateFile(req, res, safePath, {
+    downloadName: job.artifactName,
+    cacheControl: 'private, no-store',
+  });
+  if (!sent) throw NotFound('Archivo de exportación');
+});
+
 router.get(
   '/',
   requireRole([Roles.REVISOR_QA]),
@@ -57,168 +102,81 @@ router.get(
   }),
 );
 
-// ───────────────────────────────────────────────────────────
-// GET /imagenes/:programa/:sha256 — sirve <sha256>.jpg confinado a la
-// subcarpeta del programa dentro de QA_EXTERNA_DIR (buffalo/ o lx/).
-// ───────────────────────────────────────────────────────────
+router.head(
+  '/imagenes/:programa/:sha256/thumbnail',
+  requireRole([Roles.REVISOR_QA]),
+  serveQaThumbnail,
+);
+router.get(
+  '/imagenes/:programa/:sha256/thumbnail',
+  requireRole([Roles.REVISOR_QA]),
+  serveQaThumbnail,
+);
+
+router.head(
+  '/imagenes/:programa/:sha256',
+  requireRole([Roles.REVISOR_QA]),
+  serveQaImage,
+);
 router.get(
   '/imagenes/:programa/:sha256',
   requireRole([Roles.REVISOR_QA]),
+  serveQaImage,
+);
+
+// Crea una exportación acotada. El rango obligatorio impide pedir todo el
+// histórico accidentalmente; el worker aplica además el límite de registros.
+router.post(
+  '/exports',
+  requireRole([Roles.REVISOR_QA]),
+  validateQuery(qaExportQuerySchema),
   ah(async (req: Request, res: Response) => {
-    const { programa, sha256 } = req.params;
-    if (programa !== 'BUFFALO' && programa !== 'LX') throw BadRequest('Programa inválido');
-    if (!/^[a-f0-9]{64}$/.test(sha256)) throw BadRequest('Hash inválido');
+    const q = req.query as unknown as QaExportQueryInput;
+    const dateFrom = new Date(`${q.dateFrom}T00:00:00.000Z`);
+    const dateToExclusive = new Date(`${q.dateTo}T00:00:00.000Z`);
+    dateToExclusive.setUTCDate(dateToExclusive.getUTCDate() + 1);
 
-    // programa ya validado contra el allowlist y sha256 como hex de 64 chars;
-    // además path.basename + el chequeo startsWith confinan la lectura a la
-    // subcarpeta del programa en QA_EXTERNA_DIR (defensa en profundidad).
-    const sub = programa === 'BUFFALO' ? 'buffalo' : 'lx';
-    const baseDir = path.resolve(env.QA_EXTERNA_DIR, sub);
-    const safePath = path.resolve(baseDir, path.basename(sha256 + '.jpg')); // nosemgrep
-    if (!safePath.startsWith(baseDir + path.sep)) throw BadRequest('Ruta inválida');
-
-    if (!fs.existsSync(safePath)) {
-      res.status(404).json({ error: 'Imagen no encontrada', code: 'NOT_FOUND' });
-      return;
-    }
-
-    res.type('image/jpeg');
-    res.setHeader('Cache-Control', 'private, max-age=300');
-    fs.createReadStream(safePath).pipe(res);
+    const job = await createQaExportJob({
+      requestedById: req.user!.userId,
+      programa: q.programa,
+      dateFrom,
+      dateToExclusive,
+      maxRecords: MAX_QA_EXPORT_RECORDS,
+    });
+    res.status(202).json({ data: serializeDataJob(job) });
   }),
 );
 
-// ───────────────────────────────────────────────────────────
-// GET /export — ZIP con datos.xlsx + fotos/ de TODA la evidencia.
-// Orden estricto: una vez que el stream empieza, las cabeceras ya no se pueden
-// cambiar, así que todo el trabajo síncrono va ANTES de tocar la respuesta.
-// ───────────────────────────────────────────────────────────
 router.get(
-  '/export',
+  '/exports/active',
   requireRole([Roles.REVISOR_QA]),
   ah(async (req: Request, res: Response) => {
-    // programa REQUERIDO. Se valida ANTES de tocar la respuesta para preservar
-    // el invariante de cabeceras (una vez que el stream empieza ya no se pueden
-    // cambiar). El cliente lo pasa por query; el servidor lo confina al allowlist.
-    const programa = String(req.query.programa || '').toUpperCase();
-    if (programa !== 'BUFFALO' && programa !== 'LX')
-      throw BadRequest('programa es requerido (BUFFALO|LX)');
-    const sub = programa === 'BUFFALO' ? 'buffalo' : 'lx';
-
-    const registros = await service.getAllForExport(programa as QaExternaPrograma);
-
-    const baseDir = path.resolve(env.QA_EXTERNA_DIR, sub);
-
-    interface PhotoEntry {
-      absPath: string;
-      entryName: string;
-    }
-    const photoEntries: PhotoEntry[] = [];
-
-    interface XlsxRow {
-      registro_id: number;
-      cliente_registro_id: string;
-      celular: string;
-      tipo: string;
-      lat: number;
-      lng: number;
-      accuracy: number | string;
-      capturado_at: string;
-      notas: string;
-      dispositivo: string;
-      created_at: string;
-      archivos: string;
-      foto_faltante: string;
-    }
-    const rows: XlsxRow[] = [];
-
-    for (const r of registros) {
-      const archivos: string[] = [];
-      let fotoFaltante = false;
-
-      r.imagenes.forEach((ri, n) => {
-        const img = ri.imagen;
-        const safePath = path.resolve(baseDir, img.sha256 + '.jpg');
-        // Confinar al directorio de almacenamiento (el sha256 ya es hex 64, pero
-        // se valida la ruta resultante por defensa en profundidad).
-        if (!safePath.startsWith(baseDir + path.sep)) {
-          fotoFaltante = true;
-          return;
-        }
-        const photoName = `${stamp(r.capturadoAt)}__${r.tipo}__${r.id}${n > 0 ? '_' + n : ''}.jpg`;
-        if (fs.existsSync(safePath)) {
-          photoEntries.push({ absPath: safePath, entryName: 'fotos/' + photoName });
-          archivos.push(photoName);
-        } else {
-          fotoFaltante = true;
-        }
-      });
-
-      rows.push({
-        registro_id: r.id,
-        cliente_registro_id: r.clienteRegistroId,
-        celular: r.identificadorApp,
-        tipo: r.tipo,
-        lat: r.lat,
-        lng: r.lng,
-        accuracy: r.accuracy ?? '',
-        capturado_at: r.capturadoAt.toISOString(),
-        notas: r.notas ?? '',
-        dispositivo: r.dispositivo.identificador,
-        created_at: r.createdAt.toISOString(),
-        archivos: archivos.join(', '),
-        foto_faltante: fotoFaltante ? 'sí' : '',
-      });
-    }
-
-    const ws = XLSX.utils.json_to_sheet(rows);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'Evidencia');
-    const xlsxBuffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
-
-    // Auditoría best-effort: NO debe bloquear ni romper la descarga.
-    try {
-      await prisma.auditLog.create({
-        data: {
-          userId: req.user?.userId ?? null,
-          action: 'EXPORT',
-          resource: 'QaExternaRegistro',
-          metadata: { programa, registros: registros.length, fotos: photoEntries.length },
-          ipAddress: (req.ip || '').toString(),
-        },
-      });
-    } catch (err) {
-      logger.error({ err }, 'No se pudo auditar EXPORT qa_externa');
-    }
-
-    const now = new Date();
-    const dateStamp =
-      String(now.getFullYear()) +
-      String(now.getMonth() + 1).padStart(2, '0') +
-      String(now.getDate()).padStart(2, '0');
-
-    res.setHeader('Content-Type', 'application/zip');
-    res.setHeader(
-      'Content-Disposition',
-      'attachment; filename="qa-externa-evidencia-' + sub + '-' + dateStamp + '.zip"',
-    );
-
-    // Nivel 1: los JPEG ya están comprimidos; comprimir de nuevo sería puro coste.
-    const archive = archiver('zip', { zlib: { level: 1 } });
-    archive.on('warning', (err) => {
-      if ((err as { code?: string }).code === 'ENOENT') logger.warn({ err }, 'archiver warning');
-      else logger.error({ err }, 'archiver warning fatal');
-    });
-    archive.on('error', (err) => {
-      logger.error({ err }, 'archiver error');
-      res.destroy(err);
-    });
-
-    archive.pipe(res);
-    archive.append(xlsxBuffer, { name: 'datos.xlsx' });
-    for (const e of photoEntries) archive.file(e.absPath, { name: e.entryName });
-    await archive.finalize();
+    const job = await getLatestOwnedActiveDataJob(req.user!.userId, 'QA_EXPORT');
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json({ data: job ? serializeDataJob(job) : null });
   }),
+);
+
+router.get(
+  '/exports/:jobId',
+  requireRole([Roles.REVISOR_QA]),
+  ah(async (req: Request, res: Response) => {
+    const id = parseId(req, 'jobId');
+    const job = await getOwnedDataJob(id, req.user!.userId, 'QA_EXPORT');
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json({ data: serializeDataJob(job) });
+  }),
+);
+
+router.head(
+  '/exports/:jobId/download',
+  requireRole([Roles.REVISOR_QA]),
+  downloadQaExport,
+);
+router.get(
+  '/exports/:jobId/download',
+  requireRole([Roles.REVISOR_QA]),
+  downloadQaExport,
 );
 
 export default router;

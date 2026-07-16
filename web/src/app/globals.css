@@ -8,6 +8,8 @@
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-placeholder: var(--placeholder);
+  --color-success-readable: var(--success-readable);
+  --color-warning-readable: var(--warning-readable);
 
   --font-sans: var(--font-sans);
   --font-mono: var(--font-mono);
@@ -105,7 +107,7 @@
   --secondary-foreground: oklch(0.25 0.02 255);
   --border: oklch(0.85 0.01 250);            /* #CBD5E1 */
   --input: oklch(0.91 0.01 250);             /* #E2E8F0 */
-  --placeholder: oklch(0.70 0.02 250);       /* #94A3B8 */
+  --placeholder: oklch(0.52 0.02 250);       /* contraste legible sobre fondos claros */
 
   /* BRAND — Amigos LX pink/magenta (reemplaza azul) */
   --primary: oklch(0.58 0.22 355);           /* ~#DB2777 magenta */
@@ -122,6 +124,7 @@
   --success: oklch(0.62 0.19 145);           /* #16A34A verde operativo */
   --success-foreground: oklch(1 0 0);
   --success-subtle: oklch(0.62 0.19 145 / 0.12);
+  --success-readable: oklch(0.43 0.14 145);  /* texto pequeño AA sobre fondos claros */
 
   --destructive: oklch(0.53 0.22 27);        /* #DC2626 rojo bloqueado */
   --destructive-foreground: oklch(1 0 0);
@@ -130,6 +133,7 @@
   --warning: oklch(0.68 0.17 75);            /* #D97706 ámbar por vencer */
   --warning-foreground: oklch(1 0 0);
   --warning-subtle: oklch(0.68 0.17 75 / 0.15);
+  --warning-readable: oklch(0.43 0.11 75);   /* texto pequeño AA sobre fondos claros */
 
   --maintenance: oklch(0.50 0.22 295);       /* #7C3AED morado mantto */
   --maintenance-foreground: oklch(1 0 0);
@@ -175,7 +179,7 @@
   --secondary-foreground: oklch(0.96 0.01 250);
   --border: oklch(0.33 0.02 257);
   --input: oklch(0.45 0.02 250);             /* #475569 */
-  --placeholder: oklch(0.55 0.02 250);
+  --placeholder: oklch(0.72 0.02 250);
 
   /* BRAND dark — pink brighter +0.12 */
   --primary: oklch(0.70 0.20 355);
@@ -191,6 +195,7 @@
   --success: oklch(0.72 0.18 145);
   --success-foreground: oklch(0.17 0.02 260);
   --success-subtle: oklch(0.72 0.18 145 / 0.18);
+  --success-readable: oklch(0.78 0.14 145);
 
   --destructive: oklch(0.65 0.22 27);
   --destructive-foreground: oklch(1 0 0);
@@ -199,6 +204,7 @@
   --warning: oklch(0.78 0.16 75);
   --warning-foreground: oklch(0.17 0.02 260);
   --warning-subtle: oklch(0.78 0.16 75 / 0.20);
+  --warning-readable: oklch(0.82 0.12 75);
 
   --maintenance: oklch(0.64 0.21 295);
   --maintenance-foreground: oklch(1 0 0);
@@ -240,6 +246,11 @@
     @apply font-sans;
   }
 
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+
   /* Selection color — rosa marca */
   ::selection {
     background-color: var(--primary-subtle);
@@ -261,5 +272,33 @@
   }
   ::-webkit-scrollbar-thumb:hover {
     background: var(--muted-foreground);
+  }
+}
+
+/* En tablet/teléfono, los controles críticos respetan el objetivo táctil de 44 px. */
+@media (pointer: coarse) {
+  button,
+  input,
+  select,
+  textarea,
+  [role="button"] {
+    min-height: 44px;
+  }
+
+  button[aria-label],
+  [role="button"][aria-label] {
+    min-width: 44px;
+  }
+}
+
+/* Los tokens cromáticos intensos se conservan para iconos/fondos; el texto
+   pequeño usa variantes con contraste AA en claro y oscuro. */
+@layer utilities {
+  .text-success {
+    color: var(--success-readable);
+  }
+
+  .text-warning {
+    color: var(--warning-readable);
   }
 }

@@ -8,7 +8,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import multer from 'multer';
 import path from 'path';
 import crypto from 'crypto';
-import { RoleGroups, requireRole } from '../middlewares/roleMiddleware';
+import { RoleGroups, Roles, requireRole } from '../middlewares/roleMiddleware';
 import * as ticketService from '../services/maintenanceTicketService';
 import { TicketError } from '../services/maintenanceTicketService';
 import {
@@ -30,6 +30,19 @@ import {
 import { validateBody, validateQuery } from '../middlewares/validate';
 import { renderSolicitudPdf } from '../services/tickets/solicitudPdf';
 import { parseId } from '../lib/http';
+import { sendPrivateFile } from '../lib/privateFileResponse';
+import {
+  cleanupUploadedFilesOnError,
+  removeUploadedFiles,
+  UPLOAD_DIRS,
+  uploadRateLimit,
+} from '../lib/uploadStorage';
+import { enqueueTicketThumbnail } from '../services/mediaThumbnailService';
+import {
+  getTicketAttachmentFile,
+  serializeTicketAttachment,
+  serializeTicketQuote,
+} from '../services/tickets/fileAccess';
 
 const router = Router();
 
@@ -38,7 +51,7 @@ const router = Router();
 // ═══════════════════════════════════════════════════════════════
 const photoStorage = multer.diskStorage({
   destination: (_req, _file, cb) => {
-    cb(null, path.join(__dirname, '../../uploads/maintenance-tickets/photos'));
+    cb(null, UPLOAD_DIRS.maintenanceTicketPhotos);
   },
   filename: (_req, file, cb) => {
     // Renombrado seguro con UUID; la extensión la valida fileFilter abajo.
@@ -49,7 +62,12 @@ const photoStorage = multer.diskStorage({
 
 const photoUpload = multer({
   storage: photoStorage,
-  limits: { fileSize: 5 * 1024 * 1024, files: 10 },
+  limits: {
+    fileSize: 5 * 1024 * 1024,
+    files: 1,
+    fields: 0,
+    parts: 1,
+  },
   fileFilter: (_req, file, cb) => {
     const allowed = ['.jpg', '.jpeg', '.png'];
     const ext = path.extname(file.originalname).toLowerCase();
@@ -75,6 +93,43 @@ function handleTicketError(err: unknown, res: Response, next?: NextFunction) {
   // Para errores inesperados, dejar que el errorHandler global los procese
   if (next) return next(err);
   return res.status(500).json({ error: 'Error interno' });
+}
+
+async function serveTicketAttachment(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+  thumbnail: boolean,
+) {
+  try {
+    const ticketId = parseId(req);
+    const attachmentId = parseId(req, 'attachmentId');
+    const file = await getTicketAttachmentFile(ticketId, attachmentId, {
+      userId: req.user!.userId,
+      role: req.user!.role,
+    });
+    const sent = await sendPrivateFile(
+      req,
+      res,
+      thumbnail ? file.thumbnailPath : file.filePath,
+      {
+        contentType: thumbnail ? 'image/webp' : file.contentType,
+        cacheControl: 'private, max-age=3600, must-revalidate',
+        varyCookie: true,
+      },
+    );
+    if (sent) return;
+
+    if (thumbnail) {
+      await enqueueTicketThumbnail(path.basename(file.filePath));
+      res.setHeader('Retry-After', '3');
+      res.status(404).json({ error: 'Miniatura en proceso', code: 'THUMBNAIL_PENDING' });
+      return;
+    }
+    res.status(404).json({ error: 'Evidencia no encontrada', code: 'NOT_FOUND' });
+  } catch (err) {
+    handleTicketError(err, res, next);
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -112,6 +167,29 @@ router.get(
       handleTicketError(err, res, next);
     }
   },
+);
+
+// Evidencias privadas. El service aplica ownership/participación sobre el
+// ticket antes de abrir el archivo; /uploads/maintenance-tickets está cerrado.
+router.head(
+  '/:id/attachments/:attachmentId/file',
+  requireRole([...RoleGroups.MAINTENANCE_READERS, Roles.EXECUTOR, Roles.WORKSHOP]),
+  (req, res, next) => serveTicketAttachment(req, res, next, false),
+);
+router.get(
+  '/:id/attachments/:attachmentId/file',
+  requireRole([...RoleGroups.MAINTENANCE_READERS, Roles.EXECUTOR, Roles.WORKSHOP]),
+  (req, res, next) => serveTicketAttachment(req, res, next, false),
+);
+router.head(
+  '/:id/attachments/:attachmentId/thumbnail',
+  requireRole([...RoleGroups.MAINTENANCE_READERS, Roles.EXECUTOR, Roles.WORKSHOP]),
+  (req, res, next) => serveTicketAttachment(req, res, next, true),
+);
+router.get(
+  '/:id/attachments/:attachmentId/thumbnail',
+  requireRole([...RoleGroups.MAINTENANCE_READERS, Roles.EXECUTOR, Roles.WORKSHOP]),
+  (req, res, next) => serveTicketAttachment(req, res, next, true),
 );
 
 router.get(
@@ -174,6 +252,7 @@ router.post(
 router.post(
   '/:id/attachments',
   requireRole(RoleGroups.TICKET_CREATORS),
+  uploadRateLimit,
   photoUpload.single('photo'),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -186,11 +265,14 @@ router.post(
         mimeType: req.file.mimetype,
         sizeBytes: req.file.size,
       });
-      res.status(201).json(attachment);
+      await enqueueTicketThumbnail(req.file.filename);
+      res.status(201).json(serializeTicketAttachment(attachment));
     } catch (err) {
+      await removeUploadedFiles(req);
       handleTicketError(err, res, next);
     }
   },
+  cleanupUploadedFilesOnError,
 );
 
 // ═══════════════════════════════════════════════════════════════
@@ -221,7 +303,7 @@ router.post(
     try {
       const id = parseId(req);
       const ticket = await ticketService.assignWorkshops(id, req.user!.userId, req.body as AssignWorkshopsInput);
-      res.json(ticket);
+      res.json({ ...ticket, quotes: ticket.quotes.map(serializeTicketQuote) });
     } catch (err) {
       handleTicketError(err, res, next);
     }
@@ -237,7 +319,7 @@ router.post(
     try {
       const id = parseId(req);
       const ticket = await ticketService.reassignWorkshops(id, req.user!.userId, req.body as AssignWorkshopsInput);
-      res.json(ticket);
+      res.json({ ...ticket, quotes: ticket.quotes.map(serializeTicketQuote) });
     } catch (err) {
       handleTicketError(err, res, next);
     }
@@ -252,7 +334,12 @@ router.post(
     try {
       const id = parseId(req);
       const ticket = await ticketService.approveTicket(id, req.user!.userId, req.body as ApproveTicketInput);
-      res.json(ticket);
+      res.json({
+        ...ticket,
+        selectedQuote: ticket.selectedQuote
+          ? serializeTicketQuote(ticket.selectedQuote)
+          : null,
+      });
     } catch (err) {
       handleTicketError(err, res, next);
     }

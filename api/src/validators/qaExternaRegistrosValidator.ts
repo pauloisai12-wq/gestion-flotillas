@@ -14,3 +14,34 @@ export const qaRegistrosQuerySchema = z.object({
 });
 
 export type QaRegistrosQueryInput = z.infer<typeof qaRegistrosQuerySchema>;
+
+const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Usa formato AAAA-MM-DD');
+
+export const qaExportQuerySchema = z
+  .object({
+    programa: z.enum(['BUFFALO', 'LX']),
+    dateFrom: isoDate,
+    dateTo: isoDate,
+  })
+  .superRefine((value, ctx) => {
+    const from = new Date(`${value.dateFrom}T00:00:00.000Z`);
+    const to = new Date(`${value.dateTo}T00:00:00.000Z`);
+    if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime()) || to < from) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['dateTo'],
+        message: 'dateTo debe ser igual o posterior a dateFrom',
+      });
+      return;
+    }
+    const days = Math.floor((to.getTime() - from.getTime()) / 86_400_000) + 1;
+    if (days > 366) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['dateTo'],
+        message: 'El rango máximo de exportación es 366 días',
+      });
+    }
+  });
+
+export type QaExportQueryInput = z.infer<typeof qaExportQuerySchema>;

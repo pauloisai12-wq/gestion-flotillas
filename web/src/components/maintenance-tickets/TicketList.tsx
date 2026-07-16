@@ -13,7 +13,7 @@ import { ChevronRight } from 'lucide-react';
 export function TicketList({ tickets }: { tickets: MaintenanceTicket[] }) {
   if (tickets.length === 0) {
     return (
-      <div className="border border-dashed border-border rounded-md p-8 text-center">
+      <div role="status" className="border border-dashed border-border rounded-md p-8 text-center">
         <p className="text-sm text-muted-foreground">No hay tickets que mostrar.</p>
       </div>
     );
@@ -44,7 +44,7 @@ export function TicketList({ tickets }: { tickets: MaintenanceTicket[] }) {
                   <span className="text-xs">{CATEGORY_LABELS[t.failureCategory]}</span>
                 </div>
                 <p className="text-sm text-muted-foreground line-clamp-1 mt-1">{t.description}</p>
-                <div className="flex items-center gap-3 text-[11px] text-muted-foreground mt-1.5">
+                <div className="flex flex-wrap items-center gap-3 text-[11px] text-muted-foreground mt-1.5">
                   {t.requestedBy && <span>👤 {t.requestedBy.fullName}</span>}
                   <span>📅 {formatDate(t.createdAt, { day: '2-digit', month: 'short' })}</span>
                   {quotes.length > 0 && (

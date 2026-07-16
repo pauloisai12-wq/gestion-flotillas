@@ -1,5 +1,10 @@
 # Runbook — flotillas-v2 en el servidor de casa (QA/Staging)
 
+> **Runbook histórico.** El entorno vigente está en **Hetzner Cloud**; no usar
+> estas instrucciones de WireGuard/LUKS para producción. El perfil operativo
+> actual es `deploy-public.sh` + `docker-compose.public.yml`; consultar
+> `docs/runbook-hetzner.md`.
+
 > Runbook operativo del despliegue de **flotillas-v2** como **segundo sistema** en
 > el servidor `toshinori_nmh` (10.10.0.2), siguiendo el patrón §9 del documento
 > base del servidor de casa. Entorno **QA/Staging** para un equipo de **5 revisores**,
@@ -24,6 +29,8 @@
 | `flotillas_caddy` | caddy:2-alpine | 443 (interno) | **Sí, en `10.10.0.2:8443` (VPN; el SAS ocupa 443/80)** |
 
 - **Datos persistentes (disco cifrado LUKS):** `/srv/datos/flotillas/{postgres,redis,reports,uploads,caddy}`.
+- **Backups cifrados:** `/srv/backups/flotillas` en un mount independiente de `/srv/datos`. Esto protege
+  ante fallo del filesystem principal, pero sigue siendo local: copiar los bundles `.age` fuera del servidor.
 - **Scheduler:** no hay contenedor aparte; los 4 cron jobs BullMQ viven embebidos en `flotillas_api` (`api/src/jobs/index.ts`).
 - **Reportería:** la API solo **encola** en la cola `reports`; el worker Python la procesa (PDF WeasyPrint + Excel openpyxl).
 
@@ -70,9 +77,12 @@ Con `NODE_ENV=production`, `env.ts` **aborta el arranque** si:
 Notas:
 - **`DATABASE_URL` / `REDIS_URL`**: el `docker-compose.yml` ahora las **deriva** de
   `POSTGRES_USER`/`POSTGRES_PASSWORD`/`POSTGRES_DB` y `REDIS_PASSWORD` (mismo patrón que el worker),
-  así que basta con definir esas. Defínelas explícitas en `.env` **solo** si apuntas a una BD/Redis
-  externos. Si las escribes a mano, la contraseña va **literal** en la URL (el `.env` no interpola
-  `${...}` entre sus propias líneas).
+  así que basta con definir esas. `deploy.sh` **rechaza una `DATABASE_URL` explícita** (en `.env o exportada):
+  la guardia actual solo puede demostrar el backup del PostgreSQL incluido. Una BD externa requiere una
+  guardia específica del proveedor antes de habilitarse; no se admite bypass manual.
+- **Backup pre-migración:** `BACKUP_DIR=/srv/backups/flotillas`,
+  `BACKUP_REQUIRE_MOUNT=/srv/backups`, `BACKUP_AGE_RECIPIENT=<recipient público>`.
+  La identidad privada de `age` queda fuera del servidor.
 - **`TRUST_PROXY`**: el `docker-compose.yml` ya lo inyecta (`${TRUST_PROXY:-2}`, cadena Caddy→Next→API),
   así que `req.ip` recupera la IP real del cliente sin acción manual (rate-limit / CSRF-por-IP /
   `remoteip` de Turnstile). El `.env` puede sobreescribirlo; **nunca** uses `true` (permite spoofing).
@@ -82,23 +92,37 @@ Notas:
 ## 4. Despliegue inicial
 
 ```bash
-# [SERVIDOR] preparar disco y código
-sudo mkdir -p /srv/datos/flotillas/{postgres,redis,reports,uploads,caddy/data,caddy/config}
+# [SERVIDOR] preparar disco primario y código
+sudo mkdir -p /srv/datos/flotillas/{postgres,redis,caddy/data,caddy/config}
+sudo install -d -o 10001 -g 10001 -m 0750 \
+  /srv/datos/flotillas/uploads /srv/datos/flotillas/reports
 git clone <repo-flotillas-v2> /srv/datos/flotillas/app
 cd /srv/datos/flotillas/app
-cp env.staging.plantilla.txt .env && nano .env   # reemplaza cada CAMBIA_ESTO_* (POSTGRES_PASSWORD, REDIS_PASSWORD, JWT_SECRET)
+
+# /srv/backups DEBE ser un disco externo o NAS montado, no una carpeta del mismo LUKS.
+mountpoint -q /srv/backups
+test "$(stat -c %d /srv/datos)" != "$(stat -c %d /srv/backups)"
+sudo install -d -o "$(id -u)" -g "$(id -g)" -m 0700 /srv/backups/flotillas
+
+# En una estación segura, no en el servidor:
+age-keygen -o flotillas-backup.agekey
+age-keygen -y flotillas-backup.agekey   # copiar SOLO este recipient público al .env
+
+cp env.staging.plantilla.txt .env && nano .env
+# Completar secretos + BACKUP_AGE_RECIPIENT. Para el primer arranque vacío,
+# confirmar explícitamente ALLOW_FIRST_DEPLOY_WITHOUT_BACKUP=true.
 chmod 600 .env
 
-# Un solo comando (build + migraciones automáticas + smoke test):
+# Self-checks sin Docker/datos:
+bash scripts/ops/predeploy-guard.sh --check
+bash scripts/ops/validate-staging-host.sh --check
+bash scripts/ops/verify-restore.sh --check
+
+# Único camino soportado: build + storage preflight + backup guard + migrate + validación host.
 ./deploy.sh
 
-# --- o, manualmente: ---
-export COMPOSE="docker compose -p flotillas -f docker-compose.yml -f docker-compose.staging.yml"
-$COMPOSE build
-# El servicio one-shot `migrate` aplica `prisma migrate deploy` (tablas + 5 vistas)
-# ANTES de que arranquen api/worker; servir sin esquema es imposible.
-$COMPOSE up -d --wait
-$COMPOSE ps
+# Después del primer éxito, volver inmediatamente a:
+sed -i 's/^ALLOW_FIRST_DEPLOY_WITHOUT_BACKUP=true$/ALLOW_FIRST_DEPLOY_WITHOUT_BACKUP=false/' .env
 
 # (opcional, solo BD vacía) datos demo — el seed está deshabilitado en producción:
 # $COMPOSE run --rm -e NODE_ENV=development api npx prisma db seed
@@ -110,13 +134,11 @@ $COMPOSE ps
 
 - La imagen de la API arranca con `node dist/index.js` (no migra sola), pero el override de staging añade un
   servicio one-shot **`migrate`** que corre `prisma migrate deploy` y del que **dependen** `api` y `worker`
-  (`service_completed_successfully`). Con `./deploy.sh` o `$COMPOSE up -d` el esquema se aplica
-  **automáticamente** antes de servir tráfico. `migrate deploy` es idempotente: re-ejecutar `up` es seguro.
-- Para aplicarlas a mano (p.ej. tras editar migraciones):
-  ```bash
-  $COMPOSE run --rm migrate        # o:  $COMPOSE run --rm api npx prisma migrate deploy
-  ```
-  Usar **`migrate deploy`** (no interactivo), **nunca `migrate dev`** en este entorno.
+  (`service_completed_successfully`). Solo `./deploy.sh` habilita y ejecuta el cambio después de la guardia;
+  el esquema se aplica antes de servir tráfico. `migrate deploy` es idempotente, pero no debe invocarse fuera del deploy.
+- No ejecutar `$COMPOSE up` ni `$COMPOSE run migrate` directamente: `migrate` rechaza el token
+  `UNGUARDED`. Aplicar cambios con `./deploy.sh`, que produce y verifica el backup primero.
+- Usar **`migrate deploy`** (no interactivo), **nunca `migrate dev`** en este entorno.
 - La migración `20260421050000_add_materialized_views_v2` crea **y puebla** las 5 vistas materializadas y sus índices únicos; no requiere acción manual.
 
 ---
@@ -188,23 +210,69 @@ $COMPOSE restart api                                     # reiniciar un servicio
 $COMPOSE down                                            # bajar el stack (sin borrar datos)
 ```
 
-- `restart: unless-stopped` re-levanta los contenedores tras reinicio del Docker. Para arranque tras desbloqueo LUKS, una systemd unit con `docker compose ... up -d` es opcional (bajo esfuerzo).
+- `restart: unless-stopped` puede levantar contenedores cuando inicia Docker. **Gate manual obligatorio en
+  el host:** la unidad de Docker debe ordenar su arranque después del unlock/mount de `/srv/datos`
+  (drop-in systemd con `RequiresMountsFor=/srv/datos`). Confirmar tras reboot con `systemctl cat docker`,
+  `mountpoint -q /srv/datos` y `docker ps`; este repo no puede verificar el grafo systemd real.
 - Monitoreo: para 5 usuarios **bastan** los healthchecks + `docker compose ps/logs` (y Sentry opt-in si se activa). **No** montar Prometheus/Grafana dedicado.
+- Staging rota logs con driver `local` (`10m` × 3) y aplica límites iniciales de CPU/RAM. Revisar
+  `docker stats --no-stream` bajo generación de reportes y ajustar con datos reales.
+
+**Gates manuales del host (obligatorios):**
+
+```bash
+# Estado efectivo de contenedores: también se ejecuta al final de deploy.sh.
+bash scripts/ops/validate-staging-host.sh -- \
+  docker compose -p flotillas -f docker-compose.yml -f docker-compose.staging.yml
+
+# Backing LUKS: el script exige un ancestro TYPE=crypt.
+findmnt -nro SOURCE --target /srv/datos
+lsblk -sno NAME,TYPE "$(findmnt -nro SOURCE --target /srv/datos)"
+
+# Firewall/listeners y peers reales: revisar en el host, no en el repo.
+sudo ss -lntp
+sudo nft list ruleset
+sudo wg show
+```
+
+- Confirmar que solo Caddy escucha `10.10.0.2:8443`; 3000/3001/5432/6379 no deben publicarse por flotillas.
+- Confirmar peers WireGuard vigentes y retirar dispositivos/personas no autorizados.
+- Confirmar que la red `flotillas_default` no contiene el servicio vecino (el validador falla si detecta otro proyecto).
+- Si `/srv/datos` usa un layout cifrado no basado en bloques que `lsblk` no puede resolver, documentar evidencia
+  manual y usar **solo en esa ejecución**
+  `FLOTILLAS_ALLOW_UNRESOLVED_LUKS=I_CONFIRMED_ENCRYPTION_THIS_RUN ./deploy.sh`.
+  Si `lsblk` resuelve el árbol y no contiene `crypt`, no existe bypass.
 
 ---
 
 ## 10. Backups y restauración
 
-- Sumar a la rutina diaria cifrada con `age` del servidor (`/srv/datos/backups`):
-  ```bash
-  # dump lógico de la BD
-  $COMPOSE exec -T postgres pg_dump -U flotillas_app -d flotillas | age -r <pubkey> > flotillas-$(date +%F).sql.age
-  # + respaldar /srv/datos/flotillas/reports y /srv/datos/flotillas/uploads
-  ```
-- **Restauración** (probar periódicamente):
-  ```bash
-  age -d -i <clave-privada> flotillas-AAAA-MM-DD.sql.age | $COMPOSE exec -T postgres psql -U flotillas_app -d flotillas
-  ```
+Cada `./deploy.sh` con una instalación inicializada:
+
+1. detiene Caddy/web/API/worker (escritores); rechaza si `migrate` está corriendo;
+2. valida `pg_dump -Fc` con `pg_restore --list` y ambos almacenes con `tar -tf`;
+3. transmite PostgreSQL, uploads y reports directamente a `age`, sin artefactos de datos en claro;
+4. cifra el manifiesto y publica `encrypted.sha256` solo si el conjunto quedó completo.
+
+El bundle queda en `/srv/backups/flotillas/flotillas-staging-<UTC>/`. `sha256sum` detecta corrupción de
+transporte; **no sustituye una prueba de restore**. Sincronizar el bundle cifrado a almacenamiento off-site:
+
+```bash
+# Verificación real en host de recuperación/controlado, con la identidad montada temporalmente:
+export COMPOSE="docker compose -p flotillas -f docker-compose.yml -f docker-compose.staging.yml"
+BACKUP_AGE_IDENTITY=/media/offline/flotillas-backup.agekey \
+  bash scripts/ops/verify-restore.sh --bundle /srv/backups/flotillas/flotillas-staging-<UTC> \
+  --list-only -- docker compose -p flotillas -f docker-compose.yml -f docker-compose.staging.yml
+
+# Gate periódico: restaura el dump custom en una BD temporal vacía, cuenta relaciones y la elimina.
+BACKUP_AGE_IDENTITY=/media/offline/flotillas-backup.agekey \
+  bash scripts/ops/verify-restore.sh --bundle /srv/backups/flotillas/flotillas-staging-<UTC> \
+  --scratch-restore -- docker compose -p flotillas -f docker-compose.yml -f docker-compose.staging.yml
+```
+
+No se ejecutó ese restore real en este entorno: requiere `age`, Docker, el bundle y la identidad privada
+del host. La recuperación sobre la BD/rutas productivas requiere ventana, copia adicional y aprobación;
+el script deliberadamente nunca restaura sobre `POSTGRES_DB` ni extrae archivos en producción.
 
 ---
 
@@ -218,4 +286,6 @@ $COMPOSE down                                            # bajar el stack (sin b
 | Reportes no descargan | La API no ve `storage/reports` | Verificar el bind `/srv/datos/flotillas/reports:/app/storage/reports` en `api` (incluido en el override) |
 | Login no persiste sesión | Cookie `Secure` rechazada / proxy | Confirmar acceso por `https://` (Caddy) y revisar `trust proxy` / emisión de cookie detrás de Caddy+Next |
 | Cambiar `NEXT_PUBLIC_*` no surte efecto | Son build-time | Reconstruir la imagen web (`$COMPOSE build web`) |
-| `!reset []` no reconocido | Docker Compose < 2.24 | Reemplazar por bind a la IP VPN (ver comentario en el override) |
+| `!reset []` no reconocido | Docker Compose < 2.24 | Actualizar Compose; no publicar postgres/redis/api/web como fallback |
+| Backup guard bloquea primer deploy | Instalación vacía sin confirmación | Poner `ALLOW_FIRST_DEPLOY_WITHOUT_BACKUP=true` solo para ese primer run; luego volver a `false` |
+| Storage preflight falla | uploads/reports no son 10001:10001 | Ejecutar los comandos `sudo install/chown/find chmod` que imprime; nunca `chmod 777` |

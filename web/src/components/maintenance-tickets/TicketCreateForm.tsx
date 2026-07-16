@@ -84,7 +84,7 @@ export function TicketCreateForm({ initialVehicleId }: { initialVehicleId?: numb
     <form onSubmit={submit} className="max-w-2xl space-y-5">
       {/* Vehículo */}
       <div>
-        <label className="block text-sm font-medium mb-1.5">Vehículo</label>
+        <label htmlFor="ticket-vehicle" className="block text-sm font-medium mb-1.5">Vehículo</label>
         {vehiclesLoading ? (
           <div className="text-sm text-muted-foreground flex items-center gap-2">
             <Loader2 className="size-3.5 animate-spin" /> Cargando…
@@ -111,10 +111,11 @@ export function TicketCreateForm({ initialVehicleId }: { initialVehicleId?: numb
           </div>
         ) : (
           <select
+            id="ticket-vehicle"
             value={vehicleId}
             onChange={(e) => setVehicleId(e.target.value ? Number(e.target.value) : '')}
             required
-            className="w-full px-3 py-2 text-sm border border-input rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-ring"
+            className="min-h-11 w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
           >
             <option value="">— Selecciona —</option>
             {(vehiclesResp?.data ?? []).map((v) => (
@@ -127,9 +128,9 @@ export function TicketCreateForm({ initialVehicleId }: { initialVehicleId?: numb
       </div>
 
       {/* Categoría */}
-      <div>
-        <label className="block text-sm font-medium mb-1.5">¿Qué tipo de problema?</label>
-        <p className="text-xs text-muted-foreground mb-2">
+      <fieldset aria-describedby="ticket-category-help">
+        <legend className="block text-sm font-medium mb-1.5">¿Qué tipo de problema?</legend>
+        <p id="ticket-category-help" className="text-xs text-muted-foreground mb-2">
           Selecciona la categoría más cercana. Si no estás seguro, deja &ldquo;Otro&rdquo;.
         </p>
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
@@ -138,7 +139,8 @@ export function TicketCreateForm({ initialVehicleId }: { initialVehicleId?: numb
               key={cat}
               type="button"
               onClick={() => setCategory(cat)}
-              className={`text-xs px-3 py-2 rounded-md border transition-colors ${
+              aria-pressed={category === cat}
+              className={`min-h-11 rounded-md border px-3 py-2 text-xs transition-colors ${
                 category === cat
                   ? 'border-primary bg-primary-subtle/40 text-foreground font-medium'
                   : 'border-border text-muted-foreground hover:border-primary/60'
@@ -148,15 +150,17 @@ export function TicketCreateForm({ initialVehicleId }: { initialVehicleId?: numb
             </button>
           ))}
         </div>
-      </div>
+      </fieldset>
 
       {/* Descripción */}
       <div>
-        <label className="block text-sm font-medium mb-1.5">Descripción del problema</label>
-        <p className="text-xs text-muted-foreground mb-2">
+        <label htmlFor="ticket-description" className="block text-sm font-medium mb-1.5">Descripción del problema</label>
+        <p id="ticket-description-help" className="text-xs text-muted-foreground mb-2">
           Cuenta con tus palabras qué pasa. Sé específico (ej: &ldquo;chillan los frenos al frenar a baja velocidad&rdquo;).
         </p>
         <textarea
+          id="ticket-description"
+          aria-describedby="ticket-description-help ticket-description-count"
           value={description}
           onChange={(e) => setDescription(e.target.value)}
           rows={4}
@@ -166,15 +170,16 @@ export function TicketCreateForm({ initialVehicleId }: { initialVehicleId?: numb
           placeholder="Describe el problema..."
           className="w-full px-3 py-2 text-sm border border-input rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-ring resize-y"
         />
-        <p className="text-[11px] text-muted-foreground mt-1">
+        <p id="ticket-description-count" className="text-[11px] text-muted-foreground mt-1">
           Mínimo 10 caracteres. {description.length}/2000
         </p>
       </div>
 
       {/* Odómetro */}
       <div>
-        <label className="block text-sm font-medium mb-1.5">Kilometraje actual (opcional)</label>
+        <label htmlFor="ticket-odometer" className="block text-sm font-medium mb-1.5">Kilometraje actual (opcional)</label>
         <Input
+          id="ticket-odometer"
           type="number"
           min={0}
           step={1}
@@ -186,7 +191,7 @@ export function TicketCreateForm({ initialVehicleId }: { initialVehicleId?: numb
 
       {/* Fotos */}
       <div>
-        <label className="block text-sm font-medium mb-1.5">Fotos (opcional)</label>
+        <p className="block text-sm font-medium mb-1.5">Fotos (opcional)</p>
         <p className="text-xs text-muted-foreground mb-2">
           Sube hasta 5 fotos. Ayudan al taller a evaluar antes de cotizar.
         </p>
@@ -194,13 +199,13 @@ export function TicketCreateForm({ initialVehicleId }: { initialVehicleId?: numb
       </div>
 
       {submitError && (
-        <div className="text-sm text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900 rounded-md p-3 flex items-start gap-2">
+        <div role="alert" className="text-sm text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900 rounded-md p-3 flex items-start gap-2">
           <AlertCircle className="size-4 mt-0.5 shrink-0" />
           {submitError}
         </div>
       )}
 
-      <div className="flex justify-end gap-2 pt-2">
+      <div className="flex flex-wrap justify-end gap-2 pt-2">
         <Button type="button" variant="ghost" onClick={() => router.back()} disabled={submitting}>
           Cancelar
         </Button>

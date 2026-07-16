@@ -1,7 +1,19 @@
 // Operaciones CRUD de vehículos contra la base de datos
+import { Prisma, VehicleStatus } from '@prisma/client';
 import prisma from '../lib/prisma';
-import { VehicleInput } from '../validators/vehicleValidator';
-import { NotFound, Conflict, BadRequest } from '../middlewares/errorHandler';
+import {
+  OdometerCorrectionInput,
+  VehicleInput,
+  VehicleUpdateInput,
+} from '../validators/vehicleValidator';
+import {
+  NotFound,
+  Conflict,
+  BadRequest,
+  isPrismaKnownError,
+} from '../middlewares/errorHandler';
+import { getAuditContext } from '../lib/auditContext';
+import { deactivateVehicleInTransaction } from './vehicleDeactivationService';
 
 // Interfaz para filtros y paginación
 interface VehicleQuery {
@@ -9,7 +21,7 @@ interface VehicleQuery {
   limit?: number;
   search?: string;
   vehicleTypeId?: number;
-  status?: string;
+  status?: VehicleStatus;
   /// Filtra por User responsable. Útil para el dropdown del ejecutor.
   executorId?: number;
 }
@@ -23,7 +35,8 @@ export async function getAllVehicles(query: VehicleQuery) {
   const skip = (page - 1) * limit;
 
   // Construir filtro dinámico
-  const where: any = {};
+  // Las bajas son lógicas: las listas operativas nunca deben reintroducirlas.
+  const where: Prisma.VehicleWhereInput = { isActive: true };
 
   if (query.search) {
     where.OR = [
@@ -156,6 +169,8 @@ export async function createVehicle(data: VehicleInput) {
       vin: data.vin || null,
       color: data.color || null,
       currentOdometer: data.currentOdometer || 0,
+      classification: data.classification,
+      sectorId: data.sectorId,
       isActive: data.isActive ?? true,
     },
     include: {
@@ -169,9 +184,12 @@ export async function createVehicle(data: VehicleInput) {
 /**
  * Actualizar un vehículo existente.
  */
-export async function updateVehicle(id: number, data: VehicleInput) {
-  // Verificar que existe
-  await getVehicleById(id);
+export async function updateVehicle(id: number, data: VehicleUpdateInput) {
+  const current = await prisma.vehicle.findUnique({
+    where: { id },
+    select: { id: true, isActive: true },
+  });
+  if (!current || !current.isActive) throw NotFound('Vehículo activo');
 
   // Verificar placa única (excluyendo el actual)
   const existingPlate = await prisma.vehicle.findFirst({
@@ -189,44 +207,111 @@ export async function updateVehicle(id: number, data: VehicleInput) {
     throw Conflict(`Ya existe otro vehículo con el número económico "${data.economicNumber}"`);
   }
 
-  return prisma.vehicle.update({
-    where: { id },
-    data: {
-      plate: data.plate.toUpperCase(),
-      economicNumber: data.economicNumber,
-      vehicleTypeId: data.vehicleTypeId,
-      brand: data.brand,
-      model: data.model,
-      year: data.year,
-      vin: data.vin || null,
-      color: data.color || null,
-      currentOdometer: data.currentOdometer,
-      isActive: data.isActive,
-    },
-    include: {
-      vehicleType: {
-        select: { name: true },
+  try {
+    return await prisma.vehicle.update({
+      where: {
+        id,
+        isActive: true,
+        updatedAt: new Date(data.expectedUpdatedAt),
       },
-    },
-  });
+      data: {
+        plate: data.plate.toUpperCase(),
+        economicNumber: data.economicNumber,
+        vehicleTypeId: data.vehicleTypeId,
+        classification: data.classification,
+        sectorId: data.sectorId,
+        brand: data.brand,
+        model: data.model,
+        year: data.year,
+        vin: data.vin || null,
+        color: data.color || null,
+      },
+      include: {
+        vehicleType: {
+          select: { name: true },
+        },
+      },
+    });
+  } catch (error: unknown) {
+    if (!isPrismaKnownError(error, 'P2025')) throw error;
+
+    const latest = await prisma.vehicle.findUnique({
+      where: { id },
+      select: { isActive: true, updatedAt: true },
+    });
+    if (!latest || !latest.isActive) throw NotFound('Vehículo activo');
+    throw Conflict(
+      'El vehículo cambió desde que abriste el formulario. Recarga los datos antes de guardar.',
+    );
+  }
 }
 
 /**
- * Eliminar un vehículo.
- * Solo si no tiene cargas de combustible ni mantenimientos registrados.
+ * Baja lógica de un vehículo. No elimina documentos, asignaciones ni ningún
+ * otro registro histórico relacionado.
  */
-export async function deleteVehicle(id: number) {
-  const vehicle = await getVehicleById(id);
+export async function deleteVehicle(id: number, actorUserId: number) {
+  const result = await prisma.$transaction(
+    (tx) => deactivateVehicleInTransaction(tx, id, {
+      actorUserId,
+      source: 'ADMIN_DELETE',
+    }),
+    { timeout: 20_000, maxWait: 10_000 },
+  );
+  return result.vehicle;
+}
 
-  if (vehicle._count.fuelLoads > 0 || vehicle._count.maintenanceRecords > 0) {
-    throw Conflict(
-      'No se puede eliminar: el vehículo tiene registros de combustible o mantenimiento asociados'
-    );
-  }
+/**
+ * Corrección excepcional del odómetro maestro. Puede reducirlo, pero solo por
+ * el endpoint ADMIN y dejando antes/después + motivo en el audit log.
+ */
+export async function correctVehicleOdometer(
+  id: number,
+  input: OdometerCorrectionInput,
+  userId: number,
+) {
+  const auditContext = getAuditContext();
 
-  // Eliminar documentos asociados primero
-  await prisma.document.deleteMany({ where: { vehicleId: id } });
-  await prisma.vehicleAssignment.deleteMany({ where: { vehicleId: id } });
+  return prisma.$transaction(async (tx) => {
+    const current = await tx.vehicle.findUnique({
+      where: { id },
+      select: { id: true, isActive: true, currentOdometer: true, updatedAt: true },
+    });
+    if (!current || !current.isActive) throw NotFound('Vehículo activo');
 
-  return prisma.vehicle.delete({ where: { id } });
+    let updated;
+    try {
+      updated = await tx.vehicle.update({
+        where: {
+          id,
+          isActive: true,
+          updatedAt: new Date(input.expectedUpdatedAt),
+        },
+        data: { currentOdometer: input.newOdometer },
+        select: { id: true, currentOdometer: true, updatedAt: true },
+      });
+    } catch (error: unknown) {
+      if (!isPrismaKnownError(error, 'P2025')) throw error;
+      throw Conflict(
+        'El odómetro cambió antes de confirmar la corrección. Recarga e intenta de nuevo.',
+      );
+    }
+
+    await tx.auditLog.create({
+      data: {
+        userId,
+        action: 'ODOMETER_CORRECTION',
+        resource: 'Vehicle',
+        resourceId: String(id),
+        before: { currentOdometer: current.currentOdometer },
+        after: { currentOdometer: updated.currentOdometer },
+        metadata: { reason: input.reason },
+        ipAddress: auditContext?.ipAddress,
+        userAgent: auditContext?.userAgent,
+        requestId: auditContext?.requestId,
+      },
+    });
+
+    return updated;
+  });
 }

@@ -12,6 +12,7 @@ import api from '@/lib/api';
 import { formatCurrency, formatNumber } from '@/lib/formatters';
 import { useDashboardSummaryFiltered, useFuelTrend } from '@/hooks/useDashboardAnalytics';
 import { DashboardGreeting } from '@/components/dashboard/DashboardGreeting';
+import { DashboardErrorAlert } from '@/components/dashboard/DashboardErrorAlert';
 import { KpiCard } from '@/components/ui/kpi-card';
 import { SkeletonKpi, SkeletonTable } from '@/components/ui/skeleton';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -20,6 +21,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import FuelTrendChart from '@/components/charts/FuelTrendChart';
 import VehicleRankingChart from '@/components/charts/VehicleRankingChart';
 import { Fuel, Wallet, Droplet, Gauge, CheckCircle2 } from 'lucide-react';
+import { businessPeriodForDate } from '@/lib/businessTime';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Budget = any;
@@ -27,12 +29,12 @@ type Budget = any;
 type FuelLoad = any;
 
 function useBudgetsFuel() {
-  const now = new Date();
+  const currentPeriod = businessPeriodForDate();
   return useQuery({
-    queryKey: ['budgets', 'FUEL', now.getFullYear(), now.getMonth() + 1],
+    queryKey: ['budgets', 'FUEL', currentPeriod.year, currentPeriod.month],
     queryFn: async () => {
       const res = await api.get('/budgets', {
-        params: { kind: 'FUEL', year: now.getFullYear(), month: now.getMonth() + 1 },
+        params: { kind: 'FUEL', year: currentPeriod.year, month: currentPeriod.month },
       });
       return (res.data.data as Budget[]) || [];
     },
@@ -50,10 +52,29 @@ function usePendingLoads() {
 }
 
 export default function DashboardGasolina() {
-  const { data: summary, dataUpdatedAt, refetch, isLoading: loadingSum } = useDashboardSummaryFiltered({});
-  const { data: budgets, isLoading: loadingBudgets } = useBudgetsFuel();
-  const { data: pending, isLoading: loadingPending } = usePendingLoads();
-  const { data: trend } = useFuelTrend({});
+  const summaryQuery = useDashboardSummaryFiltered({});
+  const budgetsQuery = useBudgetsFuel();
+  const pendingQuery = usePendingLoads();
+  const trendQuery = useFuelTrend({});
+  const { data: summary, dataUpdatedAt, refetch, isLoading: loadingSum } = summaryQuery;
+  const { data: budgets, isLoading: loadingBudgets } = budgetsQuery;
+  const { data: pending, isLoading: loadingPending } = pendingQuery;
+  const trend = trendQuery.data;
+
+  const failedSections = [
+    summaryQuery.isError ? 'resumen del mes' : null,
+    budgetsQuery.isError ? 'presupuestos' : null,
+    pendingQuery.isError ? 'cargas pendientes' : null,
+    trendQuery.isError ? 'tendencia de combustible' : null,
+  ].filter((section): section is string => section !== null);
+  const isRetrying = [summaryQuery, budgetsQuery, pendingQuery, trendQuery]
+    .some((query) => query.isFetching && query.isError);
+  const retryFailed = () => {
+    if (summaryQuery.isError) void summaryQuery.refetch();
+    if (budgetsQuery.isError) void budgetsQuery.refetch();
+    if (pendingQuery.isError) void pendingQuery.refetch();
+    if (trendQuery.isError) void trendQuery.refetch();
+  };
 
   const budgetStats = useMemo(() => {
     if (!budgets || budgets.length === 0) return null;
@@ -84,15 +105,21 @@ export default function DashboardGasolina() {
         onRefresh={() => { refetch(); }}
       />
 
+      <DashboardErrorAlert
+        failedSections={failedSections}
+        isRetrying={isRetrying}
+        onRetry={retryFailed}
+      />
+
       {/* Z-TOP: KPIs */}
       <section>
         <h2 className="text-[10px] font-medium uppercase tracking-[0.1em] text-muted-foreground mb-3">
           Gastos del mes
         </h2>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-          {loadingSum || !summary ? (
+          {loadingSum ? (
             Array.from({ length: 4 }).map((_, i) => <SkeletonKpi key={i} />)
-          ) : (
+          ) : summary ? (
             <>
               <KpiCard
                 label="Gasto del mes"
@@ -114,6 +141,10 @@ export default function DashboardGasolina() {
                 unit="km/l" hint="promedio flota" icon={Gauge}
               />
             </>
+          ) : (
+            <p className="col-span-full rounded-md border border-dashed p-4 text-sm text-muted-foreground">
+              Resumen del mes no disponible.
+            </p>
           )}
         </div>
       </section>
@@ -126,6 +157,8 @@ export default function DashboardGasolina() {
           <CardContent>
             {loadingBudgets ? (
               <div className="h-32 animate-pulse bg-muted rounded" />
+            ) : budgetsQuery.isError ? (
+              <p className="text-sm text-muted-foreground">Presupuesto no disponible.</p>
             ) : budgetStats ? (
               <div className="space-y-4">
                 <div>
@@ -187,6 +220,10 @@ export default function DashboardGasolina() {
           <CardContent>
             {loadingPending ? (
               <SkeletonTable rows={4} cols={5} />
+            ) : pendingQuery.isError ? (
+              <p className="py-8 text-center text-sm text-muted-foreground">
+                Cargas pendientes no disponibles.
+              </p>
             ) : pending && pending.length > 0 ? (
               <Table>
                 <TableHeader>
@@ -231,7 +268,9 @@ export default function DashboardGasolina() {
         <Card>
           <CardHeader><CardTitle>Vehículos al límite</CardTitle></CardHeader>
           <CardContent>
-            {budgets && budgets.length > 0 ? (
+            {budgetsQuery.isError ? (
+              <p className="text-sm text-muted-foreground">Límites no disponibles.</p>
+            ) : budgets && budgets.length > 0 ? (
               <ul className="space-y-2.5">
                 {budgets
                   .filter((b: Budget) => (b.spentAmount / (b.baseAmount + b.rolloverIn)) >= 0.8)

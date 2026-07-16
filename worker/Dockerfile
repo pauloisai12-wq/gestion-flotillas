@@ -28,11 +28,13 @@ RUN mkdir -p /app/storage/reports
 # Copiar código
 COPY . .
 
-# Ejecutar como usuario no-root (defensa en profundidad). El worker solo necesita
-# escribir en /app/storage/reports; le damos la propiedad para que el volumen con
-# nombre (reports_data) herede ese owner al montarse vacío la primera vez.
-RUN groupadd -r appuser && useradd -r -g appuser appuser \
-    && chown -R appuser:appuser /app/storage
+# UID/GID estable y compartido con API. Evita carreras de ownership en reports
+# y permite que getpwuid/HOME funcionen para WeasyPrint/fontconfig.
+RUN groupadd --gid 10001 appuser \
+    && useradd --uid 10001 --gid appuser --create-home \
+      --home-dir /home/appuser --shell /usr/sbin/nologin appuser \
+    && chown -R appuser:appuser /app/storage /home/appuser
+ENV HOME=/home/appuser
 USER appuser
 
 # Comando: ejecutar el worker que escucha jobs de BullMQ

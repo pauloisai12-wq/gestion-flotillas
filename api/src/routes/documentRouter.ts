@@ -7,10 +7,16 @@ import * as documentService from '../services/documentService';
 import { roleMiddleware, RoleGroups } from '../middlewares/roleMiddleware';
 import { ah } from '../lib/asyncHandler';
 import { parseId } from '../lib/http';
+import { BadRequest } from '../middlewares/errorHandler';
+import {
+  cleanupUploadedFilesOnError,
+  UPLOAD_DIRS,
+  uploadRateLimit,
+} from '../lib/uploadStorage';
 
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => {
-    cb(null, path.join(__dirname, '../../uploads/documents'));
+    cb(null, UPLOAD_DIRS.documents);
   },
   filename: (_req, file, cb) => {
     // Renombrado seguro: UUID + extensión normalizada (ya validada por fileFilter).
@@ -22,7 +28,13 @@ const storage = multer.diskStorage({
 
 const upload = multer({
   storage,
-  limits: { fileSize: 10 * 1024 * 1024, files: 1 },
+  limits: {
+    fileSize: 10 * 1024 * 1024,
+    files: 1,
+    fields: 5,
+    parts: 6,
+    fieldSize: 64 * 1024,
+  },
   fileFilter: (_req, file, cb) => {
     const allowed = ['.pdf', '.jpg', '.jpeg', '.png', '.webp'];
     const ext = path.extname(file.originalname).toLowerCase();
@@ -51,6 +63,7 @@ router.get('/documents/:id', roleMiddleware(RoleGroups.VEHICLE_READERS), ah(asyn
 router.post(
   '/documents',
   roleMiddleware(['ADMIN', 'SUPERVISOR_VEHICLES']),
+  uploadRateLimit,
   upload.single('file'),
   ah(async (req: Request, res: Response) => {
     // Multipart: tras multer los campos llegan como texto, por eso el armado
@@ -65,13 +78,13 @@ router.post(
 
     const parsed = documentSchema.safeParse(body);
     if (!parsed.success) {
-      return res.status(400).json({
-        error: 'Datos inválidos',
-        details: parsed.error.issues.map((i) => ({
+      throw BadRequest(
+        'Datos inválidos',
+        parsed.error.issues.map((i) => ({
           field: i.path.join('.'),
           message: i.message,
         })),
-      });
+      );
     }
 
     const file = req.file
@@ -80,12 +93,14 @@ router.post(
 
     const doc = await documentService.createDocument(parsed.data, file);
     res.status(201).json(doc);
-  })
+  }),
+  cleanupUploadedFilesOnError,
 );
 
 router.put(
   '/documents/:id',
   roleMiddleware(['ADMIN', 'SUPERVISOR_VEHICLES']),
+  uploadRateLimit,
   upload.single('file'),
   ah(async (req: Request, res: Response) => {
     const id = parseId(req);
@@ -102,13 +117,13 @@ router.put(
 
     const parsed = documentSchema.safeParse(body);
     if (!parsed.success) {
-      return res.status(400).json({
-        error: 'Datos inválidos',
-        details: parsed.error.issues.map((i) => ({
+      throw BadRequest(
+        'Datos inválidos',
+        parsed.error.issues.map((i) => ({
           field: i.path.join('.'),
           message: i.message,
         })),
-      });
+      );
     }
 
     const file = req.file
@@ -117,7 +132,8 @@ router.put(
 
     const doc = await documentService.updateDocument(id, parsed.data, file);
     res.json(doc);
-  })
+  }),
+  cleanupUploadedFilesOnError,
 );
 
 router.delete(

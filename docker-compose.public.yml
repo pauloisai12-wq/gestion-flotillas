@@ -1,19 +1,17 @@
-# /docker-compose.public.yml — override para VPS PÚBLICO (QA abierto, HTTPS real)
+# /docker-compose.public.yml — override para Hetzner Cloud (QA público, HTTPS real)
 #
 # A diferencia de docker-compose.staging.yml (servidor de casa, VPN-only, Caddy en
 # 10.10.0.2:8443 con `tls internal` y datos en LUKS /srv/datos), este override expone
 # el stack en internet desde un VPS dedicado y desechable:
 #   - Caddy escucha en 0.0.0.0:80 y :443 y emite HTTPS automático con Let's Encrypt
-#     (Caddyfile.public, dominio real tipo *.duckdns.org).
+#     (Caddyfile.public, dominio real como qa.aztechcomposites.com).
 #   - Persistencia en VOLÚMENES Docker con nombre (no bind mounts LUKS).
 #   - API endurecida (NODE_ENV=production): JWT>=64, BCRYPT>=12, CORS sin localhost.
 #   - Acceso TOTALMENTE ABIERTO (sin basic_auth): la defensa es login + rate-limit +
 #     credenciales demo fuertes. Datos demo en un box desechable.
 #
-# Uso (en el VPS):   ./deploy-public.sh     (o, manualmente:)
-#   export COMPOSE="docker compose -p flotillas -f docker-compose.yml -f docker-compose.public.yml"
-#   $COMPOSE build
-#   $COMPOSE up -d --wait
+# Uso soportado en el VPS: ./deploy-public.sh
+# migrate rechaza un `docker compose up` directo sin la guardia de backup.
 #
 # Las migraciones NO son un paso manual: el servicio one-shot `migrate` corre
 # `prisma migrate deploy` y termina ANTES de que arranquen api/worker
@@ -27,17 +25,43 @@
 x-logging: &log
   driver: json-file
   options:
-    max-size: "10m"
-    max-file: "3"
+    max-size: "${OPS_LOG_MAX_SIZE:-10m}"
+    max-file: "${OPS_LOG_MAX_FILES:-5}"
 
 services:
+  # === INIT DE STORAGE — ownership determinista, sin carrera API/worker ===
+  storage-init:
+    image: flotillas-api:public
+    user: "0:0"
+    restart: "no"
+    entrypoint: ["/bin/sh", "-ceu"]
+    command:
+      - |
+        printenv FLOTILLAS_PREDEPLOY_GUARD | grep -Fvxq UNGUARDED || {
+          echo "storage-init bloqueado: ejecuta ./deploy-public.sh después del backup" >&2
+          exit 78
+        }
+        mkdir -p /app/uploads /app/storage/reports
+        chown -R 10001:10001 /app/uploads /app/storage/reports
+        chmod -R u=rwX,g=rX,o= /app/uploads /app/storage/reports
+    environment:
+      FLOTILLAS_PREDEPLOY_GUARD: ${FLOTILLAS_PREDEPLOY_GUARD:-UNGUARDED}
+    mem_limit: 128m
+    cpus: "0.25"
+    pids_limit: 64
+    logging: *log
+    volumes:
+      - uploads_data:/app/uploads
+      - reports_data:/app/storage/reports
+
   # === BASE DE DATOS — Postgres 16 (volumen con nombre del base) ===
   postgres:
     ports: !reset []                       # quita el bind 127.0.0.1:5433 del base (no exponer la BD)
     mem_limit: 768m
     cpus: "1.0"
+    pids_limit: 256
     logging: *log
-    # Tuning para VPS chico (~2 GB). AJUSTA a la RAM real: shared_buffers≈25% RAM,
+    # Tuning para VPS dedicado >=4 GB. AJUSTA con métricas: shared_buffers≈25% RAM,
     # effective_cache_size≈50-75% RAM. max_connections holgado para Prisma(15)+worker(5).
     command:
       - "postgres"
@@ -57,16 +81,23 @@ services:
     ports: !reset []                       # quita el bind 127.0.0.1:6379 del base (no exponer Redis)
     mem_limit: 256m
     cpus: "0.5"
+    pids_limit: 128
     logging: *log
+    environment:
+      # redis-cli consume esta variable sin exponer la contraseña en argv; la usa
+      # el monitor host-side para contar jobs BullMQ.
+      REDISCLI_AUTH: ${REDIS_PASSWORD}
 
   # === API (Node/Express) — endurecida como producción ===
   api:
     # Tag fijo de la imagen (build target prod del base) para que el one-shot
     # `migrate` reuse exactamente la misma imagen (sin rebuild ni duplicado).
     image: flotillas-api:public
+    user: "10001:10001"
     ports: !reset []                       # quita 3001:3001; solo Caddy la alcanza por red interna
     mem_limit: 512m
     cpus: "1.0"
+    pids_limit: 256
     logging: *log
     environment:
       # NODE_ENV=production ACTIVA las validaciones estrictas de env.ts:
@@ -102,6 +133,7 @@ services:
     ports: !reset []                       # quita 3000:3000; Caddy llega a web:3000 por la red interna
     mem_limit: 384m
     cpus: "0.5"
+    pids_limit: 256
     logging: *log
 
   # === WORKER Python (reportería WeasyPrint/openpyxl) ===
@@ -110,9 +142,26 @@ services:
     # que un pico OOM-ee el VPS entero.
     mem_limit: 1g
     cpus: "1.0"
+    pids_limit: 256
     logging: *log
+    user: "10001:10001"
+    stop_grace_period: 2m
+    environment:
+      WORKER_HEARTBEAT_FILE: /tmp/flotillas-worker/heartbeat.json
+      WORKER_HEARTBEAT_SECONDS: ${WORKER_HEARTBEAT_SECONDS:-15}
+      WORKER_HEARTBEAT_MAX_AGE_SECONDS: ${WORKER_HEARTBEAT_MAX_AGE_SECONDS:-60}
+      # Los jobs QA_EXPORT solo leen los archivos ya aceptados por la API. El
+      # montaje :ro impide que un parser comprometido altere evidencias fuente.
+      QA_EXTERNA_DIR: /app/uploads/qa-externa
+    healthcheck:
+      test: ["CMD", "python", "healthcheck.py"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 45s
     volumes:
       - reports_data:/app/storage/reports         # mismo volumen compartido con la api (descargas)
+      - uploads_data:/app/uploads:ro              # insumos QA_EXPORT; nunca escritura desde el worker
     depends_on:
       postgres:
         condition: service_healthy
@@ -128,13 +177,28 @@ services:
   migrate:
     image: flotillas-api:public
     restart: "no"
-    command: ["npx", "prisma", "migrate", "deploy"]
+    mem_limit: 384m
+    cpus: "0.5"
+    pids_limit: 128
+    logging: *log
+    command:
+      - sh
+      - -ceu
+      - |
+        printenv FLOTILLAS_PREDEPLOY_GUARD | grep -Fvxq UNGUARDED || {
+          echo "migrate bloqueado: ejecuta ./deploy-public.sh para pasar la guardia de backup" >&2
+          exit 78
+        }
+        exec npx prisma migrate deploy
     environment:
       # Mismo patrón derivado que la API; migrate solo necesita DATABASE_URL.
       DATABASE_URL: ${DATABASE_URL:-postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}}
+      FLOTILLAS_PREDEPLOY_GUARD: ${FLOTILLAS_PREDEPLOY_GUARD:-UNGUARDED}
     depends_on:
       postgres:
         condition: service_healthy
+      storage-init:
+        condition: service_completed_successfully
 
   # === REVERSE PROXY público (HTTPS automático con Let's Encrypt) ===
   caddy:
@@ -143,6 +207,7 @@ services:
     restart: unless-stopped
     mem_limit: 128m
     cpus: "0.5"
+    pids_limit: 128
     logging: *log
     depends_on:
       web:

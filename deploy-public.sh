@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 #
 # deploy-public.sh — despliegue de un solo comando para flotillas-v2 en un VPS
-# PÚBLICO (QA abierto, HTTPS Let's Encrypt). Hermano de deploy.sh (servidor de casa).
+# HETZNER CLOUD (QA público, HTTPS Let's Encrypt).
+# Este es el entrypoint del entorno vigente; deploy.sh conserva únicamente el
+# perfil staging heredado del servidor de casa.
 #
 # Encapsula la secuencia correcta para un VPS dedicado expuesto a internet
 # (NODE_ENV=production, Caddy en 0.0.0.0:80/443 con cert automático) SIN que el
@@ -27,6 +29,8 @@ readonly SCRIPT_NAME="deploy-public.sh"
 readonly ENV_TEMPLATE=".env.public.example"
 readonly COMPOSE_OVERRIDE="docker-compose.public.yml"
 readonly COMPOSE_OLD_DIE_MSG="actualiza Compose y reintenta."
+readonly BACKUP_PROFILE="public"
+readonly DEFAULT_BACKUP_DIR="/var/backups/flotillas"
 
 # Ayuda mostrada si Docker Compose es < 2.24 (`ports: !reset []`).
 gotcha_reset_help() {

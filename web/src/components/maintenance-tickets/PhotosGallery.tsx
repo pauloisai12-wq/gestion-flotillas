@@ -34,10 +34,24 @@ export function PhotosGallery({
         >
           {/* eslint-disable-next-line @next/next/no-img-element -- thumbnails de uploads dinámicos sin dimensiones conocidas */}
           <img
-            src={url(att.fileUrl)}
+            src={url(att.thumbnailUrl || att.fileUrl)}
             alt={att.fileName}
             className="size-full object-cover group-hover:scale-105 transition-transform"
             loading="lazy"
+            onError={(event) => {
+              const image = event.currentTarget;
+              if (!att.thumbnailUrl || image.dataset.originalFallback === 'true') return;
+              const attempts = Number(image.dataset.thumbnailAttempts || 0);
+              if (attempts < 2) {
+                image.dataset.thumbnailAttempts = String(attempts + 1);
+                window.setTimeout(() => {
+                  image.src = `${url(att.thumbnailUrl!)}?retry=${Date.now()}`;
+                }, 3_000);
+              } else {
+                image.dataset.originalFallback = 'true';
+                image.src = url(att.fileUrl);
+              }
+            }}
           />
         </a>
       ))}

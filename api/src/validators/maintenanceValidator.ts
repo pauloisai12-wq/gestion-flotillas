@@ -37,4 +37,10 @@ export const listMaintenanceQuerySchema = z.object({
   serviceId: z.coerce.number().int().positive().optional(),
 });
 
+export const maintenanceHistoryQuerySchema = z.object({
+  page: z.coerce.number().int().positive().default(1),
+  limit: z.coerce.number().int().positive().max(100).default(20),
+});
+
 export type ListMaintenanceQuery = z.infer<typeof listMaintenanceQuerySchema>;
+export type MaintenanceHistoryQuery = z.infer<typeof maintenanceHistoryQuerySchema>;

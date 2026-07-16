@@ -4,8 +4,12 @@ import { Router, Request, Response } from 'express';
 import {
   fuelLoadSchema,
   fuelLoadQuerySchema,
+  fuelLoadReviewSchema,
+  legacyFuelLoadReconciliationSchema,
   FuelLoadInput,
   FuelLoadQueryInput,
+  FuelLoadReviewInput,
+  LegacyFuelLoadReconciliationInput,
 } from '../validators/fuelLoadValidator';
 import * as fuelLoadService from '../services/fuelLoadService';
 import { requireRole, RoleGroups } from '../middlewares/roleMiddleware';
@@ -48,6 +52,36 @@ router.get(
       fuelLoadService.getVehicleMovingAverage(vehicleId),
     ]);
     res.json({ loads, movingAverage: avg });
+  }),
+);
+
+router.patch(
+  '/:id/review',
+  requireRole(RoleGroups.FUEL_MANAGERS),
+  validateBody(fuelLoadReviewSchema),
+  ah(async (req: Request, res: Response) => {
+    const id = parseId(req);
+    const result = await fuelLoadService.reviewFuelLoad(
+      id,
+      req.body as FuelLoadReviewInput,
+      req.user!.userId,
+    );
+    res.json(result);
+  }),
+);
+
+router.patch(
+  '/:id/reconcile',
+  requireRole(RoleGroups.ADMIN_ONLY),
+  validateBody(legacyFuelLoadReconciliationSchema),
+  ah(async (req: Request, res: Response) => {
+    const id = parseId(req);
+    const result = await fuelLoadService.reconcileLegacyFuelLoad(
+      id,
+      req.body as LegacyFuelLoadReconciliationInput,
+      req.user!.userId,
+    );
+    res.json(result);
   }),
 );
 

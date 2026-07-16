@@ -16,8 +16,10 @@ from generate_pdf import (
     get_expired_docs_list,
     get_maintenance_done,
     get_maintenance_pending,
+    collect_report_data,
     MONTH_NAMES
 )
+from artifact_storage import atomic_write, immutable_report_path
 
 # Carpeta donde se guardan los reportes
 REPORTS_DIR = "/app/storage/reports"
@@ -330,7 +332,14 @@ def create_maintenance_sheet(wb, maintenance_done, maintenance_pending):
     write_table(ws, headers_pending, data_pending, start_row=next_row + 2)
 
 
-def generate_excel(month, year, requested_by="sistema"):
+def generate_excel(
+    month,
+    year,
+    requested_by="sistema",
+    artifact_id=None,
+    attempt_token=None,
+    report_data=None,
+):
     """
     Función principal: genera el reporte Excel del mes indicado.
 
@@ -345,14 +354,7 @@ def generate_excel(month, year, requested_by="sistema"):
     print(f"  [Excel] Recopilando datos para {month}/{year}...")
 
     # 1. Recopilar datos (reutiliza las funciones de generate_pdf.py)
-    summary = get_summary(month, year)
-    fuel_by_type = get_fuel_by_type(month, year)
-    top_consumers = get_top_consumers(month, year)
-    best_kml, worst_kml = get_kml_ranking(month, year)
-    docs_summary = get_docs_summary()
-    expired_docs_list = get_expired_docs_list()
-    maintenance_done = get_maintenance_done(month, year)
-    maintenance_pending = get_maintenance_pending()
+    data = report_data if report_data is not None else collect_report_data(month, year)
 
     print("  [Excel] Datos recopilados. Generando hojas...")
 
@@ -360,20 +362,31 @@ def generate_excel(month, year, requested_by="sistema"):
     wb = Workbook()
 
     # 3. Crear cada hoja
-    create_resumen_sheet(wb, summary, docs_summary, month, year)
-    create_fuel_by_type_sheet(wb, fuel_by_type)
-    create_top_consumers_sheet(wb, top_consumers)
-    create_ranking_sheet(wb, best_kml, worst_kml)
-    create_docs_sheet(wb, expired_docs_list)
-    create_maintenance_sheet(wb, maintenance_done, maintenance_pending)
+    create_resumen_sheet(wb, data["summary"], data["docs_summary"], month, year)
+    create_fuel_by_type_sheet(wb, data["fuel_by_type"])
+    create_top_consumers_sheet(wb, data["top_consumers"])
+    create_ranking_sheet(wb, data["best_kml"], data["worst_kml"])
+    create_docs_sheet(wb, data["expired_docs_list"])
+    create_maintenance_sheet(
+        wb,
+        data["maintenance_done"],
+        data["maintenance_pending"],
+    )
 
     # 4. Guardar archivo
     os.makedirs(REPORTS_DIR, exist_ok=True)
-    filename = f"reporte_mensual_{year}_{str(month).zfill(2)}.xlsx"
-    filepath = os.path.join(REPORTS_DIR, filename)
+    filepath = immutable_report_path(
+        REPORTS_DIR,
+        year,
+        month,
+        artifact_id,
+        "xlsx",
+        attempt_token,
+    )
+    filename = os.path.basename(filepath)
 
     print(f"  [Excel] Guardando: {filename}...")
-    wb.save(filepath)
+    atomic_write(filepath, wb.save)
 
     print(f"  [Excel] Excel generado: {filepath}")
     return filepath
