@@ -132,6 +132,22 @@ class DeploySafetyTests(unittest.TestCase):
         self.assertIn(root_reader, guard)
         self.assertEqual(backup.count(root_reader), 4)
 
+    def test_worker_code_is_readable_but_not_owned_by_runtime_user(self):
+        dockerfile = (ROOT / "worker/Dockerfile").read_text(encoding="utf-8")
+
+        create_user = dockerfile.index("useradd --uid 10001")
+        root_owned = dockerfile.index("chown -R root:appuser /app", create_user)
+        readable = dockerfile.index("chmod -R u=rwX,g=rX,o= /app", root_owned)
+        writable_storage = dockerfile.index(
+            "chown -R appuser:appuser /app/storage /home/appuser", readable
+        )
+        runtime_user = dockerfile.index("USER appuser", writable_storage)
+
+        self.assertLess(create_user, root_owned)
+        self.assertLess(root_owned, readable)
+        self.assertLess(readable, writable_storage)
+        self.assertLess(writable_storage, runtime_user)
+
     def test_node_images_match_declared_runtime_floor(self):
         for application in ("api", "web"):
             with self.subTest(application=application):

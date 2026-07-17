@@ -33,6 +33,8 @@ COPY . .
 RUN groupadd --gid 10001 appuser \
     && useradd --uid 10001 --gid appuser --create-home \
       --home-dir /home/appuser --shell /usr/sbin/nologin appuser \
+    && chown -R root:appuser /app \
+    && chmod -R u=rwX,g=rX,o= /app \
     && chown -R appuser:appuser /app/storage /home/appuser
 ENV HOME=/home/appuser
 USER appuser
