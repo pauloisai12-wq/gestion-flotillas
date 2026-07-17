@@ -188,7 +188,10 @@ done
 mkdir -p -- "$backup_dir"
 chmod 700 "$backup_dir"
 
-stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+# Una sola lectura del reloj mantiene coherentes nombre, manifiesto y receipt
+# aunque el cifrado cruce un segundo (o un minuto).
+created_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+stamp="${created_utc//[-:]/}"
 bundle_name="flotillas-${profile}-${stamp}"
 partial_dir="${backup_dir}/.${bundle_name}.partial"
 final_dir="${backup_dir}/${bundle_name}"
@@ -260,7 +263,6 @@ if ! "${compose[@]}" run --rm --no-deps -T --user 0:0 --entrypoint sh api \
   die "falló el respaldo cifrado de reports"
 fi
 
-created_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 write_manifest "$partial_dir" "$created_utc" "$profile" \
   "$db_toc_entries" "$uploads_entries" "$reports_entries"
 if ! age --encrypt --recipient "$recipient" --output "${partial_dir}/manifest.txt.age" \

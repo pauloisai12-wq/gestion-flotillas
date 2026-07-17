@@ -3,6 +3,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import textwrap
 import unittest
@@ -148,6 +149,171 @@ class DeploySafetyTests(unittest.TestCase):
 
 @unittest.skipUnless(LINUX_BASH, "las pruebas operativas de shell requieren Bash en Linux")
 class OpsShellBehaviorTests(unittest.TestCase):
+    def test_backup_crossing_minute_keeps_bundle_manifest_and_receipt_coherent(self):
+        key = "receipt-test-key-32-bytes-minimum-value"
+        fake_compose_source = """#!/usr/bin/env bash
+set -Eeuo pipefail
+case "${1:-}" in
+  ps)
+    exit 0
+    ;;
+  exec)
+    if [[ "$*" == *pg_restore* ]]; then
+      cat >/dev/null
+      printf '1; 0 0 TABLE public sample postgres\\n'
+    elif [[ "$*" == *pg_dump* ]]; then
+      printf 'stub-postgresql-custom-archive\\n'
+    else
+      exit 91
+    fi
+    ;;
+  run)
+    tar -cf - --files-from /dev/null
+    ;;
+  *)
+    exit 92
+    ;;
+esac
+"""
+        fake_age_source = """#!/usr/bin/env bash
+set -Eeuo pipefail
+output=''
+input=''
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --encrypt)
+      shift
+      ;;
+    --recipient)
+      shift 2
+      ;;
+    --output)
+      output="$2"
+      shift 2
+      ;;
+    *)
+      input="$1"
+      shift
+      ;;
+  esac
+done
+[ -n "$output" ]
+if [ -n "$input" ]; then
+  cp -- "$input" "$output"
+else
+  cat > "$output"
+fi
+"""
+        fake_date_source = """#!/usr/bin/env bash
+set -Eeuo pipefail
+counter=0
+if [ -f "$FAKE_DATE_COUNTER" ]; then
+  read -r counter < "$FAKE_DATE_COUNTER"
+fi
+counter=$((counter + 1))
+printf '%s\\n' "$counter" > "$FAKE_DATE_COUNTER"
+case "$*" in
+  '-u +%Y%m%dT%H%M%SZ')
+    printf '20000101T235959Z\\n'
+    ;;
+  '-u +%Y-%m-%dT%H:%M:%SZ')
+    if [ "$counter" -eq 1 ]; then
+      printf '2000-01-02T00:00:00Z\\n'
+    else
+      printf '2000-01-02T00:00:01Z\\n'
+    fi
+    ;;
+  *)
+    exit 93
+    ;;
+esac
+"""
+
+        with tempfile.TemporaryDirectory() as temporary:
+            temporary_path = Path(temporary)
+            fake_bin = temporary_path / "bin"
+            fake_bin.mkdir()
+            for name, source in {
+                "fake-compose": fake_compose_source,
+                "age": fake_age_source,
+                "date": fake_date_source,
+            }.items():
+                executable = fake_bin / name
+                executable.write_text(source, encoding="utf-8")
+                executable.chmod(0o755)
+
+            backup_dir = temporary_path / "backups"
+            date_counter = temporary_path / "date-counter"
+            date_counter.write_text("0\n", encoding="utf-8")
+            harness = r"""
+                set -Eeuo pipefail
+                source "$1"
+                flotillas_acquire_operation_lock "$2"
+                exec bash "$3" -- "$4"
+            """
+            command = [
+                LINUX_BASH,
+                "-c",
+                harness,
+                "bash",
+                str(ROOT / "scripts/ops/operation-lock.sh"),
+                str(backup_dir),
+                str(ROOT / "scripts/ops/backup.sh"),
+                str(fake_bin / "fake-compose"),
+            ]
+            environment = {
+                **os.environ,
+                "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+                "BACKUP_DIR": str(backup_dir),
+                "BACKUP_AGE_RECIPIENT": "age1-test-recipient",
+                "BACKUP_PROFILE": "public",
+                "BACKUP_RECEIPT_HMAC_KEY": key,
+                "FAKE_DATE_COUNTER": str(date_counter),
+            }
+            result = subprocess.run(
+                command,
+                cwd=ROOT,
+                env=environment,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(date_counter.read_text(encoding="utf-8"), "1\n")
+
+            bundle = backup_dir / "flotillas-public-20000102T000000Z"
+            self.assertEqual(result.stdout.strip(), str(bundle))
+            self.assertTrue(bundle.is_dir())
+            manifest = (bundle / "manifest.txt.age").read_text(encoding="utf-8")
+            self.assertIn("created_utc=2000-01-02T00:00:00Z\n", manifest)
+            self.assertFalse((bundle / "manifest.txt").exists())
+            self.assertEqual(list(backup_dir.glob(".*.partial")), [])
+
+            sys.path.insert(0, str(ROOT / "scripts/ops"))
+            try:
+                from backup_receipt import verify_receipt
+
+                verified = verify_receipt(bundle / "receipt.json", key, bundle.name)
+            finally:
+                sys.path.pop(0)
+            self.assertEqual(verified["bundle"], bundle.name)
+            self.assertEqual(verified["created_utc"], "2000-01-02T00:00:00Z")
+
+            original_receipt = (bundle / "receipt.json").read_bytes()
+            date_counter.write_text("0\n", encoding="utf-8")
+            duplicate = subprocess.run(
+                command,
+                cwd=ROOT,
+                env=environment,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertNotEqual(duplicate.returncode, 0)
+            self.assertIn("ya existe el respaldo", duplicate.stderr)
+            self.assertEqual((bundle / "receipt.json").read_bytes(), original_receipt)
+            self.assertEqual(list(backup_dir.glob(".*.partial")), [])
+
     def test_age_recipient_preflight_propagates_failures_without_output(self):
         for filename in ("backup-public.sh", "predeploy-guard.sh"):
             with self.subTest(script=filename):
