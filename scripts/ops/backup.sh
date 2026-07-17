@@ -207,7 +207,16 @@ printf 'Validando dump PostgreSQL con pg_restore --list...\n' >&2
 if ! db_toc_entries="$(
   "${compose[@]}" exec -T postgres sh -ceu \
     'exec pg_dump --format=custom --no-owner --no-privileges --username="$POSTGRES_USER" --dbname="$POSTGRES_DB"' |
-    "${compose[@]}" exec -T postgres sh -ceu 'exec pg_restore --list' |
+    "${compose[@]}" exec -T postgres sh -ceu '
+      restore_status=0
+      pg_restore --list || restore_status=$?
+      # pg_restore puede terminar tras leer el TOC y dejar bytes del custom
+      # archive. Drenarlos evita un SIGPIPE falso en pg_dump sin escribirlos.
+      drain_status=0
+      cat >/dev/null || drain_status=$?
+      [ "$restore_status" -eq 0 ] || exit "$restore_status"
+      exit "$drain_status"
+    ' |
     awk '!/^;/ && NF { count++ } END { print count + 0 }'
 )"; then
   die "pg_dump/pg_restore no superó la validación básica"

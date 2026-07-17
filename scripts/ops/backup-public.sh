@@ -229,6 +229,7 @@ if grep -Fxq migrate <<< "$running_services"; then
 fi
 
 stopped_services=()
+declare -A stopped_container_ids=()
 maintenance_active=0
 
 array_contains() {
@@ -244,10 +245,12 @@ array_contains() {
 restore_services() {
   local service
   local failed=0
+  local -a container_ids
   for service in api worker-python web caddy; do
     if array_contains "$service" "${stopped_services[@]}"; then
       printf 'Restaurando servicio %s...\n' "$service" >&2
-      "${compose[@]}" start "$service" >/dev/null || failed=1
+      mapfile -t container_ids <<< "${stopped_container_ids[$service]}"
+      docker start "${container_ids[@]}" >/dev/null || failed=1
     fi
   done
   [ "$failed" -eq 0 ] || return 1
@@ -336,6 +339,11 @@ publish_maintenance
 for service in caddy web api worker-python; do
   if grep -Fxq "$service" <<< "$running_services"; then
     printf 'Deteniendo %s para snapshot consistente...\n' "$service" >&2
+    if ! service_container_ids="$("${compose[@]}" ps -q "$service")" || \
+       [ -z "$service_container_ids" ]; then
+      die "no se pudo identificar el contenedor activo de ${service}"
+    fi
+    stopped_container_ids["$service"]="${service_container_ids//$'\r'/}"
     stopped_services+=("$service")
     "${compose[@]}" stop --timeout "$stop_timeout" "$service" >/dev/null
   fi
