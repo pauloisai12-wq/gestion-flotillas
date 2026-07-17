@@ -148,6 +148,153 @@ class DeploySafetyTests(unittest.TestCase):
 
 @unittest.skipUnless(LINUX_BASH, "las pruebas operativas de shell requieren Bash en Linux")
 class OpsShellBehaviorTests(unittest.TestCase):
+    def test_age_recipient_preflight_propagates_failures_without_output(self):
+        for filename in ("backup-public.sh", "predeploy-guard.sh"):
+            with self.subTest(script=filename):
+                source = (ROOT / "scripts/ops" / filename).read_text(encoding="utf-8")
+                start = source.index("validate_age_recipient() {")
+                end = source.index("\n}\n", start) + len("\n}\n")
+                function = source[start:end]
+                self.assertIn("</dev/null >/dev/null 2>&1", function)
+                self.assertNotIn("mktemp", function)
+
+                harness = f"""
+                    set -Eeuo pipefail
+                    {function}
+                    age() {{
+                      [ "$1" = --encrypt ] || return 91
+                      [ "$2" = --recipient ] || return 92
+                      [ "$3" = "$EXPECTED_RECIPIENT" ] || return 93
+                      if IFS= read -r unexpected; then
+                        return 94
+                      fi
+                      printf 'ciphertext descartado\n'
+                      printf 'diagnostico con recipient: %s\n' "$3" >&2
+                      return "$AGE_STATUS"
+                    }}
+                    validate_age_recipient "$EXPECTED_RECIPIENT"
+                """
+                base_env = {
+                    **os.environ,
+                    "EXPECTED_RECIPIENT": "age1-no-imprimir-este-valor",
+                }
+                valid = subprocess.run(
+                    [LINUX_BASH, "-c", harness],
+                    cwd=ROOT,
+                    env={**base_env, "AGE_STATUS": "0"},
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+                self.assertEqual(valid.returncode, 0, valid.stderr)
+                self.assertEqual(valid.stdout, "")
+                self.assertEqual(valid.stderr, "")
+
+                invalid = subprocess.run(
+                    [LINUX_BASH, "-c", harness],
+                    cwd=ROOT,
+                    env={**base_env, "AGE_STATUS": "37"},
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+                self.assertEqual(invalid.returncode, 37)
+                self.assertEqual(invalid.stdout, "")
+                self.assertEqual(invalid.stderr, "")
+
+    def test_age_recipient_preflight_precedes_service_stops(self):
+        scripts = {
+            "backup-public.sh": "for command_name in age bash",
+            "predeploy-guard.sh": "command -v age >/dev/null 2>&1",
+        }
+        for filename, age_requirement in scripts.items():
+            with self.subTest(script=filename):
+                source = (ROOT / "scripts/ops" / filename).read_text(encoding="utf-8")
+                requirement = source.index(age_requirement)
+                preflight = source.index('if ! validate_age_recipient "$recipient"; then')
+                failure_end = source.index("\nfi", preflight) + len("\nfi")
+                failure_block = source[preflight:failure_end]
+                stop_commands = [
+                    match.start()
+                    for match in re.finditer(
+                        r'"\$\{compose\[@\]\}"\s+stop\b',
+                        source,
+                    )
+                ]
+
+                self.assertTrue(
+                    stop_commands,
+                    f"{filename} debe contener al menos un compose stop protegido",
+                )
+                self.assertLess(requirement, preflight)
+                self.assertTrue(all(preflight < stop for stop in stop_commands))
+                self.assertIn(
+                    'die "BACKUP_AGE_RECIPIENT no es aceptado por age"',
+                    failure_block,
+                )
+
+    def test_first_deploy_authorization_runs_age_preflight_before_exit(self):
+        source = (ROOT / "scripts/ops/predeploy-guard.sh").read_text(encoding="utf-8")
+        block_start = source.index('recipient_requirement=""')
+        action_case = source.index('case "$decision" in', block_start)
+        authorization_block = source[block_start:action_case]
+        preflight = authorization_block.index(
+            'if ! validate_age_recipient "$recipient"; then'
+        )
+        skip_assignment = authorization_block.index(
+            'recipient_requirement="BACKUP_AGE_RECIPIENT es obligatorio incluso en el primer despliegue"'
+        )
+
+        self.assertLess(skip_assignment, preflight)
+        self.assertIn(
+            'recipient_requirement="BACKUP_AGE_RECIPIENT es obligatorio antes de migrar una instalación existente"',
+            authorization_block,
+        )
+        self.assertNotIn("mkdir", authorization_block)
+        skip_branch = source.index("SKIP_VERIFIED_FIRST_DEPLOY)", action_case)
+        skip_exit = source.index("exit 0", skip_branch)
+        self.assertLess(action_case, skip_exit)
+        self.assertLess(block_start + preflight, skip_exit)
+
+        harness = f"""
+            set -Eeuo pipefail
+            die() {{
+              printf 'DIE:%s\\n' "$*" >&2
+              exit 70
+            }}
+            age() {{ :; }}
+            validate_age_recipient() {{ return "$AGE_STATUS"; }}
+            decision=SKIP_VERIFIED_FIRST_DEPLOY
+            backup_dir=/tmp/no-crear-backup
+            recipient="$TEST_RECIPIENT"
+            {authorization_block}
+            printf 'AUTHORIZED\\n'
+        """
+        cases = {
+            "missing": ("", "0", 70),
+            "invalid": ("age1-invalid", "37", 70),
+            "valid": ("age1-valid", "0", 0),
+        }
+        for label, (recipient, age_status, expected_status) in cases.items():
+            with self.subTest(case=label):
+                result = subprocess.run(
+                    [LINUX_BASH, "-c", harness],
+                    cwd=ROOT,
+                    env={
+                        **os.environ,
+                        "TEST_RECIPIENT": recipient,
+                        "AGE_STATUS": age_status,
+                    },
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, expected_status, result.stderr)
+                if expected_status == 0:
+                    self.assertEqual(result.stdout, "AUTHORIZED\n")
+                else:
+                    self.assertNotIn("AUTHORIZED", result.stdout)
+
     def test_pg_restore_validator_drains_large_stream_and_preserves_failures(self):
         backup = (ROOT / "scripts/ops/backup.sh").read_text(encoding="utf-8")
         match = re.search(
@@ -235,9 +382,14 @@ class OpsShellBehaviorTests(unittest.TestCase):
                     set -Eeuo pipefail
                     {functions}
                     docker() {{
-                      [ "$1" = start ] || return 90
-                      shift
-                      printf '%s\\n' "$@" >> "$LOG_FILE"
+                      case "$1" in
+                        start)
+                          shift
+                          printf '%s\\n' "$@" >> "$LOG_FILE"
+                          ;;
+                        inspect) printf 'running|none\\n' ;;
+                        *) return 90 ;;
+                      esac
                     }}
                     fake_compose() {{
                       case "${{1:-}}" in
@@ -252,6 +404,7 @@ class OpsShellBehaviorTests(unittest.TestCase):
                       [api]=$'api-id-a\\napi-id-b'
                       [caddy]='caddy-id'
                     )
+                    sleep() {{ :; }}
                     restore_services
                 """
                 with tempfile.TemporaryDirectory() as temporary:
@@ -269,6 +422,154 @@ class OpsShellBehaviorTests(unittest.TestCase):
                         log_file.read_text(encoding="utf-8").splitlines(),
                         ["api-id-a", "api-id-b", "caddy-id"],
                     )
+
+    def test_scheduled_restore_attempts_all_ids_after_partial_start_failure(self):
+        source = (ROOT / "scripts/ops/backup-public.sh").read_text(encoding="utf-8")
+        start = source.index("array_contains() {")
+        end = source.index("\npublish_maintenance()", start)
+        functions = source[start:end]
+        harness = f"""
+            set -Eeuo pipefail
+            {functions}
+            docker() {{
+              local command="$1"
+              shift
+              case "$command" in
+                start)
+                  printf 'start:%s\\n' "$1" >> "$LOG_FILE"
+                  [ "$1" != api-id-b ] || return 42
+                  ;;
+                inspect)
+                  printf 'inspect:%s\\n' "${{!#}}" >> "$LOG_FILE"
+                  printf 'running|healthy\\n'
+                  ;;
+                *) return 90 ;;
+              esac
+            }}
+            stopped_services=(api)
+            declare -A stopped_container_ids=(
+              [api]=$'api-id-a\\napi-id-b\\napi-id-c'
+            )
+            restore_services
+        """
+        with tempfile.TemporaryDirectory() as temporary:
+            log_file = Path(temporary) / "docker.log"
+            result = subprocess.run(
+                [LINUX_BASH, "-c", harness],
+                cwd=ROOT,
+                env={**os.environ, "LOG_FILE": str(log_file)},
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 1, result.stderr)
+            self.assertEqual(
+                log_file.read_text(encoding="utf-8").splitlines(),
+                ["start:api-id-a", "start:api-id-b", "start:api-id-c"],
+            )
+
+    def test_scheduled_restore_accepts_legacy_and_healthy_exact_ids(self):
+        source = (ROOT / "scripts/ops/backup-public.sh").read_text(encoding="utf-8")
+        start = source.index("array_contains() {")
+        end = source.index("\npublish_maintenance()", start)
+        functions = source[start:end]
+        self.assertNotIn('"${compose[@]}" exec', functions)
+        self.assertNotIn('"${compose[@]}" ps', functions)
+
+        harness = f"""
+            set -Eeuo pipefail
+            {functions}
+            docker() {{
+              local command="$1"
+              shift
+              case "$command" in
+                start)
+                  printf 'start:%s\\n' "$@" >> "$LOG_FILE"
+                  ;;
+                inspect)
+                  local container_id="${{!#}}"
+                  printf 'inspect:%s\\n' "$container_id" >> "$LOG_FILE"
+                  case "$container_id" in
+                    legacy-worker-id) printf 'running|none\\n' ;;
+                    api-with-health-id)
+                      if [ "$(grep -c '^inspect:api-with-health-id$' "$LOG_FILE")" -eq 1 ]; then
+                        printf 'running|starting\\n'
+                      else
+                        printf 'running|healthy\\n'
+                      fi
+                      ;;
+                    *) return 90 ;;
+                  esac
+                  ;;
+                *) return 91 ;;
+              esac
+            }}
+            sleep() {{ :; }}
+            stopped_services=(worker-python api)
+            declare -A stopped_container_ids=(
+              [worker-python]='legacy-worker-id'
+              [api]='api-with-health-id'
+            )
+            restore_services
+        """
+        with tempfile.TemporaryDirectory() as temporary:
+            log_file = Path(temporary) / "docker.log"
+            result = subprocess.run(
+                [LINUX_BASH, "-c", harness],
+                cwd=ROOT,
+                env={**os.environ, "LOG_FILE": str(log_file)},
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                log_file.read_text(encoding="utf-8").splitlines(),
+                [
+                    "start:api-with-health-id",
+                    "start:legacy-worker-id",
+                    "inspect:legacy-worker-id",
+                    "inspect:api-with-health-id",
+                    "inspect:legacy-worker-id",
+                    "inspect:api-with-health-id",
+                ],
+            )
+
+    def test_scheduled_restore_fails_closed_on_bad_inspection(self):
+        source = (ROOT / "scripts/ops/backup-public.sh").read_text(encoding="utf-8")
+        start = source.index("array_contains() {")
+        end = source.index("\npublish_maintenance()", start)
+        functions = source[start:end]
+        cases = {
+            "unhealthy": "printf 'running|unhealthy\\n'; return 0",
+            "not-running": "printf 'exited|none\\n'; return 0",
+            "inspect-failure": "printf 'running|healthy\\n'; return 42",
+        }
+        for label, inspect_behavior in cases.items():
+            with self.subTest(case=label):
+                harness = f"""
+                    set -Eeuo pipefail
+                    {functions}
+                    docker() {{
+                      case "$1" in
+                        start) return 0 ;;
+                        inspect) {inspect_behavior} ;;
+                        *) return 90 ;;
+                      esac
+                    }}
+                    sleep() {{ :; }}
+                    stopped_services=(api)
+                    declare -A stopped_container_ids=([api]='bad-api-id')
+                    restore_services
+                """
+                result = subprocess.run(
+                    [LINUX_BASH, "-c", harness],
+                    cwd=ROOT,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 1, result.stderr)
 
 
 if __name__ == "__main__":

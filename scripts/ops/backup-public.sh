@@ -91,6 +91,17 @@ receipt_key_is_placeholder() {
   [[ "${1^^}" == CAMBIA* ]]
 }
 
+validate_age_recipient() {
+  local recipient_value="$1"
+  local age_status=0
+
+  # Fuerza a age a construir un cifrado real sin crear plaintext ni ciphertext
+  # en disco. Su diagnóstico se oculta porque puede repetir el recipient.
+  age --encrypt --recipient "$recipient_value" </dev/null >/dev/null 2>&1 || \
+    age_status=$?
+  return "$age_status"
+}
+
 self_check() {
   local check_dir check_env
   for check_command in ln mktemp realpath rm; do
@@ -160,7 +171,7 @@ fi
 [ -f "$env_file" ] || die "env file inexistente: ${env_file}"
 [ ! -L "$env_file" ] || die "el env file no puede ser symlink: ${env_file}"
 
-for command_name in bash chmod date dirname docker find flock grep mkdir mv realpath rm sed sleep sort tail; do
+for command_name in age bash chmod date dirname docker find flock grep mkdir mv realpath rm sed sleep sort tail; do
   command -v "$command_name" >/dev/null 2>&1 || die "falta el comando: ${command_name}"
 done
 
@@ -195,6 +206,9 @@ maintenance_seconds="$(setting OPS_BACKUP_MAINTENANCE_SECONDS 2700)"
   die "OPS_BACKUP_STOP_TIMEOUT_SECONDS debe estar entre 30 y 900"
 [[ "$maintenance_seconds" =~ ^[0-9]+$ ]] && [ "$maintenance_seconds" -ge 300 ] && [ "$maintenance_seconds" -le 7200 ] || \
   die "OPS_BACKUP_MAINTENANCE_SECONDS debe estar entre 300 y 7200"
+if ! validate_age_recipient "$recipient"; then
+  die "BACKUP_AGE_RECIPIENT no es aceptado por age"
+fi
 
 if flotillas_acquire_operation_lock "$backup_dir"; then
   :
@@ -243,41 +257,41 @@ array_contains() {
 }
 
 restore_services() {
-  local service
+  local service container_id
   local failed=0
   local -a container_ids
   for service in api worker-python web caddy; do
     if array_contains "$service" "${stopped_services[@]}"; then
       printf 'Restaurando servicio %s...\n' "$service" >&2
       mapfile -t container_ids <<< "${stopped_container_ids[$service]}"
-      docker start "${container_ids[@]}" >/dev/null || failed=1
+      for container_id in "${container_ids[@]}"; do
+        docker start "$container_id" >/dev/null || failed=1
+      done
     fi
   done
   [ "$failed" -eq 0 ] || return 1
 
-  local attempt all_healthy
+  local attempt all_ready container_state
   for attempt in {1..60}; do
-    all_healthy=1
+    all_ready=1
     for service in "${stopped_services[@]}"; do
-      case "$service" in
-        api)
-          "${compose[@]}" exec -T api \
-            wget -qO- http://127.0.0.1:3001/api/health >/dev/null 2>&1 || all_healthy=0
-          ;;
-        worker-python)
-          "${compose[@]}" exec -T worker-python \
-            python healthcheck.py >/dev/null 2>&1 || all_healthy=0
-          ;;
-        web)
-          "${compose[@]}" exec -T web \
-            wget --quiet --tries=1 --spider http://127.0.0.1:3000 >/dev/null 2>&1 || all_healthy=0
-          ;;
-        caddy)
-          "${compose[@]}" ps --services --status running | grep -Fxq caddy || all_healthy=0
-          ;;
-      esac
+      mapfile -t container_ids <<< "${stopped_container_ids[$service]}"
+      for container_id in "${container_ids[@]}"; do
+        if ! container_state="$(
+          docker inspect --format \
+            '{{.State.Status}}|{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' \
+            "$container_id" 2>/dev/null
+        )"; then
+          all_ready=0
+          continue
+        fi
+        case "$container_state" in
+          running\|none|running\|healthy) ;;
+          *) all_ready=0 ;;
+        esac
+      done
     done
-    [ "$all_healthy" -eq 1 ] && return 0
+    [ "$all_ready" -eq 1 ] && return 0
     sleep 3
   done
   return 1

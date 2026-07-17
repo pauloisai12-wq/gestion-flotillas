@@ -15,6 +15,17 @@ receipt_key_is_placeholder() {
   [[ "${1^^}" == CAMBIA* ]]
 }
 
+validate_age_recipient() {
+  local recipient_value="$1"
+  local age_status=0
+
+  # Fuerza a age a construir un cifrado real sin crear plaintext ni ciphertext
+  # en disco. Su diagnóstico se oculta porque puede repetir el recipient.
+  age --encrypt --recipient "$recipient_value" </dev/null >/dev/null 2>&1 || \
+    age_status=$?
+  return "$age_status"
+}
+
 usage() {
   cat <<'USAGE'
 Uso:
@@ -222,6 +233,26 @@ if [ -n "$backup_required_mount" ]; then
   fi
 fi
 
+# Un despliegue autorizado debe comprobar desde el primero que el recipient
+# configurado puede cifrar. La instalación vacía conserva el bypass del backup,
+# no el de sus precondiciones criptográficas.
+recipient_requirement=""
+if [ "$decision" = "SKIP_VERIFIED_FIRST_DEPLOY" ]; then
+  recipient_requirement="BACKUP_AGE_RECIPIENT es obligatorio incluso en el primer despliegue"
+elif [ "$decision" = "BACKUP_REQUIRED" ]; then
+  [ -n "$backup_dir" ] || die "BACKUP_DIR es obligatorio antes de migrar una instalación existente"
+  recipient_requirement="BACKUP_AGE_RECIPIENT es obligatorio antes de migrar una instalación existente"
+elif [ "$decision" != "BLOCK_FIRST_DEPLOY_CONFIRMATION_REQUIRED" ]; then
+  die "decisión interna desconocida: ${decision}"
+fi
+if [ -n "$recipient_requirement" ]; then
+  [ -n "$recipient" ] || die "$recipient_requirement"
+  command -v age >/dev/null 2>&1 || die "falta el comando requerido: age"
+  if ! validate_age_recipient "$recipient"; then
+    die "BACKUP_AGE_RECIPIENT no es aceptado por age"
+  fi
+fi
+
 case "$decision" in
   SKIP_VERIFIED_FIRST_DEPLOY)
     printf 'AVISO: excepción explícita de primer despliegue aceptada: 0 relaciones, uploads vacío y reports vacío.\n' >&2
@@ -232,8 +263,6 @@ case "$decision" in
     die "instalación totalmente vacía detectada. Para confirmar SOLO este primer despliegue, define ALLOW_FIRST_DEPLOY_WITHOUT_BACKUP=true. En cuanto exista esquema o un archivo, esa bandera deja de ser un bypass."
     ;;
   BACKUP_REQUIRED)
-    [ -n "$backup_dir" ] || die "BACKUP_DIR es obligatorio antes de migrar una instalación existente"
-    [ -n "$recipient" ] || die "BACKUP_AGE_RECIPIENT es obligatorio antes de migrar una instalación existente"
     if ! mkdir -p -- "$backup_dir" || [ ! -w "$backup_dir" ]; then
       die "BACKUP_DIR no puede ser creado/escrito por el usuario de deploy: ${backup_dir}"
     fi
