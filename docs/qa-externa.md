@@ -140,10 +140,13 @@ curl -sS -H "Authorization: Bearer <API KEY>" \
 | `400` | `{"error":"Demasiados archivos","code":"LIMIT_FILE_COUNT"}` | El multipart traía una parte de archivo (p. ej. `imagenes[]` heredado del uploader de `/ingest`) |
 | `405` | `{"error":"Method Not Allowed","code":"METHOD_NOT_ALLOWED"}` | `GET /api/qa-externa/personas` con key válida. Existe a propósito: sin él la petición salía del router y la atrapaban los comodines `app.use('/api', authMiddleware, …)` (`api/src/index.ts:269,274`), cuyo `authMiddleware` de JWT devolvía **401** — que el móvil lee como "API key inválida" y dispara una reconfiguración innecesaria (`qaExternaRouter.ts:193-200`) |
 | `429` | `{"error":"Demasiados registros de personas desde este dispositivo. Intenta más tarde.","code":"RATE_LIMITED"}` | Rate-limit por dispositivo — **cubo propio de `/personas`**, ver abajo |
+| `409` | `{"error":"cliente_registro_id ya registrado en otro programa","code":"CONFLICT"}` | El `cliente_registro_id` ya existe en una fila del **otro programa**. La fila original queda intacta. No reintentar con la misma clave: la app debe generar un UUID nuevo (en la práctica solo ocurre por UUID mal generado o clave reutilizada entre instalaciones de programas distintos) |
 
 **Idempotencia:** reenviar el mismo `cliente_registro_id` **no crea otra fila**; actualiza la
 existente (last-write-wins, sin tocar el propio `cliente_registro_id`) y devuelve el **mismo**
-`registro_id`. La app puede reintentar sin miedo a duplicar contactos.
+`registro_id`. La app puede reintentar sin miedo a duplicar contactos. La idempotencia está
+**particionada por programa** (el que estampa el servidor desde la API key): un dispositivo jamás
+puede actualizar —ni "robar"— una fila del otro programa; ese choque responde `409`.
 
 ### Rate-limit: tres cubos — las CUOTAS DE CAPTURA no se comparten entre `/ingest` y `/personas`
 
