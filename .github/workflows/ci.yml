@@ -75,6 +75,9 @@ jobs:
       - name: Sprint 3 data-job and thumbnail tests
         run: npm run test:sprint3
 
+      - name: Sprint 4 qa_externa personas tests
+        run: npm run test:sprint4
+
       - name: Sprint 3 import benchmark (1k/5k/10k)
         run: npm run benchmark:sprint3
 

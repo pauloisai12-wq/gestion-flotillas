@@ -134,6 +134,13 @@ export function errorHandler(err: Error, req: Request, res: Response, _next: Nex
       LIMIT_FILE_SIZE: 'Archivo demasiado grande',
       LIMIT_FILE_COUNT: 'Demasiados archivos',
       LIMIT_UNEXPECTED_FILE: 'Campo de archivo inesperado',
+      // Límites de los formularios SIN archivos (qa_externa /personas): sin
+      // estas entradas el cliente recibía "Error subiendo archivo" en una
+      // petición donde no hay ningún archivo de por medio.
+      LIMIT_FIELD_COUNT: 'Demasiados campos en el formulario',
+      LIMIT_FIELD_KEY: 'Nombre de campo demasiado largo',
+      LIMIT_FIELD_VALUE: 'Un campo del formulario excede el tamaño permitido',
+      LIMIT_PART_COUNT: 'Demasiadas partes en el formulario',
     };
     res.status(400).json({ error: map[m.code] || 'Error subiendo archivo', code: m.code, requestId });
     return;

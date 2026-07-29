@@ -45,8 +45,20 @@ const envSchema = z.object({
   QA_EXTERNA_DIR: z.string().default('/app/uploads/qa-externa'),
   QA_EXTERNA_MAX_FILE_SIZE_MB: z.coerce.number().int().min(1).max(100).default(12),
   QA_EXTERNA_MAX_FILES: z.coerce.number().int().min(1).max(20).default(5),
+  // Cuota POR DISPOSITIVO de cada captura (cubos independientes: `qae:dev:` para
+  // /ingest y `qae:per:` para /personas). Es la cuota de captura propiamente dicha.
   QA_EXTERNA_RATE_MAX: z.coerce.number().int().min(1).default(60),
   QA_EXTERNA_RATE_WINDOW_SEC: z.coerce.number().int().min(10).default(60),
+  // Cuota del cubo POR IP del montaje /api/qa-externa (`qae:ip:`), que corre
+  // PRE-auth: su papel es frenar el sondeo de API keys, no repartir cuota de
+  // captura. Por eso NO comparte número con QA_EXTERNA_RATE_MAX: si lo hiciera,
+  // un teléfono que vacía sus dos colas al recuperar señal (p. ej. 50 personas +
+  // 20 evidencias en el mismo minuto contra un tope de 60) agotaría con una
+  // captura el presupuesto de la otra y recibiría 429 en la más cara.
+  // Default = 2 × QA_EXTERNA_RATE_MAX (60 → 120): zod no puede derivar el default
+  // de otro campo del mismo objeto, así que va como literal. Si cambias
+  // QA_EXTERNA_RATE_MAX, ajusta este a mano para mantener la proporción.
+  QA_EXTERNA_IP_RATE_MAX: z.coerce.number().int().min(1).default(120),
   // Pepper opcional para HMAC-SHA256 de las API keys (defensa en profundidad).
   QA_EXTERNA_KEY_PEPPER: z.string().optional(),
 

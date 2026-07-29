@@ -5,7 +5,7 @@
 import { z } from 'zod';
 
 // UUID genérico (cualquier versión); el cliente manda v4.
-const UUID_RE =
+export const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export const qaExternaIngestSchema = z.object({

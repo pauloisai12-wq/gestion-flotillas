@@ -40,13 +40,14 @@ import maintenanceTicketRouter from './routes/maintenanceTicketRouter';
 import ticketQuoteRouter from './routes/ticketQuoteRouter';
 import qaExternaRouter from './routes/qaExternaRouter';
 import qaExternaRegistrosRouter from './routes/qaExternaRegistrosRouter';
+import qaExternaPersonasRouter from './routes/qaExternaPersonasRouter';
 
 import { initializeJobs, shutdownJobs } from './jobs';
 import prisma from './lib/prisma';
 import { closeRedis } from './lib/redis';
 import { authMiddleware } from './middlewares/authMiddleware';
 import { deviceAuthMiddleware } from './middlewares/deviceAuthMiddleware';
-import { rateLimit } from './middlewares/rateLimit';
+import { getClientIp, rateLimit } from './middlewares/rateLimit';
 import { RoleGroups } from './middlewares/roleMiddleware';
 import { ensureQaExternaDir } from './lib/qaExternaStorage';
 import { errorHandler } from './middlewares/errorHandler';
@@ -238,9 +239,23 @@ app.use('/api/public', publicRouter);
 // CUALQUIER /api/*, incluido /api/qa-externa/*, y devolvería 401 (token JWT
 // inválido) antes de llegar al guard de dispositivo. Rate-limit por IP
 // (pre-auth, fail-open) para frenar sondeo de keys + guard que envuelve el router.
+//
+// Este cubo NO es cuota de captura: es anti-sondeo de API keys y corre antes de
+// autenticar, así que no puede distinguir /ingest de /personas. De ahí sus dos
+// particularidades:
+//   · cuota propia (QA_EXTERNA_IP_RATE_MAX = 2 × QA_EXTERNA_RATE_MAX), para que
+//     una captura no agote el presupuesto de la otra al vaciarse las dos colas
+//     del teléfono en el mismo minuto;
+//   · clave propia (`rl:qae:ip:<ip>`) en vez del `rl:ip:<ip>` por defecto, que
+//     comparte contador con publicRouter (max 10): sin prefijo propio, el tráfico
+//     de GeoCampo consumía el cubo del portal público y viceversa.
 app.use(
   '/api/qa-externa',
-  rateLimit({ max: env.QA_EXTERNA_RATE_MAX, windowSec: env.QA_EXTERNA_RATE_WINDOW_SEC }),
+  rateLimit({
+    max: env.QA_EXTERNA_IP_RATE_MAX,
+    windowSec: env.QA_EXTERNA_RATE_WINDOW_SEC,
+    keyBuilder: (req) => `qae:ip:${getClientIp(req)}`,
+  }),
   deviceAuthMiddleware,
   qaExternaRouter,
 );
@@ -272,6 +287,10 @@ app.use('/api/ticket-quotes', authMiddleware, ticketQuoteRouter);
 // /api/qa-externa-registros (NO /api/qa-externa/*, que es del router de ingesta
 // con guard por API key montado más arriba).
 app.use('/api/qa-externa-registros', authMiddleware, qaExternaRegistrosRouter);
+// Segunda captura de GeoCampo (registro de personas, sin foto): listado + CSV
+// para el mismo revisor. Mismo motivo que arriba para vivir fuera de
+// /api/qa-externa/*, que es el montaje de ingesta por API key.
+app.use('/api/qa-externa-personas', authMiddleware, qaExternaPersonasRouter);
 
 // ═══════════════════════════════════════════════════
 // 7. Sentry error handler (DEBE ir antes del errorHandler propio)

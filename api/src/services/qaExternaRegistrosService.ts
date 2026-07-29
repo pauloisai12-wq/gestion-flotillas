@@ -53,10 +53,18 @@ export async function list(params: QaRegistrosListQuery) {
   if (params.tipo) where.tipo = params.tipo;
   if (params.programa) where.programa = params.programa;
   if (params.dispositivo) where.dispositivoId = params.dispositivo;
+  // Rango acotado SIEMPRE en UTC y con límite superior EXCLUSIVO, igual que la
+  // exportación (qaExternaRegistrosRouter.ts:135-137). Antes se usaba
+  // `new Date(dateTo + 'T23:59:59')`, que el motor interpreta en la hora LOCAL
+  // del proceso: en un contenedor con TZ distinta de UTC el día pedido se
+  // corría y se perdía o colaba la última hora de capturas. `new Date(dateFrom)`
+  // sí era UTC, pero solo por accidente del formato AAAA-MM-DD.
   if (params.dateFrom || params.dateTo) {
+    const dateToExclusive = params.dateTo ? new Date(`${params.dateTo}T00:00:00.000Z`) : null;
+    if (dateToExclusive) dateToExclusive.setUTCDate(dateToExclusive.getUTCDate() + 1);
     where.capturadoAt = {
-      ...(params.dateFrom ? { gte: new Date(params.dateFrom) } : {}),
-      ...(params.dateTo ? { lte: new Date(params.dateTo + 'T23:59:59') } : {}),
+      ...(params.dateFrom ? { gte: new Date(`${params.dateFrom}T00:00:00.000Z`) } : {}),
+      ...(dateToExclusive ? { lt: dateToExclusive } : {}),
     };
   }
 

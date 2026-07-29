@@ -48,3 +48,16 @@ storage/reports/*
 
 # Logs
 *.log
+
+# Informes internos de auditoría (hallazgos de seguridad; no versionar)
+audit/
+
+# Config local por-desarrollador de herramientas (los agents/*.toml sí se versionan)
+.codex/config.toml
+.semgrep/
+
+# Notas de proceso locales
+flotillas-v2-ingest-prompt.md
+
+# Workspace de ejecución de planes (scratch local)
+.superpowers/

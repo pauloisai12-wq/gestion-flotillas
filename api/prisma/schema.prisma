@@ -871,6 +871,7 @@ model QaExternaDispositivo {
   updatedAt     DateTime          @updatedAt @map("updated_at")
 
   registros QaExternaRegistro[]
+  personas  QaExternaPersona[]
 
   @@index([programa])
   @@map("qa_externa_dispositivos")
@@ -930,4 +931,35 @@ model QaExternaRegistroImagen {
   @@id([registroId, imagenId])
   @@index([imagenId])
   @@map("qa_externa_registro_imagenes")
+}
+
+// Segunda captura de GeoCampo: "registro de personas". A diferencia de
+// QaExternaRegistro NO lleva foto (ni tabla puente de imágenes), solo el
+// contacto (nombre/teléfono) y la ubicación GPS del momento de la captura.
+// `clienteRegistroId` es la clave de idempotencia que manda el cliente: el
+// reenvío del mismo UUID debe devolver la MISMA fila, no crear otra.
+// `programa` y `dispositivoId` los estampa el servidor desde req.device, igual
+// que en QaExternaRegistro; el cliente nunca los envía porque la separación
+// entre programas la garantiza la API key, no el body.
+model QaExternaPersona {
+  id                Int                  @id @default(autoincrement())
+  clienteRegistroId String               @unique @map("cliente_registro_id")
+  dispositivoId     Int                  @map("dispositivo_id")
+  dispositivo       QaExternaDispositivo @relation(fields: [dispositivoId], references: [id])
+  identificadorApp  String               @map("identificador_app")
+  programa          QaExternaPrograma
+  nombre            String
+  telefono          String
+  lat               Float
+  lng               Float
+  accuracy          Float?
+  capturadoAt       DateTime             @map("capturado_at")
+  metadataRaw       String?              @map("metadata_raw") @db.Text
+  createdAt         DateTime             @default(now()) @map("created_at")
+  updatedAt         DateTime             @updatedAt @map("updated_at")
+
+  @@index([dispositivoId])
+  @@index([capturadoAt])
+  @@index([programa])
+  @@map("qa_externa_personas")
 }
