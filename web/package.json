@@ -24,7 +24,7 @@
     "clsx": "^2.1.1",
     "echarts": "^6.0.0",
     "lucide-react": "^1.7.0",
-    "next": "16.2.10",
+    "next": "^16.2.12",
     "radix-ui": "^1.4.3",
     "react": "19.2.4",
     "react-dom": "19.2.4",
@@ -55,6 +55,10 @@
     },
     "webpack-bundle-analyzer": {
       "ws": "^7.5.11"
+    },
+    "next": {
+      "postcss": ">=8.5.18",
+      "sharp": ">=0.35.3"
     }
   }
 }
