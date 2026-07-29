@@ -21,7 +21,9 @@ export default function RevisionLoginPage() {
     setLoading(true);
 
     try {
-      await login(email, password, '/revision');
+      // A la sección, no a /revision: esa ruta ya solo redirige y pasar por ella
+      // añadiría un salto visible justo después de autenticarse.
+      await login(email, password, '/revision/evidencias');
     } catch (err: unknown) {
       const { status, data, code } = getApiError(err);
       const backendMessage = data?.message ?? data?.error;

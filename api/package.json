@@ -13,6 +13,7 @@
     "test:sprint2:unit": "vitest run tests/sprint2",
     "test:sprint2": "npm run test:sprint2:unit && node scripts/test-sprint2-fuel-integrity.js && node scripts/test-sprint2-vehicle-budget.js",
     "test:sprint3": "vitest run tests/sprint3",
+    "test:sprint4": "vitest run tests/sprint4",
     "benchmark:sprint3": "node scripts/benchmark-sprint3-data-jobs.js",
     "bootstrap:admin": "node dist/scripts/bootstrap-admin.js",
     "user:create": "node dist/scripts/create-user.js",

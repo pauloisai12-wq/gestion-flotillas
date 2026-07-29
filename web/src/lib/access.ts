@@ -30,7 +30,10 @@ export function getHomePath(role: UserRole): string {
     case 'WORKSHOP':
       return '/tickets';
     case 'REVISOR_QA':
-      return '/revision';
+      // Directo a la primera sección: /revision solo redirige, y mandarlo ahí
+      // costaría un salto extra visible tras el login. El prefijo '/revision'
+      // de RESTRICTED_PREFIXES sigue cubriendo ambas rutas.
+      return '/revision/evidencias';
     default:
       return '/tickets';
   }

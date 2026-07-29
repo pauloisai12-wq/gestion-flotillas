@@ -56,9 +56,20 @@ api.interceptors.response.use(
 export default api;
 
 // Forma estándar del payload de error que devuelve la API.
+// `details` es lo que arma validateQuery/validateBody a partir de los issues de
+// Zod (api/src/middlewares/validate.ts:10-11) y que el errorHandler adjunta al
+// AppError (api/src/middlewares/errorHandler.ts:48). OJO: el campo `issues` solo
+// aparece cuando un ZodError llega crudo al handler (errorHandler.ts:60), no en
+// los errores de los validadores de borde.
+export interface ApiErrorDetail {
+  field?: string;
+  message: string;
+}
+
 export interface ApiErrorData {
   message?: string;
   error?: string;
+  details?: ApiErrorDetail[];
   retryAfter?: number;
 }
 
