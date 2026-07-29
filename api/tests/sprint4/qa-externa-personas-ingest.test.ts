@@ -21,31 +21,64 @@ import { qaExternaPersonaIngestSchema } from '../../src/validators/qaExternaPers
 
 type Db = Parameters<typeof ingestPersonaWithDeps>[1]['db'];
 
-function fakeDb(upsert: ReturnType<typeof vi.fn>): Db {
-  return { qaExternaPersona: { upsert } } as unknown as Db;
+function fakeDb(parts: {
+  updateMany: ReturnType<typeof vi.fn>;
+  create: ReturnType<typeof vi.fn>;
+  findUnique: ReturnType<typeof vi.fn>;
+}): Db {
+  return { qaExternaPersona: parts } as unknown as Db;
+}
+
+function p2002() {
+  return new Prisma.PrismaClientKnownRequestError('unique violation', {
+    code: 'P2002',
+    clientVersion: 'test',
+  });
 }
 
 /**
- * Prisma falso CON MEMORIA: guarda una fila por clienteRegistroId y reparte ids
- * autoincrementales, como haría el upsert real contra el índice único.
+ * Prisma falso CON MEMORIA: guarda una fila por clienteRegistroId (índice único
+ * real) y reparte ids autoincrementales, replicando la semántica de
+ * updateMany/create/findUnique que usa el servicio.
  *
  * Con un `mockResolvedValue({ id: 42 })` la prueba de idempotencia era
  * tautológica: devolvía 42 aunque el servicio insertara una fila nueva cada vez.
  * Aquí dos claves distintas dan ids distintos y la misma clave da el mismo id,
- * así que una regresión que dejara de deduplicar sí rompe el test.
+ * así que una regresión que dejara de deduplicar sí rompe el test. Y como
+ * updateMany respeta el `where.programa`, también rompe si el servicio vuelve a
+ * permitir la sobrescritura cruzada entre programas.
  */
 function fakeDbConMemoria() {
-  const filas = new Map<string, { id: number }>();
+  type Fila = { id: number; clienteRegistroId: string; programa: string } & Record<
+    string,
+    unknown
+  >;
+  const filas = new Map<string, Fila>();
   let ultimoId = 41;
-  const upsert = vi.fn(async (args: { where: { clienteRegistroId: string } }) => {
-    const clave = args.where.clienteRegistroId;
-    const existente = filas.get(clave);
-    if (existente) return existente; // rama update: conserva el id original
-    const fila = { id: ++ultimoId };
-    filas.set(clave, fila);
-    return fila;
-  });
-  return { db: fakeDb(upsert as unknown as ReturnType<typeof vi.fn>), upsert, filas };
+  const updateMany = vi.fn(
+    async (args: {
+      where: { clienteRegistroId: string; programa: string };
+      data: Record<string, unknown>;
+    }) => {
+      const fila = filas.get(args.where.clienteRegistroId);
+      if (!fila || fila.programa !== args.where.programa) return { count: 0 };
+      Object.assign(fila, args.data);
+      return { count: 1 };
+    },
+  );
+  const create = vi.fn(
+    async (args: { data: { clienteRegistroId: string } & Record<string, unknown> }) => {
+      if (filas.has(args.data.clienteRegistroId)) throw p2002();
+      const fila = { id: ++ultimoId, ...args.data } as Fila;
+      filas.set(args.data.clienteRegistroId, fila);
+      return fila;
+    },
+  );
+  const findUnique = vi.fn(
+    async (args: { where: { clienteRegistroId: string } }) =>
+      filas.get(args.where.clienteRegistroId) ?? null,
+  );
+  return { db: fakeDb({ updateMany, create, findUnique }), updateMany, create, findUnique, filas };
 }
 
 const CLIENTE_ID = '9f1b3c2d-4e5f-4a6b-8c9d-0e1f2a3b4c5d';
@@ -70,7 +103,7 @@ function input(overrides: Partial<IngestPersonaInput> = {}): IngestPersonaInput 
 
 describe('ingestPersonaWithDeps', () => {
   it('reenviar el mismo cliente_registro_id no crea otra fila y devuelve el mismo id', async () => {
-    const { db, upsert, filas } = fakeDbConMemoria();
+    const { db, updateMany, create, filas } = fakeDbConMemoria();
 
     const primera = await ingestPersonaWithDeps(input(), { db });
     const segunda = await ingestPersonaWithDeps(input({ nombre: 'María P.' }), { db });
@@ -85,16 +118,19 @@ describe('ingestPersonaWithDeps', () => {
     expect(segunda.registroId).toBe(primera.registroId);
     expect(otra.registroId).not.toBe(primera.registroId);
     expect(filas.size).toBe(2);
+    expect(create).toHaveBeenCalledTimes(2); // una por clave; el reenvío NO crea
 
-    expect(upsert).toHaveBeenCalledTimes(3);
-    for (const call of upsert.mock.calls.slice(0, 2)) {
-      expect(call[0].where).toEqual({ clienteRegistroId: CLIENTE_ID });
+    // Todo update va acotado a la partición del dispositivo autenticado y
+    // NUNCA reescribe la clave de idempotencia.
+    for (const call of updateMany.mock.calls) {
+      expect(call[0].where).toEqual({
+        clienteRegistroId: call[0].where.clienteRegistroId,
+        programa: 'LX',
+      });
+      expect(call[0].data).not.toHaveProperty('clienteRegistroId');
     }
-    expect(upsert.mock.calls[2][0].where).toEqual({ clienteRegistroId: OTRO_CLIENTE_ID });
-    // El update es last-write-wins pero NUNCA reescribe la clave de idempotencia.
-    expect(upsert.mock.calls[1][0].update).not.toHaveProperty('clienteRegistroId');
-    expect(upsert.mock.calls[1][0].update).toMatchObject({ nombre: 'María P.' });
-    expect(upsert.mock.calls[0][0].create).toMatchObject({
+    expect(filas.get(CLIENTE_ID)).toMatchObject({ nombre: 'María P.' });
+    expect(create.mock.calls[0][0].data).toMatchObject({
       clienteRegistroId: CLIENTE_ID,
       dispositivoId: 3,
       programa: 'LX',
@@ -103,35 +139,76 @@ describe('ingestPersonaWithDeps', () => {
     });
   });
 
-  it('reintenta exactamente una vez ante P2002 y devuelve el resultado del segundo intento', async () => {
-    const upsert = vi
-      .fn()
-      .mockRejectedValueOnce(
-        new Prisma.PrismaClientKnownRequestError('unique violation', {
-          code: 'P2002',
-          clientVersion: 'test',
-        }),
-      )
-      .mockResolvedValueOnce({ id: 77 });
+  it('la misma clave desde el OTRO programa responde 409 y la fila queda intacta', async () => {
+    const { db, filas } = fakeDbConMemoria();
 
-    await expect(ingestPersonaWithDeps(input(), { db: fakeDb(upsert) })).resolves.toEqual({
-      registroId: 77,
+    const original = await ingestPersonaWithDeps(input(), { db }); // programa LX
+
+    await expect(
+      ingestPersonaWithDeps(
+        input({ programa: 'BUFFALO', dispositivoId: 9, nombre: 'Intruso' }),
+        { db },
+      ),
+    ).rejects.toMatchObject({
+      name: 'AppError',
+      statusCode: 409,
+      code: 'CONFLICT',
     });
-    expect(upsert).toHaveBeenCalledTimes(2);
+
+    // La fila original no cambió de partición ni de contenido.
+    expect(filas.size).toBe(1);
+    expect(filas.get(CLIENTE_ID)).toMatchObject({
+      id: original.registroId,
+      programa: 'LX',
+      dispositivoId: 3,
+      nombre: 'María Pérez',
+    });
   });
 
-  it('propaga sin reintentar cualquier error que no sea P2002', async () => {
-    const upsert = vi.fn().mockRejectedValue(
+  it('carrera con la misma clave y el mismo programa: el que pierde el create cae en update', async () => {
+    // updateMany no ve la fila, el create pierde la carrera (P2002) porque la
+    // fila apareció en medio, y el reintento del update ya la encuentra.
+    const updateMany = vi
+      .fn()
+      .mockResolvedValueOnce({ count: 0 })
+      .mockResolvedValueOnce({ count: 1 });
+    const create = vi.fn().mockRejectedValueOnce(p2002());
+    const findUnique = vi.fn().mockResolvedValue({ id: 77 });
+
+    await expect(
+      ingestPersonaWithDeps(input(), { db: fakeDb({ updateMany, create, findUnique }) }),
+    ).resolves.toEqual({ registroId: 77 });
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(updateMany).toHaveBeenCalledTimes(2);
+  });
+
+  it('carrera con la misma clave desde el otro programa: acaba en 409, sin bucle', async () => {
+    const updateMany = vi.fn().mockResolvedValue({ count: 0 });
+    const create = vi.fn().mockRejectedValue(p2002());
+    const findUnique = vi.fn().mockResolvedValue(null);
+
+    await expect(
+      ingestPersonaWithDeps(input(), { db: fakeDb({ updateMany, create, findUnique }) }),
+    ).rejects.toMatchObject({ statusCode: 409, code: 'CONFLICT' });
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(updateMany).toHaveBeenCalledTimes(2); // intento + un único reintento
+  });
+
+  it('propaga sin reintentar cualquier error del create que no sea P2002', async () => {
+    const updateMany = vi.fn().mockResolvedValue({ count: 0 });
+    const create = vi.fn().mockRejectedValue(
       new Prisma.PrismaClientKnownRequestError('fk violation', {
         code: 'P2003',
         clientVersion: 'test',
       }),
     );
+    const findUnique = vi.fn().mockResolvedValue(null);
 
     await expect(
-      ingestPersonaWithDeps(input(), { db: fakeDb(upsert) }),
+      ingestPersonaWithDeps(input(), { db: fakeDb({ updateMany, create, findUnique }) }),
     ).rejects.toMatchObject({ code: 'P2003' });
-    expect(upsert).toHaveBeenCalledTimes(1);
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(updateMany).toHaveBeenCalledTimes(1);
   });
 });
 
