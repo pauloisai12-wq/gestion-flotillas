@@ -44,6 +44,7 @@ export function encuestaCompletaValida(overrides: PayloadEncuesta = {}): Payload
   return {
     idLocal: '3f2504e0-4f89-41d3-9a0c-0305e82c3301',
     folioLocal: 'LX-1042',
+    encuestador: 'María López',
     versionCuestionario: 1,
     estado: 'completada',
     elegibilidad: 'elegible',
@@ -93,6 +94,7 @@ export function encuestaNoElegibleValida(overrides: PayloadEncuesta = {}): Paylo
   return {
     idLocal: '7c9e6679-7425-40de-944b-e07fc1f90ae7',
     folioLocal: 'LX-1043',
+    encuestador: 'María López',
     versionCuestionario: 1,
     estado: 'noElegible',
     elegibilidad: 'noElegible',

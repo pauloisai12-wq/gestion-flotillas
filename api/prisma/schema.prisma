@@ -1018,6 +1018,9 @@ model Encuesta {
   versionCuestionario         Int                  @map("version_cuestionario")
   /// Regex en la app, NO único: dos teléfonos pueden emitir el mismo folio.
   folioLocal                  String?              @map("folio_local")
+  /// Quien levanta la encuesta. NULL en los registros capturados por una
+  /// versión de la app anterior al campo (es opcional en el contrato).
+  encuestador                 String?
   estado                      EncuestaEstado
   elegibilidad                EncuestaElegibilidad
   fechaHoraInicio             DateTime             @map("fecha_hora_inicio")

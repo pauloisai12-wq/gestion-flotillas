@@ -184,6 +184,8 @@ function mapEncuestaToRow(input: IngestEncuestaInput): Prisma.EncuestaUncheckedC
     versionCuestionario: d.versionCuestionario,
     // Ausente ≡ NULL: el folio del talonario es opcional y NO es único.
     folioLocal: d.folioLocal ?? null,
+    // Ausente ≡ NULL: lo mandan las versiones de la app que ya lo capturan.
+    encuestador: d.encuestador ?? null,
     estado: d.estado,
     elegibilidad: d.elegibilidad,
     fechaHoraInicio: d.fechaHoraInicio,

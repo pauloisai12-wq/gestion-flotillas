@@ -68,6 +68,7 @@ function encuestaCompletada(overrides: Partial<EncuestaExportRow> = {}): Encuest
     idRemoto: '7a1d9c22-1f4e-4f2a-9d3b-5c6e7f8a9b01',
     idLocal: '3f2504e0-4f89-41d3-9a0c-0305e82c3301',
     folioLocal: 'LX-1042',
+    encuestador: 'María López',
     recibidoEn: new Date('2026-07-30T10:07:05.000Z'),
     fechaHoraInicio: new Date('2026-07-30T10:00:00.000Z'),
     fechaHoraFinalizacion: new Date('2026-07-30T10:06:40.000Z'),
@@ -118,6 +119,8 @@ function encuestaNoElegible(overrides: Partial<EncuestaExportRow> = {}): Encuest
     idRemoto: '7a1d9c22-1f4e-4f2a-9d3b-5c6e7f8a9b02',
     idLocal: '3f2504e0-4f89-41d3-9a0c-0305e82c3302',
     folioLocal: null,
+    // Capturada por una app anterior al campo: la columna sale vacía.
+    encuestador: null,
     estado: 'noElegible',
     elegibilidad: 'noElegible',
     credencialVigente: 'no',
@@ -224,6 +227,9 @@ describe('GET /api/encuestas/export.csv', () => {
     expect(lineas[2].split(',')).toHaveLength(ENCUESTAS_CSV_HEADERS.length);
     expect(lineas[3]).toBe('');
 
+    // Quien levantó la encuesta, tal como lo tecleó el teléfono.
+    expect(celda(lineas[1], 'Encuestador')).toBe('María López');
+
     // Cada nivel bajo la columna de SU persona, con el orden del catálogo v1.
     expect(celda(lineas[1], 'Conoce lalo_ximenez')).toBe('bien');
     expect(celda(lineas[1], 'Conoce laura_estrada')).toBe('algo');
@@ -260,6 +266,8 @@ describe('GET /api/encuestas/export.csv', () => {
     }
     expect(celda(lineas[2], 'Medios (tipo)')).toBe('');
     expect(celda(lineas[2], 'Medios')).toBe('');
+    // El encuestador que no llegó es celda vacía, no la palabra "null".
+    expect(celda(lineas[2], 'Encuestador')).toBe('');
     expect(celda(lineas[2], 'Partido preferido')).toBe('');
     expect(celda(lineas[2], 'Candidato preferido')).toBe('');
     expect(celda(lineas[2], 'Credencial vigente')).toBe('no');

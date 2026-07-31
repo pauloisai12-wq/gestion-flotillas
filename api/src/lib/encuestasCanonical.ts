@@ -4,11 +4,11 @@
 // idRemoto original) o uno distinto (409, sin sobrescribir).
 //
 // Qué entra al hash: todo lo que el validador dejó pasar — identidad (idLocal,
-// folioLocal), versión del cuestionario, estado/elegibilidad, fechas, duración,
-// respuestas, ubicación, y también `dispositivo{...}` y `versionAplicacion`
-// (el contrato solo excluye lo de abajo; si el equipo móvil confirmara que esos
-// metadatos se estampan al ENVIAR y no al capturar, habría que sacarlos, porque
-// un reintento tras actualizar la app daría 409).
+// folioLocal, encuestador), versión del cuestionario, estado/elegibilidad,
+// fechas, duración, respuestas, ubicación, y también `dispositivo{...}` y
+// `versionAplicacion` (el contrato solo excluye lo de abajo; si el equipo móvil
+// confirmara que esos metadatos se estampan al ENVIAR y no al capturar, habría
+// que sacarlos, porque un reintento tras actualizar la app daría 409).
 //
 // Qué NO entra: el idRemoto que el servidor devolvió y los cuatro campos de la
 // cola de envío del teléfono (estadoSincronizacion, numeroIntentosSincronizacion,
@@ -26,7 +26,7 @@
 //  - conocimientoPorPersona reordenado al orden de PERSONAS_V1 y medios al de
 //    MEDIOS_V1: son conjuntos de respuestas, el orden en que la app los serializa
 //    no es dato;
-//  - folioLocal ausente ≡ null y ubicacion ausente ≡ null.
+//  - folioLocal, encuestador y ubicacion ausentes ≡ null.
 //
 // `v` es la versión del ALGORITMO de canonicalización, no la del cuestionario:
 // si algún día cambia una de estas reglas, subirla evita comparar hashes viejos
@@ -102,6 +102,9 @@ export function canonicalizarEncuestaV1(d: EncuestaV1): string {
     v: VERSION_CANONICA,
     idLocal: d.idLocal,
     folioLocal: d.folioLocal ?? null,
+    // Se sumó SIN subir `v`: el campo entró antes de cualquier despliegue, así
+    // que no existe ni un payloadHash guardado con el que pudiera chocar.
+    encuestador: d.encuestador ?? null,
     versionCuestionario: d.versionCuestionario,
     estado: d.estado,
     elegibilidad: d.elegibilidad,

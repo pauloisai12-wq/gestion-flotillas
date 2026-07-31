@@ -397,6 +397,27 @@ describe('encuestaV1Schema — identidad y números estrictos', () => {
     expect(acepta(encuestaCompletaValida({ folioLocal: null }))).toBe(false);
   });
 
+  it('acepta encuestador y también su AUSENCIA, en las dos ramas', () => {
+    // Es opcional por retrocompatibilidad: las encuestas ya capturadas en los
+    // teléfonos antes de actualizar la app no lo traen.
+    expect(acepta(encuestaCompletaValida())).toBe(true);
+    expect(acepta(encuestaNoElegibleValida())).toBe(true);
+    expect(acepta(sinClaves(encuestaCompletaValida(), 'encuestador'))).toBe(true);
+    expect(acepta(sinClaves(encuestaNoElegibleValida(), 'encuestador'))).toBe(true);
+  });
+
+  it('rechaza encuestador null, vacío, en blanco o de más de 120 caracteres', () => {
+    // Igual que folioLocal: el campo es .optional() y NO .nullable(), así que
+    // "no lo sé" se expresa omitiendo la clave, nunca mandando null.
+    expect(acepta(encuestaCompletaValida({ encuestador: null }))).toBe(false);
+    expect(acepta(encuestaNoElegibleValida({ encuestador: null }))).toBe(false);
+    expect(acepta(encuestaCompletaValida({ encuestador: '' }))).toBe(false);
+    // Se recorta antes de medir, así que solo espacios tampoco cuenta.
+    expect(acepta(encuestaCompletaValida({ encuestador: '   ' }))).toBe(false);
+    expect(acepta(encuestaCompletaValida({ encuestador: 'a'.repeat(120) }))).toBe(true);
+    expect(acepta(encuestaCompletaValida({ encuestador: 'a'.repeat(121) }))).toBe(false);
+  });
+
   it('no coerciona nada: JSON puro exige tipos exactos', () => {
     expect(acepta(conUbicacion({ latitud: '19.432608' }))).toBe(false);
     expect(acepta(conUbicacion({ esValida: 'true' }))).toBe(false);

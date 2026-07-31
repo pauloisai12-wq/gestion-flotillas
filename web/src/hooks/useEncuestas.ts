@@ -20,6 +20,9 @@ export interface Encuesta {
   id: number;
   idRemoto: string;
   folioLocal: string | null;
+  // null = el teléfono no mandó el campo (app anterior a su captura): es
+  // opcional en el contrato de ingesta, igual que folioLocal.
+  encuestador: string | null;
   estado: EncuestaEstado;
   elegibilidad: EncuestaElegibilidad;
   versionCuestionario: number;

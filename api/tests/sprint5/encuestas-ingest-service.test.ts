@@ -251,6 +251,7 @@ describe('ingestEncuestaWithDeps — aplanado a columnas', () => {
       dispositivoId: 1,
       versionCuestionario: 1,
       folioLocal: 'LX-1042',
+      encuestador: 'María López',
       estado: 'completada',
       elegibilidad: 'elegible',
       duracionSegundos: 400,
@@ -326,6 +327,19 @@ describe('ingestEncuestaWithDeps — aplanado a columnas', () => {
     expect(datos.ubicacionPermiso).toBeNull();
     expect(datos.ubicacionServicioActivo).toBeNull();
     expect(datos.ubicacionMotivoNoDisponible).toBeNull();
+  });
+
+  it('el encuestador ausente se guarda como NULL, no como cadena vacía', async () => {
+    // Registro capturado por una app anterior al campo: la columna queda en
+    // NULL y el revisor ve el hueco, no un nombre inventado.
+    const { db, create } = fakeDbConMemoria();
+
+    await ingestEncuestaWithDeps(
+      entrada(sinClaves(encuestaCompletaValida(), 'encuestador')),
+      { db },
+    );
+
+    expect(datosDelCreate(create).encuestador).toBeNull();
   });
 
   it('P5 y P6 se almacenan en el orden del catálogo, no en el del teléfono', async () => {

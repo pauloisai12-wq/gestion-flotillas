@@ -66,6 +66,13 @@ const columns: ColumnDef<Encuesta, unknown>[] = [
     ),
   },
   {
+    accessorKey: 'encuestador',
+    header: 'Encuestador',
+    // Quien levantó la encuesta. Opcional en el contrato: las capturadas por
+    // una app anterior al campo llegan en null.
+    cell: ({ row }) => row.original.encuestador ?? '—',
+  },
+  {
     accessorKey: 'estado',
     header: 'Estado',
     cell: ({ row }) =>

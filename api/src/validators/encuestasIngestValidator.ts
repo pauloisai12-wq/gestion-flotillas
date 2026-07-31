@@ -304,6 +304,17 @@ const camposComunes = {
     .string()
     .regex(FOLIO_LOCAL_RE, 'folioLocal debe tener la forma LX-<número>')
     .optional(),
+  // Nombre de quien levanta la encuesta. OPCIONAL por retrocompatibilidad: los
+  // registros capturados antes de actualizar la app no lo traen, igual que pasa
+  // con `ubicacion`. Y como allí, AUSENTE se acepta pero `null` NO: si el dato
+  // no se conoce, se omite la clave. No se usa textoCorto() porque su mensaje
+  // ("es obligatorio") mentiría sobre un campo que sí se puede omitir.
+  encuestador: z
+    .string({ error: 'encuestador debe ser texto' })
+    .trim()
+    .min(1, 'encuestador no puede ir vacío: si no se conoce, omite la clave')
+    .max(120, 'encuestador no puede exceder 120 caracteres')
+    .optional(),
   versionCuestionario: z.literal(1),
   fechaHoraInicio: fechaIso('fechaHoraInicio'),
   fechaHoraFinalizacion: fechaIso('fechaHoraFinalizacion'),

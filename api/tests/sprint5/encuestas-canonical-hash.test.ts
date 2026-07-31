@@ -50,6 +50,7 @@ describe('canonicalizarEncuestaV1', () => {
       'v',
       'idLocal',
       'folioLocal',
+      'encuestador',
       'versionCuestionario',
       'estado',
       'elegibilidad',
@@ -76,11 +77,12 @@ describe('canonicalizarEncuestaV1', () => {
     }
   });
 
-  it('normaliza folioLocal ausente y ubicacion ausente a null', () => {
+  it('normaliza folioLocal, encuestador y ubicacion ausentes a null', () => {
     const objeto = JSON.parse(
-      canonico(sinClaves(encuestaCompletaValida(), 'folioLocal', 'ubicacion')),
+      canonico(sinClaves(encuestaCompletaValida(), 'folioLocal', 'encuestador', 'ubicacion')),
     ) as Record<string, unknown>;
     expect(objeto.folioLocal).toBeNull();
+    expect(objeto.encuestador).toBeNull();
     expect(objeto.ubicacion).toBeNull();
   });
 
@@ -148,6 +150,16 @@ describe('hashEncuestaV1 — lo que NO debe cambiar el hash', () => {
       hash(encuestaCompletaValida({ folioLocal: undefined })),
     );
   });
+
+  it('es estable entre dos envíos que omiten encuestador', () => {
+    // Mismo caso que folioLocal: la app que todavía no captura el campo lo
+    // omite en el primer envío y en el reintento, y las dos veces canoniza a
+    // null ⇒ 200 idempotente, no 409. (Ausente vs ausente: `null` explícito no
+    // es comparable porque el validador lo rechaza antes de llegar aquí.)
+    const sinEncuestador = sinClaves(encuestaCompletaValida(), 'encuestador');
+    expect(hash(sinEncuestador)).toBe(hash(sinClaves(encuestaCompletaValida(), 'encuestador')));
+    expect(hash(sinEncuestador)).toBe(hash(encuestaCompletaValida({ encuestador: undefined })));
+  });
 });
 
 describe('hashEncuestaV1 — lo que SÍ debe cambiar el hash', () => {
@@ -159,6 +171,9 @@ describe('hashEncuestaV1 — lo que SÍ debe cambiar el hash', () => {
 
   it.each<[string, PayloadEncuesta]>([
     ['folioLocal', { folioLocal: 'LX-9999' }],
+    // Quién levantó la encuesta es contenido, no transporte: por eso hay que
+    // capturarlo con el registro y no estamparlo al enviar.
+    ['encuestador', { encuestador: 'Juan Pérez' }],
     // 420 s sigue dentro de la tolerancia contra el intervalo real (400 s), así
     // que el payload es válido: lo que cambia es el contenido, no su validez.
     ['duracionSegundos', { duracionSegundos: 420 }],

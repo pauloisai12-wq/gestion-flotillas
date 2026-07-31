@@ -45,11 +45,12 @@ function crearApp(role?: UserRole) {
 
 const RUTA = '/api/encuestas';
 
-/** Las 13 claves del EncuestaDto del contrato: ni una más. */
+/** Las 14 claves del EncuestaDto del contrato: ni una más. */
 const CLAVES_DTO = [
   'id',
   'idRemoto',
   'folioLocal',
+  'encuestador',
   'estado',
   'elegibilidad',
   'versionCuestionario',
@@ -67,6 +68,7 @@ function encuesta(overrides: Partial<EncuestaDto> = {}): EncuestaDto {
     id: 9,
     idRemoto: '7a1d9c22-1f4e-4f2a-9d3b-5c6e7f8a9b01',
     folioLocal: 'LX-1042',
+    encuestador: 'María López',
     estado: 'completada',
     elegibilidad: 'elegible',
     versionCuestionario: 1,
@@ -96,6 +98,7 @@ describe('GET /api/encuestas — listado', () => {
     expect(Object.keys(response.body.data[0]).sort()).toEqual([...CLAVES_DTO].sort());
     expect(response.body.data[0]).toMatchObject({
       idRemoto: '7a1d9c22-1f4e-4f2a-9d3b-5c6e7f8a9b01',
+      encuestador: 'María López',
       estado: 'completada',
       // Las fechas viajan serializadas en UTC.
       fechaHoraFinalizacion: '2026-07-30T10:06:40.000Z',

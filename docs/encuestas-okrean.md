@@ -88,9 +88,10 @@ Parámetros de consulta:
 | `dispositivo` | opcional | opcional | Texto: coincide contra el `identificador` del dispositivo registrado |
 | `dateFrom` / `dateTo` | opcional | **obligatorios** | `AAAA-MM-DD` sobre `fechaHoraFinalizacion`. Día civil completo en **UTC** con **tope superior exclusivo** (`dateTo` + 1 día). En exportación: `dateTo ≥ dateFrom` y rango máximo **366 días** |
 
-Cada elemento de `data` (`EncuestaDto`): `id`, `idRemoto`, `folioLocal`, `estado`, `elegibilidad`,
-`versionCuestionario`, `partidoPreferido`, `candidatoPreferido`, `duracionSegundos`,
-`fechaHoraFinalizacion`, `recibidoEn`, `ubicacionDisponible` y `dispositivo: { id, identificador }`.
+Cada elemento de `data` (`EncuestaDto`): `id`, `idRemoto`, `folioLocal`, `encuestador`, `estado`,
+`elegibilidad`, `versionCuestionario`, `partidoPreferido`, `candidatoPreferido`,
+`duracionSegundos`, `fechaHoraFinalizacion`, `recibidoEn`, `ubicacionDisponible` y
+`dispositivo: { id, identificador }`.
 El listado **no expone** `payloadRaw`, `payloadHash`, las coordenadas ni los JSON de respuestas: la
 pantalla es un índice, el detalle fino sale por el CSV.
 
@@ -114,6 +115,7 @@ números**: `"duracionSegundos": "397"` es un `422`, no un 397.
 |---|---|---|---|
 | `idLocal` | string UUID | sí | **Clave de idempotencia** (UNIQUE global, no por dispositivo). Estable entre reintentos, jamás reutilizado |
 | `folioLocal` | string | **no** | Folio de papel. Formato `LX-<dígitos>`. **No es único**: dos teléfonos pueden emitir el mismo folio y los dos se aceptan |
+| `encuestador` | string | **no** | Nombre de quien levanta la encuesta. Texto no vacío, máx. 120 caracteres (se recorta el espacio sobrante). Va en la **raíz**, no dentro de `respuestas`. **Entra al hash canónico** |
 | `versionCuestionario` | entero | sí | Hoy solo `1`. Otro entero → `422 UNSUPPORTED_VERSION`; algo que no sea entero positivo → `422 VALIDATION_ERROR` |
 | `estado` | `completada` \| `noElegible` | sí | Discrimina la rama; decide qué campos son obligatorios y cuáles están prohibidos |
 | `elegibilidad` | `elegible` \| `noElegible` | sí | Atado a `estado`: `completada`⇒`elegible`, `noElegible`⇒`noElegible`. Cualquier otra combinación es `422` |
@@ -128,6 +130,16 @@ números**: `"duracionSegundos": "397"` es un `422`, no un 397.
 > ⚠️ **P1–P8 no viven en la raíz del payload.** Van dentro del objeto `respuestas`
 > (`"respuestas": { "credencialVigente": "si", … }`). Mandarlas sueltas en la raíz es `422`: el
 > schema exige `respuestas` y descarta lo que sobra.
+
+> ⚠️ **`encuestador`: si no se conoce, se OMITE la clave — no se manda `null`.** El campo es
+> opcional (`.optional()`, no `.nullable()`) para que las encuestas ya capturadas en los teléfonos
+> antes de actualizar la app se sigan aceptando, exactamente igual que el bloque `ubicacion`. Un
+> `"encuestador": null` es `422`, y un `""` también.
+>
+> Además **entra al hash de idempotencia**, así que hay que capturarlo **con el registro** y no
+> estamparlo en el momento de enviar: si el valor cambiara entre el primer envío y el reintento, el
+> segundo daría `409` en vez de `200`. Es el mismo cuidado que ya piden `dispositivo{…}` y
+> `versionAplicacion`.
 
 > ⚠️ **Manda siempre el sufijo `Z` en las fechas.** La validación es `Date.parse`, y una cadena ISO
 > de fecha **y hora** sin designador de zona la interpreta el estándar en la hora local del proceso.
@@ -311,7 +323,8 @@ Dos mecanismos, uno encima del otro:
 2. **Hash canónico SHA-256** del contenido sustantivo (`payload_hash`), que decide si el segundo
    envío es "el mismo registro" o "otro registro con la misma clave".
 
-**Qué entra al hash:** todo lo sustantivo, incluidos `dispositivo{…}` y `versionAplicacion`.
+**Qué entra al hash:** todo lo sustantivo, incluidos `encuestador`, `dispositivo{…}` y
+`versionAplicacion`.
 **Qué queda fuera:** el `idRemoto` que mande el cliente y los cuatro campos de sincronización
 (`estadoSincronizacion`, `numeroIntentosSincronizacion`, `fechaUltimoIntento`,
 `fechaSincronizacion`).
@@ -320,6 +333,7 @@ Antes de hashear se **normaliza**, para que reenvíos equivalentes den el mismo 
 
 - fechas a ISO-8601 UTC (`2026-07-30T16:18:41Z`, `…+00:00` y `…16:18:41.000Z` son la misma);
 - `folioLocal` ausente ≡ `null`;
+- `encuestador` ausente ≡ `null`;
 - `ubicacion` ausente ≡ `null`;
 - `conocimientoPorPersona` reordenado al orden del catálogo de personas y `medios` al orden del
   catálogo de medios (el orden en que el teléfono arma los arrays no es información);
@@ -327,7 +341,9 @@ Antes de hashear se **normaliza**, para que reenvíos equivalentes den el mismo 
 
 La forma canónica lleva un campo `v` con la versión del **algoritmo** de canonicalización (no la del
 cuestionario): si alguna de estas reglas cambia, subirlo evita comparar hashes viejos contra nuevos
-como si fueran del mismo esquema (`api/src/lib/encuestasCanonical.ts`).
+como si fueran del mismo esquema (`api/src/lib/encuestasCanonical.ts`). Sigue en `1` pese a la
+entrada de `encuestador`: el campo se añadió **antes de cualquier despliegue**, así que no existía
+ni un solo `payload_hash` guardado con el que pudiera chocar.
 
 **El flujo:**
 
@@ -383,6 +399,7 @@ curl -sS -i -X POST https://qa.aztechcomposites.com/api/v1/encuestas \
   -d '{
   "idLocal": "7f9c2a10-4d3b-4a7e-9f21-0c8b5d6e1a44",
   "folioLocal": "LX-001248",
+  "encuestador": "María López",
   "versionCuestionario": 1,
   "estado": "completada",
   "elegibilidad": "elegible",
@@ -454,6 +471,7 @@ curl -sS -i -X POST https://qa.aztechcomposites.com/api/v1/encuestas \
   -d '{
   "idLocal": "b2d4e6f8-1a3c-4d5e-8f90-a1b2c3d4e5f6",
   "folioLocal": "LX-001249",
+  "encuestador": "María López",
   "versionCuestionario": 1,
   "estado": "noElegible",
   "elegibilidad": "noElegible",
@@ -548,19 +566,19 @@ staging está en `docs/qa-externa.md`.
 Excel en Windows no rompa los acentos) y saltos `CRLF`. Nombre del archivo:
 `encuestas-<estado|todas>-<dateFrom>_<dateTo>.csv`.
 
-**38 columnas**, en este orden (el rótulo y el orden exactos los fija `ENCUESTAS_CSV_HEADERS` en
+**40 columnas**, en este orden (el rótulo y el orden exactos los fija `ENCUESTAS_CSV_HEADERS` en
 `api/src/services/encuestasRevisionService.ts`):
 
 | Bloque | Columnas |
 |---|---|
-| Identidad | Folio local · ID remoto · ID local |
+| Identidad | ID remoto · ID local · Folio · Encuestador (vacío si el teléfono no lo mandó) |
 | Tiempos | Recibido (UTC) · Inicio (UTC) · Finalización (UTC) · Duración (s) |
-| Clasificación | Estado · Versión cuestionario |
+| Clasificación | Estado · Elegibilidad · Versión cuestionario |
 | P1–P4 | Credencial vigente · Rango de edad · Género · Partido preferido |
 | P5 (pivoteada) | 7 columnas `Conoce <persona>`, en el orden del catálogo de personas. **Vacías** en las encuestas `noElegible` |
 | P6 | Medios (tipo) · Medios (la lista unida con `;`) |
 | P7–P8 | Mayor personalidad · Candidato preferido |
-| Ubicación | Disponible · Latitud · Longitud · Precisión (m) · Capturada (UTC) · Válida · Permiso · Servicio activo · Motivo sin ubicación |
+| Ubicación | Disponible · Latitud · Longitud · Precisión (m) · Válida · Capturada (UTC) · Permiso · Servicio activo · Motivo sin ubicación |
 | Dispositivo | Plataforma · Modelo · Versión del sistema · Versión de la app · Dispositivo (identificador de la API key) |
 
 Las fechas salen en **ISO UTC** (igual que se persisten: la hora local del revisor no debe cambiar
@@ -570,10 +588,10 @@ el contenido del archivo) y los booleanos como `si` / `no` / celda vacía.
 interna.
 
 Las celdas de **texto** que empiezan por `=`, `+`, `-`, `@`, TAB o CR salen precedidas de un
-apóstrofo — la marca de "esto es texto" de Excel. No es cosmética: el modelo del teléfono, el folio
-y la versión de la app son **texto libre que manda el dispositivo**, y una celda `=HYPERLINK(...)`
-se ejecutaría en la máquina del revisor al abrir el archivo. Las columnas numéricas quedan exentas
-para no romper latitud/longitud/precisión.
+apóstrofo — la marca de "esto es texto" de Excel. No es cosmética: el modelo del teléfono, el folio,
+el encuestador y la versión de la app son **texto libre que manda el dispositivo**, y una celda
+`=HYPERLINK(...)` se ejecutaría en la máquina del revisor al abrir el archivo. Las columnas
+numéricas quedan exentas para no romper latitud/longitud/precisión.
 
 **Tope duro de 50 000 filas** por descarga: si el filtro da más, el CSV se corta ahí y **aun así
 responde `200`**. Como el orden de exportación es por `id` ascendente (el cursor que permite leer por
@@ -600,6 +618,7 @@ el log y el archivo se cierra truncado.
 | `payload_hash` | `text` | servidor | SHA-256 canónico del contenido sustantivo. **No exportable** |
 | `version_cuestionario` | `integer` | cliente (validado) | Hoy siempre `1` |
 | `folio_local` | `text` NULL | cliente (validado) | Folio de papel `LX-<dígitos>`. **No único** |
+| `encuestador` | `text` NULL | cliente (validado) | Nombre de quien levanta la encuesta (máx. 120). **Opcional**: `NULL` si la app no lo mandó. **Texto libre** — el CSV lo neutraliza contra fórmulas. Entra al hash |
 | `estado` | enum `EncuestaEstado` | cliente (validado) | `completada` \| `noElegible` |
 | `elegibilidad` | enum `EncuestaElegibilidad` | cliente (validado) | `elegible` \| `noElegible`, atada a `estado` |
 | `fecha_hora_inicio` | `timestamp` | cliente (validado) | Inicio de la entrevista, según el reloj del teléfono |
