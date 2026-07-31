@@ -515,8 +515,14 @@ Cada teléfono lleva su propia API key. Se emiten en el servidor, con el stack y
 
 ```bash
 export COMPOSE="docker compose -p flotillas -f docker-compose.yml -f docker-compose.public.yml"
-$COMPOSE run --rm -e DEVICE_NAME="encuestador-01" api npm run encuestas:device:register
+$COMPOSE run --rm --no-deps -e DEVICE_NAME="encuestador-01" api npm run encuestas:device:register
 ```
+
+> El `--no-deps` no es opcional en el perfil público: sin él, `docker compose run` intenta
+> levantar la cadena de dependencias y `storage-init` aborta con exit 78 (guard
+> `FLOTILLAS_PREDEPLOY_GUARD`, `docker-compose.public.yml:40-43`, que exige pasar por
+> `./deploy-public.sh` con backup previo). Con `--no-deps` el CLI solo se conecta a la red del
+> stack ya levantado.
 
 > ⚠️ **La API key se imprime UNA SOLA VEZ.** El servidor guarda únicamente su hash SHA-256
 > (`api/src/lib/encuestasKeyHash.ts`), así que no hay forma de recuperarla después: si se pierde, se
@@ -533,9 +539,9 @@ Revocar (el dispositivo queda `activo=false` y su key responde `401`, sin borrar
 recibidas):
 
 ```bash
-$COMPOSE run --rm -e DEVICE_ID=3 api npm run encuestas:device:revoke
+$COMPOSE run --rm --no-deps -e DEVICE_ID=3 api npm run encuestas:device:revoke
 # o por nombre:
-$COMPOSE run --rm -e DEVICE_NAME="encuestador-01" api npm run encuestas:device:revoke
+$COMPOSE run --rm --no-deps -e DEVICE_NAME="encuestador-01" api npm run encuestas:device:revoke
 ```
 
 Estos dispositivos son **propios de Encuestas Okrean**: viven en `encuestas_dispositivos`, y una key
@@ -690,16 +696,20 @@ un secreto obligatorio, así que `env.ts` no aborta si faltan. Es el mismo crite
 
 ### Migración
 
-La API **no migra sola**. Antes de servir tráfico, siempre:
+La API **no migra sola**. En el VPS público la vía canónica es `./deploy-public.sh`: su servicio
+one-shot `migrate` aplica `prisma migrate deploy` antes de `api`/`web`
+(`condition: service_completed_successfully`) y es el único camino que pasa el guard
+`FLOTILLAS_PREDEPLOY_GUARD` (un `docker compose run`/`up` manual aborta con exit 78 a propósito:
+el script hace backup antes de tocar el esquema). Si hiciera falta correrla a mano con el stack
+ya levantado:
 
 ```bash
 export COMPOSE="docker compose -p flotillas -f docker-compose.yml -f docker-compose.public.yml"
-$COMPOSE run --rm api npx prisma migrate deploy
+$COMPOSE run --rm --no-deps api npx prisma migrate deploy
 ```
 
-O, si el perfil tiene el servicio one-shot `migrate`, dejar que corra antes de `api`/`web`
-(`condition: service_completed_successfully`). La migración de este módulo es **aditiva pura**:
-2 enums + 2 tablas + índices + FK; no toca nada existente.
+La migración de este módulo es **aditiva pura**: 2 enums + 2 tablas + índices + FK (+ la columna
+`encuestador`); no toca nada existente.
 
 ### Pruebas
 

@@ -266,8 +266,12 @@ equipo móvil quiera, puede migrar a `/ping` con un cambio de una línea
 ## Alta de un dispositivo (operador)
 ```bash
 export COMPOSE="docker compose -p flotillas -f docker-compose.yml -f docker-compose.staging.yml"
-$COMPOSE run --rm -e DEVICE_NAME="camara-zona-norte" api npm run qa:device:register
+$COMPOSE run --rm --no-deps -e DEVICE_NAME="camara-zona-norte" api npm run qa:device:register
 ```
+
+> `--no-deps` importa sobre todo en el perfil **público** (`docker-compose.public.yml`): sin él,
+> `docker compose run` arranca las dependencias y `storage-init` aborta con exit 78 (guard que
+> exige pasar por `./deploy-public.sh`). El stack debe estar ya levantado.
 Imprime la API key **una sola vez** (se guarda solo su hash SHA-256). Cópiala y configúrala en la
 app como `Authorization: Bearer <API KEY>`. La **misma** key habilita `/ingest` y `/personas`: el
 registro de personas no tiene alta ni credencial aparte, y el `programa` del dispositivo
@@ -275,9 +279,9 @@ registro de personas no tiene alta ni credencial aparte, y el `programa` del dis
 
 Revocar:
 ```bash
-$COMPOSE run --rm -e DEVICE_ID=3 api npm run qa:device:revoke
+$COMPOSE run --rm --no-deps -e DEVICE_ID=3 api npm run qa:device:revoke
 # o por nombre:
-$COMPOSE run --rm -e DEVICE_NAME="camara-zona-norte" api npm run qa:device:revoke
+$COMPOSE run --rm --no-deps -e DEVICE_NAME="camara-zona-norte" api npm run qa:device:revoke
 ```
 
 (Opcional) Para HMAC en lugar de SHA-256 plano, define `QA_EXTERNA_KEY_PEPPER` en el `.env` de la
