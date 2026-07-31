@@ -11,12 +11,14 @@ import { useEffect } from 'react';
 import { getHomePath } from '@/lib/access';
 import { Button } from '@/components/ui/button';
 
-// Secciones del portal. Son dos capturas distintas de la misma app de campo
-// (evidencia con foto y registro de personas sin foto), así que se navegan como
-// pestañas y no como filtros de una sola tabla.
+// Secciones del portal. Las dos primeras son capturas distintas de la misma app
+// de campo (evidencia con foto y registro de personas sin foto) y la tercera es
+// otra app (Encuestas Okrean), con datos completamente separados: se navegan
+// como pestañas y no como filtros de una sola tabla.
 const NAV_ITEMS: { href: string; label: string }[] = [
   { href: '/revision/evidencias', label: 'Evidencias de campo' },
   { href: '/revision/personas', label: 'Registro de personas' },
+  { href: '/revision/encuestas', label: 'Encuestas' },
 ];
 
 export default function RevisionLayout({

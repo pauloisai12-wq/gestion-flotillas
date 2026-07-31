@@ -41,12 +41,15 @@ import ticketQuoteRouter from './routes/ticketQuoteRouter';
 import qaExternaRouter from './routes/qaExternaRouter';
 import qaExternaRegistrosRouter from './routes/qaExternaRegistrosRouter';
 import qaExternaPersonasRouter from './routes/qaExternaPersonasRouter';
+import encuestasIngestRouter from './routes/encuestasIngestRouter';
+import encuestasRevisionRouter from './routes/encuestasRevisionRouter';
 
 import { initializeJobs, shutdownJobs } from './jobs';
 import prisma from './lib/prisma';
 import { closeRedis } from './lib/redis';
 import { authMiddleware } from './middlewares/authMiddleware';
 import { deviceAuthMiddleware } from './middlewares/deviceAuthMiddleware';
+import { encuestasDeviceAuthMiddleware } from './middlewares/encuestasDeviceAuthMiddleware';
 import { getClientIp, rateLimit } from './middlewares/rateLimit';
 import { RoleGroups } from './middlewares/roleMiddleware';
 import { ensureQaExternaDir } from './lib/qaExternaStorage';
@@ -146,6 +149,13 @@ app.use(
 // ═══════════════════════════════════════════════════
 // 4. Parsers + logging
 // ═══════════════════════════════════════════════════
+// La ingesta de encuestas acota su cuerpo a 256 KB (los payloads legítimos
+// pesan ~2-4 KB). DEBE ir ANTES del parser global: body-parser marca `req._body`
+// al terminar, y el de 2 MB se salta cualquier request ya parseado. Así el
+// exceso corta el stream con un 413 real —también con Transfer-Encoding
+// chunked, donde no hay Content-Length que mirar— en vez de acumular 2 MB por
+// petición en un contenedor que comparte hardware con el SAS.
+app.use('/api/v1/encuestas', express.json({ limit: '256kb' }));
 app.use(express.json({ limit: '2mb' }));
 app.use(httpLoggerMiddleware);
 
@@ -261,6 +271,27 @@ app.use(
 );
 
 // ═══════════════════════════════════════════════════
+// 5.ter RUTA DE DISPOSITIVO (encuestas Okrean) — auth por API key, NO JWT
+// ═══════════════════════════════════════════════════
+// Mismo razonamiento que el bloque 5.bis de qa_externa: va ANTES de las rutas
+// protegidas porque los comodines `app.use('/api', authMiddleware, …)` de abajo
+// atrapan CUALQUIER /api/* y devolverían 401 antes del guard de dispositivo; y
+// lleva cubo de rate-limit por IP propio (`rl:enc:ip:<ip>`, pre-auth,
+// fail-open) para no compartir contador con el portal público ni con GeoCampo.
+// El padrón de dispositivos es independiente del de qa_externa (tabla y pepper
+// propios), así que también lo es el guard.
+app.use(
+  '/api/v1/encuestas',
+  rateLimit({
+    max: env.ENCUESTAS_IP_RATE_MAX,
+    windowSec: env.ENCUESTAS_RATE_WINDOW_SEC,
+    keyBuilder: (req) => `enc:ip:${getClientIp(req)}`,
+  }),
+  encuestasDeviceAuthMiddleware,
+  encuestasIngestRouter,
+);
+
+// ═══════════════════════════════════════════════════
 // 6. RUTAS PROTEGIDAS (JWT)
 // ═══════════════════════════════════════════════════
 app.use('/api/vehicle-types', authMiddleware, vehicleTypeRouter);
@@ -291,6 +322,11 @@ app.use('/api/qa-externa-registros', authMiddleware, qaExternaRegistrosRouter);
 // para el mismo revisor. Mismo motivo que arriba para vivir fuera de
 // /api/qa-externa/*, que es el montaje de ingesta por API key.
 app.use('/api/qa-externa-personas', authMiddleware, qaExternaPersonasRouter);
+// Lado REVISOR_QA de Encuestas Okrean (listado + CSV), con JWT. Vive fuera de
+// /api/v1/encuestas/*, que es el montaje de INGESTA con guard por API key: son
+// dos audiencias distintas (teléfono vs. navegador) y no deben compartir ni
+// auth ni rate-limit.
+app.use('/api/encuestas', authMiddleware, encuestasRevisionRouter);
 
 // ═══════════════════════════════════════════════════
 // 7. Sentry error handler (DEBE ir antes del errorHandler propio)

@@ -1,0 +1,125 @@
+// Canonicalización y hash del contenido de una encuesta v1. El hash es la mitad
+// sustantiva de la idempotencia: el UNIQUE de idLocal decide si la fila ya
+// existe, y este hash decide si el reenvío trae el MISMO contenido (200 con el
+// idRemoto original) o uno distinto (409, sin sobrescribir).
+//
+// Qué entra al hash: todo lo que el validador dejó pasar — identidad (idLocal,
+// folioLocal), versión del cuestionario, estado/elegibilidad, fechas, duración,
+// respuestas, ubicación, y también `dispositivo{...}` y `versionAplicacion`
+// (el contrato solo excluye lo de abajo; si el equipo móvil confirmara que esos
+// metadatos se estampan al ENVIAR y no al capturar, habría que sacarlos, porque
+// un reintento tras actualizar la app daría 409).
+//
+// Qué NO entra: el idRemoto que el servidor devolvió y los cuatro campos de la
+// cola de envío del teléfono (estadoSincronizacion, numeroIntentosSincronizacion,
+// fechaUltimoIntento, fechaSincronizacion). Ni siquiera llegan hasta aquí: el
+// schema no los declara y zod los estripa. Describen el transporte, no la
+// encuesta, y cambian entre el primer envío y el reintento.
+//
+// Normalizaciones, todas para que dos envíos del MISMO contenido no den hashes
+// distintos por detalles de serialización del teléfono:
+//  - orden de claves fijo POR CONSTRUCCIÓN (el objeto se reconstruye literal;
+//    JSON.stringify respeta el orden de inserción), así que no hace falta
+//    ordenar claves ni depender de cómo llegó el body;
+//  - fechas por toISOString(): 'Z', '+00:00' y los milisegundos explícitos son
+//    el mismo instante escrito de tres formas;
+//  - conocimientoPorPersona reordenado al orden de PERSONAS_V1 y medios al de
+//    MEDIOS_V1: son conjuntos de respuestas, el orden en que la app los serializa
+//    no es dato;
+//  - folioLocal ausente ≡ null y ubicacion ausente ≡ null.
+//
+// `v` es la versión del ALGORITMO de canonicalización, no la del cuestionario:
+// si algún día cambia una de estas reglas, subirla evita comparar hashes viejos
+// contra nuevos como si fueran del mismo esquema.
+
+import { createHash } from 'crypto';
+import {
+  MEDIOS_V1,
+  PERSONAS_V1,
+  type EncuestaV1,
+} from '../validators/encuestasIngestValidator';
+
+const VERSION_CANONICA = 1;
+
+function respuestasCanonicas(d: EncuestaV1) {
+  if (d.estado === 'noElegible') {
+    // P2–P8 no existen en esta rama: el bloque es fijo y siempre el mismo.
+    return {
+      credencialVigente: d.respuestas.credencialVigente,
+      conocimientoPorPersona: [] as const,
+    };
+  }
+  const r = d.respuestas;
+  // El validador garantiza las 7 personas del catálogo sin repetir, así que este
+  // índice es total y el .get() de abajo nunca queda en undefined.
+  const nivelPorPersona = new Map(
+    r.conocimientoPorPersona.map((fila) => [fila.persona, fila.nivel] as const),
+  );
+  const medios = r.mediosConocimiento;
+  return {
+    credencialVigente: r.credencialVigente,
+    rangoEdad: r.rangoEdad,
+    genero: r.genero,
+    partidoPreferido: r.partidoPreferido,
+    conocimientoPorPersona: PERSONAS_V1.map((persona) => ({
+      persona,
+      nivel: nivelPorPersona.get(persona)!,
+    })),
+    mediosConocimiento:
+      medios.tipo === 'respondida'
+        ? { tipo: medios.tipo, medios: MEDIOS_V1.filter((m) => medios.medios.includes(m)) }
+        : { tipo: medios.tipo },
+    mayorPersonalidad: r.mayorPersonalidad,
+    candidatoPreferido: r.candidatoPreferido,
+  };
+}
+
+function ubicacionCanonica(u: EncuestaV1['ubicacion']) {
+  if (!u) return null;
+  if (u.disponible) {
+    return {
+      disponible: u.disponible,
+      latitud: u.latitud,
+      longitud: u.longitud,
+      precisionMetros: u.precisionMetros,
+      fechaHoraCaptura: u.fechaHoraCaptura.toISOString(),
+      permiso: u.permiso,
+      servicioActivo: u.servicioActivo,
+      esValida: u.esValida,
+    };
+  }
+  return {
+    disponible: u.disponible,
+    permiso: u.permiso,
+    servicioActivo: u.servicioActivo,
+    motivoNoDisponible: u.motivoNoDisponible,
+  };
+}
+
+/** Representación estable del contenido sustantivo de una encuesta ya validada. */
+export function canonicalizarEncuestaV1(d: EncuestaV1): string {
+  return JSON.stringify({
+    v: VERSION_CANONICA,
+    idLocal: d.idLocal,
+    folioLocal: d.folioLocal ?? null,
+    versionCuestionario: d.versionCuestionario,
+    estado: d.estado,
+    elegibilidad: d.elegibilidad,
+    fechaHoraInicio: d.fechaHoraInicio.toISOString(),
+    fechaHoraFinalizacion: d.fechaHoraFinalizacion.toISOString(),
+    duracionSegundos: d.duracionSegundos,
+    respuestas: respuestasCanonicas(d),
+    ubicacion: ubicacionCanonica(d.ubicacion),
+    dispositivo: {
+      plataforma: d.dispositivo.plataforma,
+      modelo: d.dispositivo.modelo,
+      versionSistema: d.dispositivo.versionSistema,
+    },
+    versionAplicacion: d.versionAplicacion,
+  });
+}
+
+/** sha256 hex de la forma canónica. Es lo que se guarda en `payloadHash`. */
+export function hashEncuestaV1(d: EncuestaV1): string {
+  return createHash('sha256').update(canonicalizarEncuestaV1(d), 'utf8').digest('hex');
+}

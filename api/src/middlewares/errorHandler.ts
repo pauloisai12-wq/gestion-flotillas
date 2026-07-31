@@ -146,7 +146,24 @@ export function errorHandler(err: Error, req: Request, res: Response, _next: Nex
     return;
   }
 
-  // 6. Fallback — error desconocido (5xx)
+  // 6. body-parser / raw-body — sin estas ramas ambos casos caían al fallback
+  // 500 (y a Sentry) siendo errores del cliente. No se loguean: el error de
+  // parseo arrastra el cuerpo crudo en `err.body`.
+  const bp = err as Error & { type?: string; status?: number };
+  if (bp.type === 'entity.too.large') {
+    res.status(413).json({
+      error: 'El cuerpo de la petición excede el tamaño permitido',
+      code: 'PAYLOAD_TOO_LARGE',
+      requestId,
+    });
+    return;
+  }
+  if (bp.type === 'entity.parse.failed') {
+    res.status(400).json({ error: 'JSON malformado', code: 'BAD_JSON', requestId });
+    return;
+  }
+
+  // 7. Fallback — error desconocido (5xx)
   logger.error({ err, requestId, path: req.path }, 'Unhandled error');
   res.status(500).json({
     error: env.NODE_ENV === 'production' ? 'Error interno del servidor' : err.message,

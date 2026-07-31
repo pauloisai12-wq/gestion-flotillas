@@ -1,20 +1,31 @@
+// Guard de migraciones: ninguna migración puede borrar datos de ingesta móvil
+// (qa_externa de GeoCampo y encuestas de Okrean). Son capturas de campo que no
+// se pueden reconstruir: si una migración necesita reestructurarlas, debe
+// hacerlo con ALTER/UPDATE, nunca vaciando ni tirando la tabla.
 const fs = require('node:fs');
 const path = require('node:path');
 
 const migrationsDir = path.resolve(__dirname, '..', 'prisma', 'migrations');
 
+// La tabla principal de encuestas se llama `encuestas` a secas; el sufijo
+// (`encuestas_dispositivos`, ...) es opcional en el patrón.
+const PROTECTED_TABLE = '(?:qa_externa_[a-z0-9_]+|encuestas(?:_[a-z0-9_]+)?)';
+
 const forbidden = [
   {
-    label: 'DELETE FROM qa_externa_*',
-    pattern: /\bDELETE\s+FROM\s+"?qa_externa_[a-z0-9_]+"?/i,
+    label: 'DELETE FROM tabla protegida',
+    pattern: new RegExp(`\\bDELETE\\s+FROM\\s+"?${PROTECTED_TABLE}"?`, 'i'),
   },
   {
-    label: 'TRUNCATE qa_externa_*',
-    pattern: /\bTRUNCATE(?:\s+TABLE)?\s+"?qa_externa_[a-z0-9_]+"?/i,
+    label: 'TRUNCATE tabla protegida',
+    pattern: new RegExp(`\\bTRUNCATE(?:\\s+TABLE)?\\s+"?${PROTECTED_TABLE}"?`, 'i'),
   },
   {
-    label: 'DROP TABLE qa_externa_*',
-    pattern: /\bDROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?"?qa_externa_[a-z0-9_]+"?/i,
+    label: 'DROP TABLE tabla protegida',
+    pattern: new RegExp(
+      `\\bDROP\\s+TABLE\\s+(?:IF\\s+EXISTS\\s+)?"?${PROTECTED_TABLE}"?`,
+      'i',
+    ),
   },
 ];
 
@@ -52,11 +63,11 @@ for (const dirent of fs.readdirSync(migrationsDir, { withFileTypes: true })) {
 }
 
 if (findings.length > 0) {
-  console.error('Unsafe qa_externa migration statements found:');
+  console.error('Unsafe qa_externa/encuestas migration statements found:');
   for (const finding of findings) {
     console.error(`- ${finding.file}:${finding.line} (${finding.rule})`);
   }
   process.exit(1);
 }
 
-console.log('qa_externa migration safety check passed');
+console.log('qa_externa/encuestas migration safety check passed');

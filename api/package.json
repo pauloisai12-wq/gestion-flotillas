@@ -14,6 +14,7 @@
     "test:sprint2": "npm run test:sprint2:unit && node scripts/test-sprint2-fuel-integrity.js && node scripts/test-sprint2-vehicle-budget.js",
     "test:sprint3": "vitest run tests/sprint3",
     "test:sprint4": "vitest run tests/sprint4",
+    "test:sprint5": "vitest run tests/sprint5",
     "benchmark:sprint3": "node scripts/benchmark-sprint3-data-jobs.js",
     "bootstrap:admin": "node dist/scripts/bootstrap-admin.js",
     "user:create": "node dist/scripts/create-user.js",
@@ -24,7 +25,9 @@
     "test:uploads": "npm run build && node scripts/test-upload-cleanup.js",
     "qa:device:register": "node dist/scripts/qa-externa-device-register.js",
     "qa:device:revoke": "node dist/scripts/qa-externa-device-revoke.js",
-    "qa:reviewer:create": "node dist/scripts/qa-reviewer-create.js"
+    "qa:reviewer:create": "node dist/scripts/qa-reviewer-create.js",
+    "encuestas:device:register": "node dist/scripts/encuestas-device-register.js",
+    "encuestas:device:revoke": "node dist/scripts/encuestas-device-revoke.js"
   },
   "prisma": {
     "seed": "npx tsx prisma/seed.ts"

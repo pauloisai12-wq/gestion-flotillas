@@ -244,13 +244,14 @@ quien llame a la API directo no recibe ninguna señal en la respuesta: debe comp
 listado contra las filas obtenidas y, si hace falta, descargar por rangos más chicos.
 
 ### Navegación del portal de revisión
-El portal del revisor tiene **dos** secciones, navegadas como pestañas
-(`web/src/app/revision/layout.tsx:17-20`):
+El portal del revisor tiene **tres** secciones, navegadas como pestañas
+(`web/src/app/revision/layout.tsx:18-22`):
 
 | Pestaña | Ruta | Contenido |
 |---|---|---|
 | Evidencias de campo | `/revision/evidencias` | Tabla con miniaturas + exportación ZIP |
 | Registro de personas | `/revision/personas` | Este listado + exportación CSV |
+| Encuestas | `/revision/encuestas` | Módulo aparte (app Encuestas Okrean, datos separados de GeoCampo; ver `docs/encuestas-okrean.md`) |
 
 `/revision` ya no es una pantalla: **redirige** en el servidor a `/revision/evidencias`
 (`web/src/app/revision/page.tsx:9-11`). El login sigue siendo `/revision/login`.

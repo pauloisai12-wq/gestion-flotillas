@@ -963,3 +963,101 @@ model QaExternaPersona {
   @@index([programa])
   @@map("qa_externa_personas")
 }
+
+// ============================================
+// ENCUESTAS OKREAN — módulo aditivo, SIN relación con qa_externa
+// (app móvil distinta, datos totalmente separados)
+// ============================================
+
+// Los valores wire son los identificadores Prisma (sin @map): la app móvil
+// manda exactamente estas cadenas. Los catálogos versionables del cuestionario
+// (partido, rango de edad, género, personas) NO son enums: van como TEXT
+// validado en la app para poder publicar una v2 sin ALTER TYPE.
+enum EncuestaEstado {
+  completada
+  noElegible
+}
+
+enum EncuestaElegibilidad {
+  elegible
+  noElegible
+}
+
+// Espejo de QaExternaDispositivo, sin `programa`: la separación entre módulos
+// la da la tabla, no una dimensión dentro de ella. Solo se guarda el hash de
+// la API key (la key en claro se imprime una vez al darla de alta).
+model EncuestaDispositivo {
+  id            Int       @id @default(autoincrement())
+  identificador String
+  keyHash       String    @unique @map("key_hash")
+  activo        Boolean   @default(true)
+  lastUsedAt    DateTime? @map("last_used_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  encuestas Encuesta[]
+
+  @@map("encuestas_dispositivos")
+}
+
+// Una fila por encuesta: P5/P6 van en JSONB en vez de tabla hija para que el
+// alta sea un solo INSERT atómico (sin $transaction ⇒ imposible dejar
+// escrituras parciales); la integridad de las 7 personas la sella el validador
+// v1 y el `payloadHash` antes de persistir.
+//
+// `idLocal` (UUID del teléfono) es LA restricción de idempotencia: el reenvío
+// del mismo id devuelve el mismo `idRemoto`; si llega con contenido sustantivo
+// distinto (hash distinto) se rechaza con 409 sin sobrescribir.
+model Encuesta {
+  id                          Int                  @id @default(autoincrement())
+  idRemoto                    String               @unique @default(uuid()) @map("id_remoto")
+  idLocal                     String               @unique @map("id_local")
+  dispositivoId               Int                  @map("dispositivo_id")
+  dispositivo                 EncuestaDispositivo  @relation(fields: [dispositivoId], references: [id])
+  payloadHash                 String               @map("payload_hash")
+  versionCuestionario         Int                  @map("version_cuestionario")
+  /// Regex en la app, NO único: dos teléfonos pueden emitir el mismo folio.
+  folioLocal                  String?              @map("folio_local")
+  estado                      EncuestaEstado
+  elegibilidad                EncuestaElegibilidad
+  fechaHoraInicio             DateTime             @map("fecha_hora_inicio")
+  fechaHoraFinalizacion       DateTime             @map("fecha_hora_finalizacion")
+  duracionSegundos            Int                  @map("duracion_segundos")
+  credencialVigente           String               @map("credencial_vigente")
+  /// P2–P8: todas NULL cuando la encuesta es noElegible (no se almacenan).
+  rangoEdad                   String?              @map("rango_edad")
+  genero                      String?
+  partidoPreferido            String?              @map("partido_preferido")
+  conocimientoPorPersona      Json?                @map("conocimiento_por_persona")
+  mediosConocimiento          Json?                @map("medios_conocimiento")
+  mayorPersonalidad           String?              @map("mayor_personalidad")
+  candidatoPreferido          String?              @map("candidato_preferido")
+  /// NULL = el payload no traía bloque de ubicación (registro antiguo);
+  /// distinto de `false`, que significa "el teléfono no pudo capturarla".
+  ubicacionDisponible         Boolean?             @map("ubicacion_disponible")
+  ubicacionLat                Float?               @map("ubicacion_lat")
+  ubicacionLng                Float?               @map("ubicacion_lng")
+  ubicacionPrecisionM         Float?               @map("ubicacion_precision_m")
+  ubicacionCapturadaAt        DateTime?            @map("ubicacion_capturada_at")
+  ubicacionEsValida           Boolean?             @map("ubicacion_es_valida")
+  ubicacionPermiso            String?              @map("ubicacion_permiso")
+  ubicacionServicioActivo     Boolean?             @map("ubicacion_servicio_activo")
+  ubicacionMotivoNoDisponible String?              @map("ubicacion_motivo_no_disponible")
+  dispositivoPlataforma       String               @map("dispositivo_plataforma")
+  dispositivoModelo           String               @map("dispositivo_modelo")
+  dispositivoVersionSistema   String               @map("dispositivo_version_sistema")
+  versionAplicacion           String               @map("version_aplicacion")
+  /// Body crudo tal como llegó (incluye los campos de sincronización del
+  /// teléfono). Solo auditoría: NUNCA sale en DTO ni en CSV.
+  payloadRaw                  String?              @map("payload_raw") @db.Text
+  /// Estampa del servidor, independiente del reloj del teléfono.
+  recibidoEn                  DateTime             @default(now()) @map("recibido_en")
+  createdAt                   DateTime             @default(now()) @map("created_at")
+  updatedAt                   DateTime             @updatedAt @map("updated_at")
+
+  @@index([dispositivoId])
+  @@index([recibidoEn])
+  @@index([fechaHoraFinalizacion])
+  @@index([estado])
+  @@map("encuestas")
+}

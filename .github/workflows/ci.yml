@@ -78,6 +78,9 @@ jobs:
       - name: Sprint 4 qa_externa personas tests
         run: npm run test:sprint4
 
+      - name: Sprint 5 encuestas Okrean tests
+        run: npm run test:sprint5
+
       - name: Sprint 3 import benchmark (1k/5k/10k)
         run: npm run benchmark:sprint3
 

@@ -14,6 +14,11 @@ declare global {
       // Populado por deviceAuthMiddleware en las rutas /api/qa-externa/* tras
       // validar la API key del dispositivo (separado de req.user / JWT).
       device?: { id: number; identificador: string; programa: 'BUFFALO' | 'LX' };
+      // Populado por encuestasDeviceAuthMiddleware en /api/v1/encuestas/* tras
+      // validar la API key del dispositivo. Campo APARTE de `device` (no una
+      // unión): qaExternaRouter lee `req.device!.programa` y una unión rompería
+      // ese acceso. Los dos padrones de dispositivos son independientes.
+      encuestaDevice?: { id: number; identificador: string };
     }
   }
 }

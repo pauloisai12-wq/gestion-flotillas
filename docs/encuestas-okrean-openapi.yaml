@@ -1,0 +1,846 @@
+# OpenAPI 3.1 — Encuestas Okrean, cara de DISPOSITIVO (ingesta por API key).
+#
+# Este archivo es ESTÁTICO y se mantiene a mano. El generador runtime
+# (`/api/docs`, `docsRouter`) está apagado en producción por decisión explícita
+# —`api/src/index.ts:224-226` solo lo monta si `NODE_ENV !== 'production'`, para
+# no publicar el mapa completo de endpoints en internet—, así que el contrato que
+# consume el equipo móvil no puede depender de él.
+#
+# Alcance: solo la ingesta v1. La cara del revisor (`/api/encuestas`,
+# `/api/encuestas/export.csv`, JWT + rol REVISOR_QA) vive en `docs/encuestas-okrean.md`
+# y no se publica aquí: es interna del portal, no del contrato con la app.
+#
+# La fuente de verdad del schema es `api/src/validators/encuestasIngestValidator.ts`.
+# Si los dos divergen, gana el validador y ESTE archivo está desactualizado.
+
+openapi: 3.1.0
+
+info:
+  title: Encuestas Okrean — API de ingesta (v1)
+  version: '1.0.0'
+  summary: Recepción de encuestas de campo desde la app móvil Encuestas Okrean.
+  description: |
+    Contrato entre la app móvil **Encuestas Okrean** y el backend de flotillas.
+
+    Módulo **separado** de la ingesta de GeoCampo (`/api/qa-externa/*`): tablas
+    propias, API keys propias y CLI de alta propio. Lo único que comparten es el
+    portal de revisión y la cuenta del revisor.
+
+    **Reglas duras del contrato:**
+
+    - La respuesta de éxito es SIEMPRE `201` (alta) o `200` (reenvío idempotente),
+      las dos con cuerpo `{"idRemoto":"…"}`. **Nunca `204`**: la app necesita el
+      `idRemoto` para cerrar el registro local.
+    - La idempotencia la da `idLocal` (UNIQUE en base de datos) más un hash
+      canónico SHA-256 del contenido sustantivo. El mismo `idLocal` con el mismo
+      contenido devuelve el **mismo** `idRemoto`; con contenido distinto es `409`
+      y la fila original **no** se toca.
+    - Los campos de sincronización del teléfono (`estadoSincronizacion`,
+      `numeroIntentosSincronizacion`, `fechaUltimoIntento`, `fechaSincronizacion`)
+      y un `idRemoto` enviado por el cliente se **descartan**: ni se validan, ni
+      entran al hash, ni ocupan columna. Mandarlos es inofensivo.
+    - El cuerpo va en `application/json` y tiene un tope de **256 KB**.
+  contact:
+    name: Equipo backend flotillas
+  license:
+    name: Uso interno
+
+servers:
+  - url: https://qa.aztechcomposites.com
+    description: |
+      Despliegue público de QA. TLS de Let's Encrypt (CA pública): la app no
+      necesita CA custom ni `network-security-config`.
+
+security:
+  - apiKeyDispositivo: []
+
+tags:
+  - name: ingesta
+    description: Envío de encuestas desde el dispositivo.
+  - name: diagnóstico
+    description: Prueba de conectividad y de credencial.
+
+paths:
+  /api/v1/encuestas:
+    post:
+      tags: [ingesta]
+      operationId: ingestarEncuestaV1
+      summary: Envía una encuesta completada o no elegible.
+      description: |
+        Alta idempotente de una encuesta. El servidor valida el payload contra el
+        cuestionario **v1**, calcula el hash canónico e inserta una sola fila.
+
+        Reintentar tras un timeout es seguro: si la fila ya existía con el mismo
+        contenido, la respuesta es `200` con el mismo `idRemoto`.
+
+        El prefijo `/api` **no es opcional**: en el despliegue público Caddy manda
+        todo el tráfico a Next, y Next solo reescribe hacia la API las rutas que
+        empiezan por `/api`. Sin el prefijo, la petición acaba en una redirección
+        al login del portal.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EncuestaV1'
+            examples:
+              completada:
+                summary: Encuesta completada (elegible)
+                value:
+                  idLocal: '7f9c2a10-4d3b-4a7e-9f21-0c8b5d6e1a44'
+                  folioLocal: 'LX-001248'
+                  versionCuestionario: 1
+                  estado: completada
+                  elegibilidad: elegible
+                  fechaHoraInicio: '2026-07-30T16:12:04.000Z'
+                  fechaHoraFinalizacion: '2026-07-30T16:18:41.000Z'
+                  duracionSegundos: 397
+                  respuestas:
+                    credencialVigente: si
+                    rangoEdad: '30_44'
+                    genero: mujer
+                    partidoPreferido: morena
+                    conocimientoPorPersona:
+                      - { persona: lalo_ximenez, nivel: bien }
+                      - { persona: laura_estrada, nivel: algo }
+                      - { persona: paco_nino, nivel: poco }
+                      - { persona: gabriela_delgado, nivel: no_conoce }
+                      - { persona: irineo_molina, nivel: poco }
+                      - { persona: goyo_castaneda, nivel: no_conoce }
+                      - { persona: ernesto_montero, nivel: algo }
+                    mediosConocimiento:
+                      tipo: respondida
+                      medios: [redes_sociales, otras_personas]
+                    mayorPersonalidad: lalo_ximenez
+                    candidatoPreferido: lalo_ximenez
+                  ubicacion:
+                    disponible: true
+                    latitud: 19.432608
+                    longitud: -99.133209
+                    precisionMetros: 12.4
+                    fechaHoraCaptura: '2026-07-30T16:18:39.000Z'
+                    permiso: concedido
+                    servicioActivo: true
+                    esValida: true
+                  dispositivo:
+                    plataforma: android
+                    modelo: 'Moto G54'
+                    versionSistema: '14'
+                  versionAplicacion: '1.4.0'
+              noElegible:
+                summary: Encuesta no elegible (sin credencial vigente)
+                value:
+                  idLocal: 'b2d4e6f8-1a3c-4d5e-8f90-a1b2c3d4e5f6'
+                  folioLocal: 'LX-001249'
+                  versionCuestionario: 1
+                  estado: noElegible
+                  elegibilidad: noElegible
+                  fechaHoraInicio: '2026-07-30T16:22:10.000Z'
+                  fechaHoraFinalizacion: '2026-07-30T16:22:48.000Z'
+                  duracionSegundos: 38
+                  respuestas:
+                    credencialVigente: 'no'
+                    conocimientoPorPersona: []
+                  ubicacion:
+                    disponible: false
+                    permiso: denegado
+                    servicioActivo: true
+                    motivoNoDisponible: permisoDenegado
+                  dispositivo:
+                    plataforma: android
+                    modelo: 'Moto G54'
+                    versionSistema: '14'
+                  versionAplicacion: '1.4.0'
+      responses:
+        '201':
+          description: Encuesta creada. Es la respuesta normal del primer envío.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IngestaAceptada'
+              example:
+                idRemoto: 'c1a7e0b2-9d44-4f0a-b7c3-2e5f8a91d033'
+        '200':
+          description: |
+            Reenvío idempotente: el `idLocal` ya existía con el **mismo** contenido
+            sustantivo. Devuelve el mismo `idRemoto` de la primera vez y no crea
+            otra fila. La app debe tratarlo exactamente igual que el `201`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IngestaAceptada'
+              example:
+                idRemoto: 'c1a7e0b2-9d44-4f0a-b7c3-2e5f8a91d033'
+        '400':
+          description: |
+            Cuerpo que no es JSON válido (`BAD_JSON`) o que no es un objeto.
+            No reintentable sin corregir el payload.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorRespuesta'
+              example:
+                error: 'Cuerpo JSON malformado'
+                code: BAD_JSON
+                requestId: '0f0c1a7e-…'
+        '401':
+          description: |
+            Falta el header `Authorization`, el formato no es `Bearer <key>`, la
+            key no existe o el dispositivo fue revocado (`activo = false`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorRespuesta'
+              example:
+                error: 'API key inválida o revocada'
+                code: UNAUTHORIZED
+        '403':
+          description: |
+            Sin permisos. La ingesta por API key **no** emite este código: recibirlo
+            significa que la petición no llegó a este router — típicamente una URL
+            base mal configurada que cayó en un montaje protegido por JWT. Corregir
+            la URL, no reintentar.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorRespuesta'
+        '409':
+          description: |
+            El `idLocal` ya está registrado **con contenido sustantivo distinto**.
+            La fila original queda intacta. No sirve reintentar con la misma clave:
+            es un `idLocal` reutilizado en el teléfono.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorRespuesta'
+              example:
+                error: 'idLocal ya registrado con contenido distinto'
+                code: CONFLICT
+                requestId: '0f0c1a7e-…'
+        '413':
+          description: |
+            El cuerpo supera los 256 KB. El límite se aplica sobre el stream, así
+            que también corta las peticiones `chunked` sin `Content-Length`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorRespuesta'
+              example:
+                error: 'Cuerpo de la petición demasiado grande'
+                code: PAYLOAD_TOO_LARGE
+                requestId: '0f0c1a7e-…'
+        '422':
+          description: |
+            El JSON es válido pero el contenido no pasa el cuestionario v1
+            (`VALIDATION_ERROR`), o `versionCuestionario` es un entero distinto de 1
+            (`UNSUPPORTED_VERSION`). **Terminal**: reintentar el mismo payload
+            volverá a fallar.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ErrorValidacion'
+                  - $ref: '#/components/schemas/ErrorRespuesta'
+              examples:
+                validacion:
+                  summary: Fallo del schema v1
+                  value:
+                    error: 'Datos inválidos'
+                    code: VALIDATION_ERROR
+                    issues:
+                      - field: respuestas.conocimientoPorPersona
+                        message: 'conocimientoPorPersona debe traer las 7 personas del catálogo v1'
+                      - field: ubicacion.esValida
+                        message: 'esValida debe ser true exactamente cuando precisionMetros <= 50'
+                    requestId: '0f0c1a7e-…'
+                versionNoSoportada:
+                  summary: Cuestionario de otra versión
+                  value:
+                    error: 'Versión de cuestionario no soportada'
+                    code: UNSUPPORTED_VERSION
+                    requestId: '0f0c1a7e-…'
+        '429':
+          description: |
+            Se agotó una de las dos cuotas: la del dispositivo o la de la IP. La
+            cabecera `Retry-After` trae los segundos que faltan para la siguiente
+            ventana. Reintentable con backoff.
+          headers:
+            Retry-After:
+              description: Segundos hasta que la ventana se reabre.
+              schema:
+                type: integer
+                minimum: 1
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorRespuesta'
+              example:
+                error: 'Demasiadas encuestas desde este dispositivo. Intenta más tarde.'
+                code: RATE_LIMITED
+        '500':
+          description: |
+            Error interno. **No** hubo escritura parcial: el alta es un solo INSERT
+            atómico. Reintentable con el mismo `idLocal`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorRespuesta'
+              example:
+                error: 'Error interno del servidor'
+                code: INTERNAL_ERROR
+                requestId: '0f0c1a7e-…'
+
+    get:
+      tags: [diagnóstico]
+      operationId: encuestasMetodoNoPermitido
+      summary: No permitido — responde 405 con credencial válida.
+      description: |
+        Existe a propósito, como red de seguridad para una app que se equivoque de
+        método: sin él la petición saldría de este router y la atraparían los
+        montajes comodín con JWT, que responden **401** — y el móvil lee ese 401
+        como "API key inválida" y dispara una reconfiguración innecesaria. Un 405
+        dice lo que de verdad pasa: la key sirve, el método no.
+
+        Para probar conectividad, usa `/api/v1/encuestas/ping`.
+      responses:
+        '405':
+          description: Método no permitido (la API key sí es válida).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorRespuesta'
+              example:
+                error: 'Method Not Allowed'
+                code: METHOD_NOT_ALLOWED
+        '401':
+          description: Sin credencial válida (el guard corre antes que el 405).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorRespuesta'
+
+  /api/v1/encuestas/ping:
+    get:
+      tags: [diagnóstico]
+      operationId: encuestasPing
+      summary: Prueba de conectividad y de la API key.
+      description: |
+        Verifica de una sola vez que hay red, que la URL base es correcta y que la
+        API key del dispositivo está activa. No toca la base de datos ni consume
+        cuota de captura (sí la del cubo por IP).
+      responses:
+        '200':
+          description: Conexión y credencial correctas.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [ok]
+                properties:
+                  ok:
+                    type: boolean
+                    const: true
+              example:
+                ok: true
+        '401':
+          description: Sin `Authorization`, key desconocida o dispositivo revocado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorRespuesta'
+        '429':
+          description: Cuota por IP agotada.
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorRespuesta'
+
+components:
+  securitySchemes:
+    apiKeyDispositivo:
+      type: http
+      scheme: bearer
+      description: |
+        API key del dispositivo, emitida por el CLI de alta y mostrada **una sola
+        vez** (el servidor guarda solo su hash SHA-256). Va en el header
+        `Authorization: Bearer <api key>`. No es un JWT: no expira y no tiene
+        claims; se revoca dando de baja el dispositivo.
+
+  schemas:
+    # ── Catálogos v1 ────────────────────────────────────────────────────────
+    # Van como TEXT validado en la aplicación (no como enums de PostgreSQL) para
+    # poder publicar un cuestionario v2 sin ALTER TYPE.
+
+    PersonaV1:
+      type: string
+      description: Personalidad del catálogo v1. Son exactamente 7 y no cambian dentro de la versión 1.
+      enum:
+        - lalo_ximenez
+        - laura_estrada
+        - paco_nino
+        - gabriela_delgado
+        - irineo_molina
+        - goyo_castaneda
+        - ernesto_montero
+
+    NivelConocimientoV1:
+      type: string
+      description: Nivel de conocimiento declarado sobre una personalidad (P5).
+      enum: [no_conoce, poco, algo, bien]
+
+    MedioV1:
+      type: string
+      description: Vía por la que el encuestado conoce a las personalidades (P6).
+      enum: [redes_sociales, otras_personas, labor_social]
+
+    PartidoV1:
+      type: string
+      description: Preferencia partidista declarada (P4).
+      enum:
+        - morena
+        - pri
+        - ninguno_no_sabe
+        - prd
+        - mc
+        - pvem
+        - pt
+        - independiente
+        - panal
+        - pan
+
+    RangoEdadV1:
+      type: string
+      description: Rango de edad declarado (P2).
+      enum: ['18_29', '30_44', '45_59', '60_mas']
+
+    GeneroV1:
+      type: string
+      description: Género declarado (P3).
+      enum: [hombre, mujer, otro]
+
+    # ── Bloques compartidos ─────────────────────────────────────────────────
+
+    ConocimientoPersonaV1:
+      type: object
+      additionalProperties: false
+      required: [persona, nivel]
+      properties:
+        persona:
+          $ref: '#/components/schemas/PersonaV1'
+        nivel:
+          $ref: '#/components/schemas/NivelConocimientoV1'
+
+    MediosConocimientoV1:
+      description: |
+        P6, unión discriminada por `tipo`. Cuando P5 dejó al encuestado sin
+        ninguna personalidad conocida, la app **no** pregunta P6 y manda
+        `omitidaPorLogica`; en cualquier otro caso manda `respondida` con al menos
+        un medio. Las dos formas se rechazan cruzadas: `respondida` con la lista
+        vacía y `omitidaPorLogica` con `medios` son ambas 422.
+      oneOf:
+        - title: Omitida por lógica del cuestionario
+          type: object
+          additionalProperties: false
+          required: [tipo]
+          properties:
+            tipo:
+              type: string
+              const: omitidaPorLogica
+        - title: Respondida
+          type: object
+          additionalProperties: false
+          required: [tipo, medios]
+          properties:
+            tipo:
+              type: string
+              const: respondida
+            medios:
+              type: array
+              minItems: 1
+              maxItems: 3
+              uniqueItems: true
+              items:
+                $ref: '#/components/schemas/MedioV1'
+      discriminator:
+        propertyName: tipo
+
+    UbicacionV1:
+      description: |
+        Bloque de ubicación, unión discriminada por `disponible`.
+
+        **Omitir el bloque entero es válido** (registro antiguo o app previa a la
+        captura de GPS) y se persiste como `NULL`, que es distinto de
+        `disponible: false`. Lo que **no** se acepta es `"ubicacion": null`.
+      oneOf:
+        - $ref: '#/components/schemas/UbicacionDisponibleV1'
+        - $ref: '#/components/schemas/UbicacionNoDisponibleV1'
+
+    UbicacionDisponibleV1:
+      title: Ubicación capturada
+      type: object
+      additionalProperties: false
+      required:
+        - disponible
+        - latitud
+        - longitud
+        - precisionMetros
+        - fechaHoraCaptura
+        - permiso
+        - servicioActivo
+        - esValida
+      properties:
+        disponible:
+          type: boolean
+          const: true
+        latitud:
+          type: number
+          minimum: -90
+          maximum: 90
+        longitud:
+          type: number
+          minimum: -180
+          maximum: 180
+        precisionMetros:
+          type: number
+          minimum: 0
+          description: |
+            Radio de incertidumbre en metros. Debe ser un número finito: `Infinity`
+            o `NaN` (que JSON no puede expresar, pero sí un cliente que serialice
+            mal) se rechazan.
+        fechaHoraCaptura:
+          type: string
+          format: date-time
+          description: Instante de la lectura del GPS, en ISO-8601 con sufijo `Z`.
+        esValida:
+          type: boolean
+          description: |
+            **Redundante a propósito y verificado por el servidor**: debe ser
+            exactamente `precisionMetros <= 50`. Si el teléfono manda un valor que
+            no concuerda, la encuesta se rechaza con 422 — es la señal de que el
+            cálculo del cliente y el del servidor divergieron.
+        permiso:
+          type: string
+          const: concedido
+          description: Si hay coordenadas, el permiso solo puede haber sido concedido.
+        servicioActivo:
+          type: boolean
+          const: true
+          description: Si hay coordenadas, el servicio de ubicación estaba encendido.
+
+    UbicacionNoDisponibleV1:
+      title: Ubicación no capturada
+      type: object
+      additionalProperties: false
+      required: [disponible, permiso, servicioActivo, motivoNoDisponible]
+      properties:
+        disponible:
+          type: boolean
+          const: false
+        permiso:
+          type: string
+          description: |
+            Estado del permiso de ubicación en el momento de la encuesta. Debe ser
+            coherente con `motivoNoDisponible`: con `permisoDenegado` **no** puede
+            valer `concedido`.
+          enum: [concedido, denegado, noSolicitado]
+        servicioActivo:
+          type: boolean
+          description: |
+            Si el servicio de ubicación del sistema estaba encendido. Con
+            `motivoNoDisponible: servicioDesactivado` debe ser `false`.
+        motivoNoDisponible:
+          type: string
+          description: |
+            Por qué no hay coordenadas. Coherencia exigida por el servidor:
+            `permisoDenegado` ⇒ `permiso ≠ concedido`; `servicioDesactivado` ⇒
+            `servicioActivo = false`; con permiso concedido **y** servicio activo,
+            el motivo solo puede ser `errorTemporal` u `omitidaPorEncuestador`.
+          enum:
+            - permisoDenegado
+            - servicioDesactivado
+            - errorTemporal
+            - omitidaPorEncuestador
+
+    DispositivoMetaV1:
+      type: object
+      additionalProperties: false
+      required: [plataforma, modelo, versionSistema]
+      description: |
+        Metadatos del teléfono que levantó la encuesta. **Entran al hash
+        canónico**: si la app los estampa al *enviar* en vez de al *capturar*, un
+        reintento después de actualizar la app produciría un 409.
+      properties:
+        plataforma:
+          type: string
+          minLength: 1
+          maxLength: 120
+          examples: [android, ios]
+        modelo:
+          type: string
+          minLength: 1
+          maxLength: 120
+          examples: ['Moto G54']
+        versionSistema:
+          type: string
+          minLength: 1
+          maxLength: 120
+          examples: ['14']
+
+    # ── Bloque `respuestas` ─────────────────────────────────────────────────
+    # Las respuestas del cuestionario NO van en la raíz: viven agrupadas bajo la
+    # clave `respuestas`, cuya forma depende de la rama.
+
+    RespuestasCompletadaV1:
+      type: object
+      additionalProperties: false
+      required:
+        - credencialVigente
+        - rangoEdad
+        - genero
+        - partidoPreferido
+        - conocimientoPorPersona
+        - mediosConocimiento
+        - mayorPersonalidad
+        - candidatoPreferido
+      properties:
+        credencialVigente:
+          type: string
+          const: si
+          description: P1. En esta rama solo puede valer `si`.
+        rangoEdad:
+          $ref: '#/components/schemas/RangoEdadV1'
+        genero:
+          $ref: '#/components/schemas/GeneroV1'
+        partidoPreferido:
+          $ref: '#/components/schemas/PartidoV1'
+        conocimientoPorPersona:
+          type: array
+          minItems: 7
+          maxItems: 7
+          uniqueItems: true
+          description: |
+            P5. Deben venir **las 7 personas del catálogo, exactamente una vez
+            cada una**. El orden del array no es sustantivo: el servidor lo
+            reordena al orden canónico antes de hashear, así que reenviarlo
+            barajado sigue siendo el mismo registro.
+          items:
+            $ref: '#/components/schemas/ConocimientoPersonaV1'
+        mediosConocimiento:
+          $ref: '#/components/schemas/MediosConocimientoV1'
+        mayorPersonalidad:
+          allOf:
+            - $ref: '#/components/schemas/PersonaV1'
+          description: P7 — a quién identifica como la mayor personalidad.
+        candidatoPreferido:
+          allOf:
+            - $ref: '#/components/schemas/PersonaV1'
+          description: P8 — a quién preferiría como candidato.
+
+    RespuestasNoElegibleV1:
+      type: object
+      additionalProperties: false
+      required: [credencialVigente, conocimientoPorPersona]
+      description: |
+        Solo P1. Las demás respuestas **no se declaran**: si el teléfono manda el
+        borrador previo al "no" de P1, el servidor lo descarta antes de hashear y
+        esas columnas quedan en `NULL`.
+      properties:
+        credencialVigente:
+          type: string
+          const: 'no'
+          description: P1. En esta rama solo puede valer `no`.
+        conocimientoPorPersona:
+          type: array
+          maxItems: 0
+          description: Debe venir vacío.
+          items: {}
+
+    # ── Payload de la encuesta ──────────────────────────────────────────────
+
+    EncuestaBaseV1:
+      type: object
+      required:
+        - idLocal
+        - versionCuestionario
+        - estado
+        - elegibilidad
+        - fechaHoraInicio
+        - fechaHoraFinalizacion
+        - duracionSegundos
+        - respuestas
+        - dispositivo
+        - versionAplicacion
+      properties:
+        idLocal:
+          type: string
+          format: uuid
+          description: |
+            UUID generado por el teléfono. **Es la clave de idempotencia** (UNIQUE
+            global, no por dispositivo). Debe ser estable entre reintentos del
+            mismo registro y nunca reutilizarse para otro.
+        folioLocal:
+          type: string
+          pattern: '^LX-[0-9]+$'
+          description: |
+            Folio impreso en el papel del encuestador. Opcional y **no único**: dos
+            teléfonos pueden emitir el mismo folio legítimamente.
+          examples: ['LX-001248']
+        versionCuestionario:
+          type: integer
+          const: 1
+          description: |
+            Versión del cuestionario. Hoy solo se acepta `1`; cualquier otro entero
+            responde 422 `UNSUPPORTED_VERSION` (y un valor que no sea entero
+            positivo, 422 `VALIDATION_ERROR`).
+        fechaHoraInicio:
+          type: string
+          format: date-time
+          description: ISO-8601 **con sufijo `Z`**. Sin designador de zona la interpretación depende del reloj del proceso.
+        fechaHoraFinalizacion:
+          type: string
+          format: date-time
+          description: ISO-8601 con sufijo `Z`. Debe ser mayor o igual que `fechaHoraInicio`.
+        duracionSegundos:
+          type: integer
+          minimum: 0
+          description: |
+            Duración medida por la app. Se contrasta contra el intervalo
+            `fechaHoraFinalizacion − fechaHoraInicio` con una tolerancia de
+            **±60 s**; fuera de ella es 422.
+        ubicacion:
+          $ref: '#/components/schemas/UbicacionV1'
+        dispositivo:
+          $ref: '#/components/schemas/DispositivoMetaV1'
+        versionAplicacion:
+          type: string
+          minLength: 1
+          maxLength: 60
+          description: Versión de la app móvil. Entra al hash canónico.
+          examples: ['1.4.0']
+
+    EncuestaCompletadaV1:
+      title: Encuesta completada (elegible)
+      description: |
+        El encuestado tiene credencial vigente y respondió P2–P8. Todas las
+        respuestas son obligatorias en esta rama.
+      allOf:
+        - $ref: '#/components/schemas/EncuestaBaseV1'
+        - type: object
+          required: [estado, elegibilidad, respuestas]
+          properties:
+            estado:
+              type: string
+              const: completada
+            elegibilidad:
+              type: string
+              const: elegible
+            respuestas:
+              $ref: '#/components/schemas/RespuestasCompletadaV1'
+
+    EncuestaNoElegibleV1:
+      title: Encuesta no elegible
+      description: |
+        El encuestado no tiene credencial vigente y la app corta el cuestionario en
+        P1.
+      allOf:
+        - $ref: '#/components/schemas/EncuestaBaseV1'
+        - type: object
+          required: [estado, elegibilidad, respuestas]
+          properties:
+            estado:
+              type: string
+              const: noElegible
+            elegibilidad:
+              type: string
+              const: noElegible
+            respuestas:
+              $ref: '#/components/schemas/RespuestasNoElegibleV1'
+
+    EncuestaV1:
+      description: |
+        Payload de una encuesta v1. Unión discriminada por `estado`: la rama
+        `completada` exige P2–P8, la rama `noElegible` las prohíbe.
+      oneOf:
+        - $ref: '#/components/schemas/EncuestaCompletadaV1'
+        - $ref: '#/components/schemas/EncuestaNoElegibleV1'
+      discriminator:
+        propertyName: estado
+        mapping:
+          completada: '#/components/schemas/EncuestaCompletadaV1'
+          noElegible: '#/components/schemas/EncuestaNoElegibleV1'
+
+    # ── Respuestas ──────────────────────────────────────────────────────────
+
+    IngestaAceptada:
+      type: object
+      additionalProperties: false
+      required: [idRemoto]
+      description: |
+        Único cuerpo de éxito, idéntico en 201 y en 200. La app solo necesita
+        `idRemoto` para cerrar el registro local.
+      properties:
+        idRemoto:
+          type: string
+          format: uuid
+          description: Identificador asignado por el servidor. Estable para un mismo `idLocal`.
+
+    ErrorRespuesta:
+      type: object
+      required: [error, code]
+      description: Forma común de error de la API.
+      properties:
+        error:
+          type: string
+          description: Mensaje legible, seguro para mostrar o registrar.
+        code:
+          type: string
+          description: Código estable para ramificar en el cliente.
+          examples:
+            - BAD_JSON
+            - UNAUTHORIZED
+            - FORBIDDEN
+            - CONFLICT
+            - PAYLOAD_TOO_LARGE
+            - VALIDATION_ERROR
+            - UNSUPPORTED_VERSION
+            - METHOD_NOT_ALLOWED
+            - RATE_LIMITED
+            - INTERNAL_ERROR
+        details:
+          description: Detalle opcional del error (presente en algunos 400).
+        requestId:
+          type: string
+          description: |
+            Correlaciona la respuesta con la línea del log del servidor. Inclúyelo
+            al reportar una incidencia.
+
+    ErrorValidacion:
+      type: object
+      required: [error, code, issues]
+      description: Error 422 del cuestionario v1, con el detalle campo a campo.
+      properties:
+        error:
+          type: string
+          const: 'Datos inválidos'
+        code:
+          type: string
+          const: VALIDATION_ERROR
+        issues:
+          type: array
+          items:
+            type: object
+            required: [field, message]
+            properties:
+              field:
+                type: string
+                description: Ruta del campo, con puntos (`ubicacion.esValida`).
+              message:
+                type: string
+        requestId:
+          type: string

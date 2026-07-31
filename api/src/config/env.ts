@@ -62,6 +62,26 @@ const envSchema = z.object({
   // Pepper opcional para HMAC-SHA256 de las API keys (defensa en profundidad).
   QA_EXTERNA_KEY_PEPPER: z.string().optional(),
 
+  // Encuestas Okrean (ingesta móvil, módulo separado de qa_externa). Todas
+  // opcionales con default: NO añaden un secreto obligatorio en producción (no
+  // rompen env.ts ni las plantillas de .env).
+  // Cuota POR DISPOSITIVO de la ingesta (cubo `enc:dev:`), la cuota de captura
+  // propiamente dicha.
+  ENCUESTAS_RATE_MAX: z.coerce.number().int().min(1).default(60),
+  ENCUESTAS_RATE_WINDOW_SEC: z.coerce.number().int().min(10).default(60),
+  // Cuota del cubo POR IP del montaje /api/v1/encuestas (`enc:ip:`), que corre
+  // PRE-auth: su papel es frenar el sondeo de API keys, no repartir cuota de
+  // captura. Por eso NO comparte número con ENCUESTAS_RATE_MAX: varios teléfonos
+  // detrás de la misma salida a internet (o uno solo vaciando su cola tras
+  // recuperar señal) agotarían con el sondeo el presupuesto de la captura.
+  // Default = 2 × ENCUESTAS_RATE_MAX (60 → 120): zod no puede derivar el default
+  // de otro campo del mismo objeto, así que va como literal. Si cambias
+  // ENCUESTAS_RATE_MAX, ajusta este a mano para mantener la proporción.
+  ENCUESTAS_IP_RATE_MAX: z.coerce.number().int().min(1).default(120),
+  // Pepper opcional para HMAC-SHA256 de las API keys (defensa en profundidad).
+  // Independiente de QA_EXTERNA_KEY_PEPPER: rotar uno no invalida al otro.
+  ENCUESTAS_KEY_PEPPER: z.string().optional(),
+
   // Captcha del portal público (opcional en dev, obligatorio en prod si está habilitado)
   TURNSTILE_SECRET: z.string().optional(),
 
