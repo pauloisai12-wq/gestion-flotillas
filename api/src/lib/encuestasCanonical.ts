@@ -1,5 +1,5 @@
-// Canonicalización y hash del contenido de una encuesta (v1 y v3). El hash es la
-// mitad sustantiva de la idempotencia: el UNIQUE de idLocal decide si la fila ya
+// Canonicalización y hash del contenido de una encuesta v3. El hash es la mitad
+// sustantiva de la idempotencia: el UNIQUE de idLocal decide si la fila ya
 // existe, y este hash decide si el reenvío trae el MISMO contenido (200 con el
 // idRemoto original) o uno distinto (409, sin sobrescribir).
 //
@@ -90,6 +90,13 @@ function ubicacionCanonica(u: EncuestaV3['ubicacion']) {
   };
 }
 
+/**
+ * Representación estable del contenido sustantivo de una encuesta ya validada.
+ * Orden de claves fijo por construcción, campos ausentes normalizados a null,
+ * gobernantes reordenados al catálogo. El orden de las claves se reconstruye
+ * literal, así que reordenar el objeto literal invalida todos los payloadHash
+ * guardados.
+ */
 export function canonicalizarEncuestaV3(d: EncuestaV3): string {
   return JSON.stringify({
     v: VERSION_CANONICA,
@@ -112,6 +119,10 @@ export function canonicalizarEncuestaV3(d: EncuestaV3): string {
   });
 }
 
+/**
+ * sha256 hex de la forma canónica. Es lo que se guarda en `payloadHash` para
+ * detectar reenvíos con contenido idéntico (200) vs. contenido distinto (409).
+ */
 export function hashEncuestaV3(d: EncuestaV3): string {
   return createHash('sha256').update(canonicalizarEncuestaV3(d), 'utf8').digest('hex');
 }
