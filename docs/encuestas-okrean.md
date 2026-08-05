@@ -84,12 +84,11 @@ Parámetros de consulta:
 | Parámetro | Listado | Exportación | Notas |
 |---|---|---|---|
 | `page` / `limit` | opcional | — | Default 20, tope 100 |
-| `estado` | opcional | opcional | `completada` \| `noElegible` |
 | `dispositivo` | opcional | opcional | Texto: coincide contra el `identificador` del dispositivo registrado |
 | `dateFrom` / `dateTo` | opcional | **obligatorios** | `AAAA-MM-DD` sobre `fechaHoraFinalizacion`. Día civil completo en **UTC** con **tope superior exclusivo** (`dateTo` + 1 día). En exportación: `dateTo ≥ dateFrom` y rango máximo **366 días** |
 
-Cada elemento de `data` (`EncuestaDto`): `id`, `idRemoto`, `folioLocal`, `encuestador`, `estado`,
-`elegibilidad`, `versionCuestionario`, `partidoPreferido`, `candidatoPreferido`,
+Cada elemento de `data` (`EncuestaDto`): `id`, `idRemoto`, `folioLocal`, `encuestador`,
+`versionCuestionario`, `preferenciaElectoral`, `preferenciaPartido`, `conoceLalo`,
 `duracionSegundos`, `fechaHoraFinalizacion`, `recibidoEn`, `ubicacionDisponible` y
 `dispositivo: { id, identificador }`.
 El listado **no expone** `payloadRaw`, `payloadHash`, las coordenadas ni los JSON de respuestas: la
@@ -104,7 +103,10 @@ runtime (`/api/docs`) está apagado en producción (`api/src/index.ts:224-226`).
 
 ---
 
-## Contrato v1 del payload
+## Contrato v3 del payload
+
+⚠️ **El servidor solo acepta `versionCuestionario: 3`.** Un registro v1 o v2 recibe `422 UNSUPPORTED_VERSION` y
+la app debe actualizarse. No hay retrocompatibilidad con cuestionarios anteriores.
 
 Un solo `Content-Type`: `application/json`. Al ser JSON (y no multipart), **los números viajan como
 números**: `"duracionSegundos": "397"` es un `422`, no un 397.
@@ -116,13 +118,12 @@ números**: `"duracionSegundos": "397"` es un `422`, no un 397.
 | `idLocal` | string UUID | sí | **Clave de idempotencia** (UNIQUE global, no por dispositivo). Estable entre reintentos, jamás reutilizado |
 | `folioLocal` | string | **no** | Folio de papel. Formato `LX-<dígitos>`. **No es único**: dos teléfonos pueden emitir el mismo folio y los dos se aceptan |
 | `encuestador` | string | **no** | Nombre de quien levanta la encuesta. Texto no vacío, máx. 120 caracteres (se recorta el espacio sobrante). Va en la **raíz**, no dentro de `respuestas`. **Entra al hash canónico** |
-| `versionCuestionario` | entero | sí | Hoy solo `1`. Otro entero → `422 UNSUPPORTED_VERSION`; algo que no sea entero positivo → `422 VALIDATION_ERROR` |
-| `estado` | `completada` \| `noElegible` | sí | Discrimina la rama; decide qué campos son obligatorios y cuáles están prohibidos |
-| `elegibilidad` | `elegible` \| `noElegible` | sí | Atado a `estado`: `completada`⇒`elegible`, `noElegible`⇒`noElegible`. Cualquier otra combinación es `422` |
+| `versionCuestionario` | entero | sí | Solo `3`. Otro entero → `422 UNSUPPORTED_VERSION`; algo que no sea entero positivo → `422 VALIDATION_ERROR` |
+| `estado` | `completada` | sí | Siempre `completada`. El servidor rechaza cualquier otro valor |
 | `fechaHoraInicio` | string ISO-8601 **con `Z`** | sí | |
 | `fechaHoraFinalizacion` | string ISO-8601 **con `Z`** | sí | Debe ser ≥ `fechaHoraInicio` |
 | `duracionSegundos` | entero ≥ 0 | sí | Se contrasta con el intervalo; ver *tolerancia* abajo |
-| `respuestas` | objeto | sí | **Las respuestas del cuestionario van anidadas aquí, no en la raíz.** Su forma depende de la rama |
+| `respuestas` | objeto | sí | **Las respuestas del cuestionario van anidadas aquí, no en la raíz.** Todos los campos obligatorios |
 | `ubicacion` | objeto | **no** | Bloque completo o ausente. **`null` no se acepta**; ver *Ubicación* |
 | `dispositivo` | objeto | sí | `{ plataforma, modelo, versionSistema }` — texto no vacío, máx. 120 caracteres cada uno |
 | `versionAplicacion` | string | sí | Versión de la app (máx. 60 caracteres). Entra al hash canónico |
@@ -154,70 +155,39 @@ números**: `"duracionSegundos": "397"` es un `422`, no un 397.
 > falsos rechazos y hay que relajarla a `duracion ≤ intervalo + 60` — es un punto abierto a
 > confirmar con el equipo móvil.
 
-### Rama `completada` (encuestado elegible) — contenido de `respuestas`
+### Contenido de `respuestas` (v3)
 
-Con `estado: "completada"` y `elegibilidad: "elegible"`. Dentro de `respuestas`, **todos
-obligatorios**:
+Todos los campos son **obligatorios**. No hay saltos de lógica: `rolLalo` y `opinionLalo` se contestan
+siempre (sus catálogos ya incluyen `no_sabe_no_contesta` / `no_lo_conozco`). No se valida coherencia
+cruzada: el contrato dice que siempre se responden.
 
 | Campo | Tipo | Notas |
 |---|---|---|
-| `credencialVigente` | `si` | P1. En esta rama solo puede valer `si` |
-| `rangoEdad` | catálogo | P2 |
-| `genero` | catálogo | P3 |
-| `partidoPreferido` | catálogo | P4 |
-| `conocimientoPorPersona` | array de `{persona, nivel}` | P5. **Exactamente las 7 personas del catálogo, una vez cada una.** Faltantes, repetidas o desconocidas → `422`. El orden **no importa**: el servidor lo normaliza antes de hashear |
-| `mediosConocimiento` | objeto discriminado por `tipo` | P6. Ver abajo |
-| `mayorPersonalidad` | catálogo de personas | P7 |
-| `candidatoPreferido` | catálogo de personas | P8 |
+| `sexo` | catálogo | `hombre` \| `mujer` |
+| `rangoEdad` | catálogo | `18_30` \| `31_45` \| `46_mas` |
+| `empresariosConocidos` | array de strings | 0–3 entradas, 1–80 caracteres cada una (se recorta espacio sobrante). Texto libre, sin duplicados validados |
+| `politicosConocidos` | array de strings | 1–3 entradas, 1–80 caracteres cada una. Texto libre |
+| `conoceLalo` | `si` \| `no` | |
+| `rolLalo` | catálogo | `politico_lider_social` \| `empresario` \| `funcionario_publico` \| `no_sabe_no_contesta` |
+| `opinionLalo` | catálogo | `muy_buena` \| `buena` \| `regular` \| `mala` \| `muy_mala` \| `no_lo_conozco` |
+| `preferenciaElectoral` | catálogo | `lalo_ximenez` \| `irineo_molina` \| `fernando_huerta` \| `paola_barrera` \| `ana_gabriela_delgado` |
+| `preferenciaPartido` | catálogo | `pri` \| `morena` \| `pan` \| `panal_oaxaca` \| `pt` \| `prd_oaxaca` \| `pvem` \| `pto` \| `mc` |
+| `aprobacionPorGobernante` | array de `{gobernante, calificacion}` | **Exactamente 3 filas, una por gobernante, sin repetir.** Orden: `sheinbaum`, `jara`, `huerta`. Calificaciones: `muy_buena` \| `buena` \| `regular` \| `mala` \| `muy_mala` |
 
-### Rama `noElegible` (sin credencial vigente) — contenido de `respuestas`
-
-Con `estado: "noElegible"` y `elegibilidad: "noElegible"`. La app corta el cuestionario en P1, así
-que `respuestas` solo lleva dos claves:
-
-```json
-"respuestas": { "credencialVigente": "no", "conocimientoPorPersona": [] }
-```
-
-`conocimientoPorPersona` **debe venir vacío** (no basta con omitirlo).
-
-**P2–P8 no se declaran en el schema de esta rama**, así que si el teléfono manda el borrador previo
-al "no" de P1, el servidor lo **descarta** antes de hashear y esas columnas quedan en `NULL`. No es
-un error: la petición se acepta igual (`201`). El único rastro del envío original queda en
-`payload_raw`, que nunca sale del servidor.
-
-### Catálogos v1
-
-Son **texto validado en la aplicación**, no enums de PostgreSQL: así se puede publicar un
-cuestionario v2 sin `ALTER TYPE`. Un valor fuera del catálogo es `422`, nunca un guardado silencioso.
+Son **texto validado en la aplicación**, no enums de PostgreSQL: así se puede publicar un cuestionario v4
+sin `ALTER TYPE`. Un valor fuera del catálogo es `422`, nunca un guardado silencioso.
 
 | Catálogo | Valores |
 |---|---|
-| **Personas** (7) | `lalo_ximenez`, `laura_estrada`, `paco_nino`, `gabriela_delgado`, `irineo_molina`, `goyo_castaneda`, `ernesto_montero` |
-| **Nivel de conocimiento** (P5) | `no_conoce`, `poco`, `algo`, `bien` |
-| **Medios** (P6) | `redes_sociales`, `otras_personas`, `labor_social` |
-| **Partido** (P4) | `morena`, `pri`, `ninguno_no_sabe`, `prd`, `mc`, `pvem`, `pt`, `independiente`, `panal`, `pan` |
-| **Rango de edad** (P2) | `18_29`, `30_44`, `45_59`, `60_mas` |
-| **Género** (P3) | `hombre`, `mujer`, `otro` |
-| **Estado** | `completada`, `noElegible` |
-| **Elegibilidad** | `elegible`, `noElegible` |
-
-El orden de la tabla de **Personas** es el orden canónico: es el que usa el hash de idempotencia y
-el que ordena las 7 columnas pivoteadas del CSV.
-
-### P5 ↔ P6: la única regla condicional del cuestionario
-
-`respuestas.mediosConocimiento` es una unión discriminada por `tipo`, y su forma la decide
-`respuestas.conocimientoPorPersona`. Se valida **en los dos sentidos**:
-
-| Situación en P5 | Forma exigida de P6 |
-|---|---|
-| El encuestado **no conoce a nadie**: las 7 filas con `nivel: "no_conoce"` — la app no pregunta P6 | `{"tipo":"omitidaPorLogica"}` |
-| Conoce al menos a una persona (algún `nivel ≠ no_conoce`) | `{"tipo":"respondida","medios":["redes_sociales", …]}` con **al menos un medio** y **sin repetidos** |
-
-Las dos direcciones se rechazan: P6 respondida sobre gente que dijo no conocer, y P6 omitida cuando
-sí conoce a alguien. También son `422` mandar `respondida` con `medios: []`, mandar
-`omitidaPorLogica` acompañada de `medios`, o repetir un medio.
+| **Sexo** | `hombre`, `mujer` |
+| **Rango de edad** | `18_30`, `31_45`, `46_mas` |
+| **Rol de Lalo** | `politico_lider_social`, `empresario`, `funcionario_publico`, `no_sabe_no_contesta` |
+| **Opinión de Lalo** | `muy_buena`, `buena`, `regular`, `mala`, `muy_mala`, `no_lo_conozco` |
+| **Preferencia electoral** | `lalo_ximenez`, `irineo_molina`, `fernando_huerta`, `paola_barrera`, `ana_gabriela_delgado` |
+| **Partido** | `pri`, `morena`, `pan`, `panal_oaxaca`, `pt`, `prd_oaxaca`, `pvem`, `pto`, `mc` |
+| **Gobernantes (aprobación)** | `sheinbaum`, `jara`, `huerta` (orden canónico para pivoteo del CSV) |
+| **Calificación de gobernantes** | `muy_buena`, `buena`, `regular`, `mala`, `muy_mala` |
+| **Estado del registro** | `completada` (único valor aceptado) |
 
 ### Ubicación
 
@@ -288,8 +258,8 @@ El body crudo se conserva íntegro en `payload_raw` para auditoría.
 | `403` | `{"error":"Sin permisos","code":"FORBIDDEN"}` | **La ingesta no lo emite.** Recibirlo significa que la petición no llegó a este router — típicamente URL base mal armada que cayó en un montaje protegido por JWT | No: corregir la URL |
 | `409` | `{"error":…,"code":"CONFLICT",…}` | El mismo `idLocal` ya está registrado **con contenido sustantivo distinto**. La fila original no se toca | No: es un `idLocal` reutilizado |
 | `413` | `{"error":…,"code":"PAYLOAD_TOO_LARGE",…}` | El cuerpo supera **256 KB** | No, sin recortar |
-| `422` | `{"error":"Datos inválidos","code":"VALIDATION_ERROR","issues":[{"field","message"}],…}` | El JSON es válido pero no pasa el cuestionario v1 | No: terminal |
-| `422` | `{"error":…,"code":"UNSUPPORTED_VERSION",…}` | `versionCuestionario` entero distinto de 1 | No: hay que actualizar el servidor |
+| `422` | `{"error":"Datos inválidos","code":"VALIDATION_ERROR","issues":[{"field","message"}],…}` | El JSON es válido pero no pasa el cuestionario v3 | No: terminal |
+| `422` | `{"error":…,"code":"UNSUPPORTED_VERSION",…}` | `versionCuestionario` entero distinto de 3 | No: hay que actualizar la app |
 | `429` | `{"error":…,"code":"RATE_LIMITED"}` + `Retry-After` | Cuota agotada (por dispositivo o por IP) | Sí, con backoff |
 | `5xx` | `{"error":…,"code":"INTERNAL_ERROR",…}` | Error del servidor. **Sin escritura parcial**: el alta es un solo INSERT atómico | Sí, con el mismo `idLocal` |
 
@@ -335,15 +305,14 @@ Antes de hashear se **normaliza**, para que reenvíos equivalentes den el mismo 
 - `folioLocal` ausente ≡ `null`;
 - `encuestador` ausente ≡ `null`;
 - `ubicacion` ausente ≡ `null`;
-- `conocimientoPorPersona` reordenado al orden del catálogo de personas y `medios` al orden del
-  catálogo de medios (el orden en que el teléfono arma los arrays no es información);
+- `aprobacionPorGobernante` reordenado al orden canónico de `GOBERNANTES_V3` (es un conjunto, el orden no es información);
+- las listas de texto libre (`empresariosConocidos`, `politicosConocidos`) se hashean **en el orden enviado** (son datos libres que el teléfono devuelve igual);
 - orden de claves fijo por construcción, así que no depende de cómo llegó el body.
 
 La forma canónica lleva un campo `v` con la versión del **algoritmo** de canonicalización (no la del
 cuestionario): si alguna de estas reglas cambia, subirlo evita comparar hashes viejos contra nuevos
-como si fueran del mismo esquema (`api/src/lib/encuestasCanonical.ts`). Sigue en `1` pese a la
-entrada de `encuestador`: el campo se añadió **antes de cualquier despliegue**, así que no existía
-ni un solo `payload_hash` guardado con el que pudiera chocar.
+como si fueran del mismo esquema (`api/src/lib/encuestasCanonical.ts`). Sube a `2` en v3: el schema v3
+es completamente nuevo y no hay hashes v1 en producción con los que pudiera chocar.
 
 **El flujo:**
 
@@ -400,29 +369,26 @@ curl -sS -i -X POST https://qa.aztechcomposites.com/api/v1/encuestas \
   "idLocal": "7f9c2a10-4d3b-4a7e-9f21-0c8b5d6e1a44",
   "folioLocal": "LX-001248",
   "encuestador": "María López",
-  "versionCuestionario": 1,
+  "versionCuestionario": 3,
   "estado": "completada",
-  "elegibilidad": "elegible",
   "fechaHoraInicio": "2026-07-30T16:12:04.000Z",
   "fechaHoraFinalizacion": "2026-07-30T16:18:41.000Z",
   "duracionSegundos": 397,
   "respuestas": {
-    "credencialVigente": "si",
-    "rangoEdad": "30_44",
-    "genero": "mujer",
-    "partidoPreferido": "morena",
-    "conocimientoPorPersona": [
-      {"persona": "lalo_ximenez",     "nivel": "bien"},
-      {"persona": "laura_estrada",    "nivel": "algo"},
-      {"persona": "paco_nino",        "nivel": "poco"},
-      {"persona": "gabriela_delgado", "nivel": "no_conoce"},
-      {"persona": "irineo_molina",    "nivel": "poco"},
-      {"persona": "goyo_castaneda",   "nivel": "no_conoce"},
-      {"persona": "ernesto_montero",  "nivel": "algo"}
-    ],
-    "mediosConocimiento": {"tipo": "respondida", "medios": ["redes_sociales", "otras_personas"]},
-    "mayorPersonalidad": "lalo_ximenez",
-    "candidatoPreferido": "lalo_ximenez"
+    "sexo": "mujer",
+    "rangoEdad": "31_45",
+    "empresariosConocidos": ["Javier González", "Rosa Mendoza"],
+    "politicosConocidos": ["Lalo Ximénez", "Irineo Molina", "Fernando Huerta"],
+    "conoceLalo": "si",
+    "rolLalo": "politico_lider_social",
+    "opinionLalo": "buena",
+    "preferenciaElectoral": "lalo_ximenez",
+    "preferenciaPartido": "morena",
+    "aprobacionPorGobernante": [
+      {"gobernante": "sheinbaum", "calificacion": "muy_buena"},
+      {"gobernante": "jara", "calificacion": "buena"},
+      {"gobernante": "huerta", "calificacion": "buena"}
+    ]
   },
   "ubicacion": {
     "disponible": true,
@@ -435,7 +401,7 @@ curl -sS -i -X POST https://qa.aztechcomposites.com/api/v1/encuestas \
     "esValida": true
   },
   "dispositivo": {"plataforma": "android", "modelo": "Moto G54", "versionSistema": "14"},
-  "versionAplicacion": "1.4.0"
+  "versionAplicacion": "2.0.0"
 }'
 ```
 
@@ -462,43 +428,6 @@ Content-Type: application/json; charset=utf-8
 Si en cambio cambias un campo **sustantivo** (por ejemplo `respuestas.partidoPreferido`) manteniendo
 el `idLocal`, la respuesta es `409` y la fila original queda intacta.
 
-### 3. Encuesta no elegible → `201`
-
-```bash
-curl -sS -i -X POST https://qa.aztechcomposites.com/api/v1/encuestas \
-  -H 'Authorization: Bearer <API KEY>' \
-  -H 'Content-Type: application/json' \
-  -d '{
-  "idLocal": "b2d4e6f8-1a3c-4d5e-8f90-a1b2c3d4e5f6",
-  "folioLocal": "LX-001249",
-  "encuestador": "María López",
-  "versionCuestionario": 1,
-  "estado": "noElegible",
-  "elegibilidad": "noElegible",
-  "fechaHoraInicio": "2026-07-30T16:22:10.000Z",
-  "fechaHoraFinalizacion": "2026-07-30T16:22:48.000Z",
-  "duracionSegundos": 38,
-  "respuestas": {
-    "credencialVigente": "no",
-    "conocimientoPorPersona": []
-  },
-  "ubicacion": {
-    "disponible": false,
-    "permiso": "denegado",
-    "servicioActivo": true,
-    "motivoNoDisponible": "permisoDenegado"
-  },
-  "dispositivo": {"plataforma": "android", "modelo": "Moto G54", "versionSistema": "14"},
-  "versionAplicacion": "1.4.0"
-}'
-```
-
-```
-HTTP/1.1 201 Created
-Content-Type: application/json; charset=utf-8
-
-{"idRemoto":"5e8b1c33-72a0-4f19-9d6e-4b0c7a2f8e51"}
-```
 
 ### Prueba de conexión
 
@@ -570,22 +499,19 @@ staging está en `docs/qa-externa.md`.
 
 `GET /api/encuestas/export.csv` se sirve en **streaming por lotes**, con **BOM UTF-8** (para que
 Excel en Windows no rompa los acentos) y saltos `CRLF`. Nombre del archivo:
-`encuestas-<estado|todas>-<dateFrom>_<dateTo>.csv`.
+`encuestas-<dateFrom>_<dateTo>.csv`.
 
-**40 columnas**, en este orden (el rótulo y el orden exactos los fija `ENCUESTAS_CSV_HEADERS` en
+**36 columnas** (v3), en este orden exacto (el rótulo y el orden los fija `ENCUESTAS_CSV_HEADERS` en
 `api/src/services/encuestasRevisionService.ts`):
 
 | Bloque | Columnas |
 |---|---|
 | Identidad | ID remoto · ID local · Folio · Encuestador (vacío si el teléfono no lo mandó) |
 | Tiempos | Recibido (UTC) · Inicio (UTC) · Finalización (UTC) · Duración (s) |
-| Clasificación | Estado · Elegibilidad · Versión cuestionario |
-| P1–P4 | Credencial vigente · Rango de edad · Género · Partido preferido |
-| P5 (pivoteada) | 7 columnas `Conoce <persona>`, en el orden del catálogo de personas. **Vacías** en las encuestas `noElegible` |
-| P6 | Medios (tipo) · Medios (la lista unida con `;`) |
-| P7–P8 | Mayor personalidad · Candidato preferido |
+| Registro | Estado · Versión cuestionario |
+| Respuestas v3 | Sexo · Rango edad · Empresarios conocidos (join `;`) · Políticos conocidos (join `;`) · Conoce Lalo · Rol Lalo · Opinión Lalo · Preferencia electoral · Preferencia partido · Aprobación sheinbaum · Aprobación jara · Aprobación huerta |
 | Ubicación | Disponible · Latitud · Longitud · Precisión (m) · Válida · Capturada (UTC) · Permiso · Servicio activo · Motivo sin ubicación |
-| Dispositivo | Plataforma · Modelo · Versión del sistema · Versión de la app · Dispositivo (identificador de la API key) |
+| Dispositivo | Plataforma · Modelo · Versión del sistema · Versión app · Dispositivo (identificador de la API key) |
 
 Las fechas salen en **ISO UTC** (igual que se persisten: la hora local del revisor no debe cambiar
 el contenido del archivo) y los booleanos como `si` / `no` / celda vacía.
@@ -622,22 +548,23 @@ el log y el archivo se cierra truncado.
 | `id_local` | `text` UNIQUE | cliente (validado) | UUID del teléfono. **La restricción de idempotencia** |
 | `dispositivo_id` | `integer` FK → `encuestas_dispositivos` | **servidor** | Estampado desde la API key autenticada. El cliente nunca lo manda (FK `RESTRICT`: no se borra un dispositivo con encuestas) |
 | `payload_hash` | `text` | servidor | SHA-256 canónico del contenido sustantivo. **No exportable** |
-| `version_cuestionario` | `integer` | cliente (validado) | Hoy siempre `1` |
+| `version_cuestionario` | `integer` | cliente (validado) | Hoy siempre `3` |
 | `folio_local` | `text` NULL | cliente (validado) | Folio de papel `LX-<dígitos>`. **No único** |
 | `encuestador` | `text` NULL | cliente (validado) | Nombre de quien levanta la encuesta (máx. 120). **Opcional**: `NULL` si la app no lo mandó. **Texto libre** — el CSV lo neutraliza contra fórmulas. Entra al hash |
-| `estado` | enum `EncuestaEstado` | cliente (validado) | `completada` \| `noElegible` |
-| `elegibilidad` | enum `EncuestaElegibilidad` | cliente (validado) | `elegible` \| `noElegible`, atada a `estado` |
+| `estado` | enum `EncuestaEstado` | cliente (validado) | Siempre `completada` en v3 |
 | `fecha_hora_inicio` | `timestamp` | cliente (validado) | Inicio de la entrevista, según el reloj del teléfono |
 | `fecha_hora_finalizacion` | `timestamp` | cliente (validado) | Fin de la entrevista. **Es el campo por el que filtra el revisor** |
 | `duracion_segundos` | `integer` | cliente (validado) | Cronómetro de la app, contrastado con el intervalo (±60 s) |
-| `credencial_vigente` | `text` | cliente (validado) | P1, de `respuestas.credencialVigente`: `si` \| `no` |
-| `rango_edad` | `text` NULL | cliente (validado) | P2, de `respuestas.rangoEdad`. `NULL` en `noElegible` |
-| `genero` | `text` NULL | cliente (validado) | P3, de `respuestas.genero`. `NULL` en `noElegible` |
-| `partido_preferido` | `text` NULL | cliente (validado) | P4, de `respuestas.partidoPreferido`. `NULL` en `noElegible` |
-| `conocimiento_por_persona` | `jsonb` NULL | cliente (validado) | P5: `[{persona,nivel}]` ×7, en orden canónico. `NULL` en `noElegible` |
-| `medios_conocimiento` | `jsonb` NULL | cliente (validado) | P6: `{tipo}` u `{tipo,medios[]}`. `NULL` en `noElegible` |
-| `mayor_personalidad` | `text` NULL | cliente (validado) | P7, de `respuestas.mayorPersonalidad`. `NULL` en `noElegible` |
-| `candidato_preferido` | `text` NULL | cliente (validado) | P8, de `respuestas.candidatoPreferido`. `NULL` en `noElegible` |
+| `sexo` | `text` | cliente (validado) | `hombre` \| `mujer` |
+| `rango_edad` | `text` | cliente (validado) | `18_30` \| `31_45` \| `46_mas` |
+| `empresarios_conocidos` | `jsonb` | cliente (validado) | Lista de nombres (0–3), en orden enviado |
+| `politicos_conocidos` | `jsonb` | cliente (validado) | Lista de nombres (1–3), en orden enviado |
+| `conoce_lalo` | `text` | cliente (validado) | `si` \| `no` |
+| `rol_lalo` | `text` | cliente (validado) | Catálogo v3 |
+| `opinion_lalo` | `text` | cliente (validado) | Catálogo v3 |
+| `preferencia_electoral` | `text` | cliente (validado) | Catálogo v3 |
+| `preferencia_partido` | `text` | cliente (validado) | Catálogo v3 |
+| `aprobacion_por_gobernante` | `jsonb` | cliente (validado) | `[{gobernante,calificacion}]` ×3, en orden canónico |
 | `ubicacion_disponible` | `boolean` NULL | cliente (validado) | **`NULL` = el payload no traía bloque de ubicación** (app antigua); distinto de `false` = lo intentó y falló |
 | `ubicacion_lat` | `double` NULL | cliente (validado) | Solo con `disponible = true` |
 | `ubicacion_lng` | `double` NULL | cliente (validado) | Solo con `disponible = true` |
@@ -708,8 +635,12 @@ export COMPOSE="docker compose -p flotillas -f docker-compose.yml -f docker-comp
 $COMPOSE run --rm --no-deps api npx prisma migrate deploy
 ```
 
-La migración de este módulo es **aditiva pura**: 2 enums + 2 tablas + índices + FK (+ la columna
-`encuestador`); no toca nada existente.
+La migración del módulo es **sin TRUNCATE**: reestructura las columnas v1 a v3 con `ALTER` y `UPDATE`,
+conservando cualquier fila v1 residual que pudiera existir en BD de desarrollo (producción nunca tuvo
+datos v1 porque el módulo no llegó a producción). Elimina las columnas v1 obsoletas, normaliza
+`estado` a `completada`, y agrega las columnas v3 (todas NULLABLE a propósito, la validación
+impone la obligatoriedad). El gate de migraciones (`test:migrations`) lo prohíbe TRUNCATE/DELETE
+sobre tablas `encuestas*`, y esa restricción se aplica aquí.
 
 ### Pruebas
 
