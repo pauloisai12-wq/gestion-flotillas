@@ -16,8 +16,8 @@
 //     comparte hardware con el SAS.
 
 import prisma from '../lib/prisma';
-import { Prisma, EncuestaEstado, EncuestaElegibilidad } from '@prisma/client';
-import { PERSONAS_V1, MEDIOS_V1 } from '../validators/encuestasIngestValidator';
+import { Prisma, EncuestaEstado } from '@prisma/client';
+import { GOBERNANTES_V3 } from '../validators/encuestasIngestValidator';
 
 /** Tope duro de filas exportables en una sola petición. */
 export const MAX_ENCUESTAS_EXPORT = 50_000;
@@ -28,24 +28,22 @@ export const ENCUESTAS_EXPORT_BATCH = 1_000;
 export interface EncuestasListQuery {
   page?: number;
   limit?: number;
-  estado?: EncuestaEstado;
   dispositivo?: string;
   dateFrom?: string;
   dateTo?: string;
 }
 
-/** Encuesta serializada para el listado del portal de revisión. */
+/** Encuesta serializada para el listado del portal de revisión (v3). */
 export interface EncuestaDto {
   id: number;
   idRemoto: string;
   folioLocal: string | null;
   /** null = registro capturado por una app anterior al campo. */
   encuestador: string | null;
-  estado: EncuestaEstado;
-  elegibilidad: EncuestaElegibilidad;
   versionCuestionario: number;
-  partidoPreferido: string | null;
-  candidatoPreferido: string | null;
+  preferenciaElectoral: string | null;
+  preferenciaPartido: string | null;
+  conoceLalo: string | null;
   duracionSegundos: number;
   fechaHoraFinalizacion: Date;
   recibidoEn: Date;
@@ -55,10 +53,10 @@ export interface EncuestaDto {
 }
 
 /**
- * Fila completa que alimenta el CSV. Los dos campos JSONB se tipan `unknown`
+ * Fila completa que alimenta el CSV (v3). Los campos JSONB se tipan `unknown`
  * a propósito: Postgres devuelve lo que se guardó, y el pivoteo comprueba la
  * forma en tiempo de ejecución en vez de confiar en un tipo que la BD no
- * garantiza (una v2 del cuestionario podría cambiar el contenido).
+ * garantiza.
  *
  * `payloadRaw` y `payloadHash` NO están aquí ni en el select: el body crudo del
  * teléfono es solo auditoría y no sale del servidor.
@@ -74,16 +72,17 @@ export interface EncuestaExportRow {
   fechaHoraFinalizacion: Date;
   duracionSegundos: number;
   estado: EncuestaEstado;
-  elegibilidad: EncuestaElegibilidad;
   versionCuestionario: number;
-  credencialVigente: string;
+  sexo: string | null;
   rangoEdad: string | null;
-  genero: string | null;
-  partidoPreferido: string | null;
-  conocimientoPorPersona: unknown;
-  mediosConocimiento: unknown;
-  mayorPersonalidad: string | null;
-  candidatoPreferido: string | null;
+  empresariosConocidos: unknown;
+  politicosConocidos: unknown;
+  conoceLalo: string | null;
+  rolLalo: string | null;
+  opinionLalo: string | null;
+  preferenciaElectoral: string | null;
+  preferenciaPartido: string | null;
+  aprobacionPorGobernante: unknown;
   ubicacionDisponible: boolean | null;
   ubicacionLat: number | null;
   ubicacionLng: number | null;
@@ -103,7 +102,7 @@ export interface EncuestaExportRow {
 const dispositivoSelect = { select: { id: true, identificador: true } } as const;
 
 /**
- * Columnas del listado: EXACTAMENTE las del DTO. Se usa `select` y no `include`
+ * Columnas del listado: EXACTAMENTE las del DTO v3. Se usa `select` y no `include`
  * porque `include` trae además todos los escalares del modelo, y uno de ellos es
  * `payload_raw`: el body JSON completo del teléfono, que el DTO tira a la basura.
  * Con `include`, una página de 100 filas movería cientos de KB de texto desde la
@@ -114,11 +113,10 @@ const encuestaListSelect = {
   idRemoto: true,
   folioLocal: true,
   encuestador: true,
-  estado: true,
-  elegibilidad: true,
   versionCuestionario: true,
-  partidoPreferido: true,
-  candidatoPreferido: true,
+  preferenciaElectoral: true,
+  preferenciaPartido: true,
+  conoceLalo: true,
   duracionSegundos: true,
   fechaHoraFinalizacion: true,
   recibidoEn: true,
@@ -127,7 +125,7 @@ const encuestaListSelect = {
 } as const;
 
 /**
- * Columnas de la exportación: las 40 celdas del CSV y nada más. Es un select
+ * Columnas de la exportación: el CSV v3 con 36 cabeceras. Es un select
  * distinto del listado a propósito —el CSV sí lleva los JSONB y el bloque de
  * ubicación completo—, pero comparte con él las dos exclusiones que importan:
  * `payloadRaw` y `payloadHash`.
@@ -143,16 +141,17 @@ const encuestaExportSelect = {
   fechaHoraFinalizacion: true,
   duracionSegundos: true,
   estado: true,
-  elegibilidad: true,
   versionCuestionario: true,
-  credencialVigente: true,
+  sexo: true,
   rangoEdad: true,
-  genero: true,
-  partidoPreferido: true,
-  conocimientoPorPersona: true,
-  mediosConocimiento: true,
-  mayorPersonalidad: true,
-  candidatoPreferido: true,
+  empresariosConocidos: true,
+  politicosConocidos: true,
+  conoceLalo: true,
+  rolLalo: true,
+  opinionLalo: true,
+  preferenciaElectoral: true,
+  preferenciaPartido: true,
+  aprobacionPorGobernante: true,
   ubicacionDisponible: true,
   ubicacionLat: true,
   ubicacionLng: true,
@@ -176,7 +175,6 @@ const encuestaExportSelect = {
  */
 export function buildWhere(params: EncuestasListQuery): Prisma.EncuestaWhereInput {
   const where: Prisma.EncuestaWhereInput = {};
-  if (params.estado) where.estado = params.estado;
   if (params.dispositivo) {
     // Por etiqueta del equipo, no por id: es lo que el revisor tiene a mano.
     where.dispositivo = {
@@ -206,11 +204,10 @@ function toDto(row: EncuestaDto): EncuestaDto {
     idRemoto: row.idRemoto,
     folioLocal: row.folioLocal,
     encuestador: row.encuestador,
-    estado: row.estado,
-    elegibilidad: row.elegibilidad,
     versionCuestionario: row.versionCuestionario,
-    partidoPreferido: row.partidoPreferido,
-    candidatoPreferido: row.candidatoPreferido,
+    preferenciaElectoral: row.preferenciaElectoral,
+    preferenciaPartido: row.preferenciaPartido,
+    conoceLalo: row.conoceLalo,
     duracionSegundos: row.duracionSegundos,
     fechaHoraFinalizacion: row.fechaHoraFinalizacion,
     recibidoEn: row.recibidoEn,
@@ -275,9 +272,9 @@ export async function* iterateForExport(
 }
 
 /**
- * Encabezados del CSV, en el mismo orden que produce toCsvRow. Las 7 columnas
- * "Conoce <persona>" son el pivoteo del JSONB de P5 en el orden del catálogo v1:
- * una columna fija por persona es lo que permite ordenar y graficar en Excel.
+ * Encabezados del CSV v3 (36 columnas), en el mismo orden que produce toCsvRow.
+ * Las 3 columnas de aprobación hacen pivoteo del JSONB por orden de GOBERNANTES_V3:
+ * una columna fija por gobernante es lo que permite ordenar y graficar en Excel.
  */
 export const ENCUESTAS_CSV_HEADERS = [
   'ID remoto',
@@ -289,23 +286,19 @@ export const ENCUESTAS_CSV_HEADERS = [
   'Finalización (UTC)',
   'Duración (s)',
   'Estado',
-  'Elegibilidad',
   'Versión cuestionario',
-  'Credencial vigente',
+  'Sexo',
   'Rango edad',
-  'Género',
-  'Partido preferido',
-  'Conoce lalo_ximenez',
-  'Conoce laura_estrada',
-  'Conoce paco_nino',
-  'Conoce gabriela_delgado',
-  'Conoce irineo_molina',
-  'Conoce goyo_castaneda',
-  'Conoce ernesto_montero',
-  'Medios (tipo)',
-  'Medios',
-  'Mayor personalidad',
-  'Candidato preferido',
+  'Empresarios conocidos',
+  'Políticos conocidos',
+  'Conoce Lalo',
+  'Rol Lalo',
+  'Opinión Lalo',
+  'Preferencia electoral',
+  'Preferencia partido',
+  'Aprobación sheinbaum',
+  'Aprobación jara',
+  'Aprobación huerta',
   'Ubicación disponible',
   'Latitud',
   'Longitud',
@@ -354,34 +347,32 @@ export function csvEscape(value: unknown): string {
 }
 
 /**
- * Pivotea el JSONB de P5 (`[{persona, nivel}]`) a un mapa persona→nivel. Ignora
- * lo que no tenga la forma esperada en vez de reventar: el CSV de 50 000 filas
- * no puede caerse por una fila anómala de una versión futura del cuestionario.
+ * Pivotea el JSONB de aprobación ([{gobernante, calificacion}]) a un mapa
+ * gobernante→calificación. Ignora lo que no tenga la forma esperada en vez de
+ * reventar: el CSV de 50 000 filas no puede caerse por una fila anómala (una
+ * v1 residual trae NULL aquí).
  */
-function nivelesPorPersona(valor: unknown): Map<string, string> {
+function calificacionesPorGobernante(valor: unknown): Map<string, string> {
   const mapa = new Map<string, string>();
   if (!Array.isArray(valor)) return mapa;
   for (const fila of valor) {
     if (!fila || typeof fila !== 'object') continue;
-    const { persona, nivel } = fila as { persona?: unknown; nivel?: unknown };
-    if (typeof persona === 'string' && typeof nivel === 'string') mapa.set(persona, nivel);
+    const { gobernante, calificacion } = fila as { gobernante?: unknown; calificacion?: unknown };
+    if (typeof gobernante === 'string' && typeof calificacion === 'string') {
+      mapa.set(gobernante, calificacion);
+    }
   }
   return mapa;
 }
 
 /**
- * Dos celdas para P6: el tipo (`respondida` / `omitidaPorLogica`) y la lista de
- * medios unida con `;`. La lista se emite en el orden de MEDIOS_V1, no en el que
- * la mandó el teléfono, para que dos encuestas con los mismos medios produzcan
- * exactamente el mismo texto y la columna sea agrupable en Excel.
+ * Lista de nombres (texto libre) unida con ';'. Se emite en el orden guardado
+ * (que es el orden en que el encuestador la dictó); cada entrada ya pasó por
+ * el tope de 80 chars del validador y la celda completa pasa por csvEscape.
  */
-function celdasDeMedios(valor: unknown): [string, string] {
-  if (!valor || typeof valor !== 'object' || Array.isArray(valor)) return ['', ''];
-  const { tipo, medios } = valor as { tipo?: unknown; medios?: unknown };
-  const celdaTipo = typeof tipo === 'string' ? tipo : '';
-  if (!Array.isArray(medios)) return [celdaTipo, ''];
-  const elegidos = new Set(medios.filter((m): m is string => typeof m === 'string'));
-  return [celdaTipo, MEDIOS_V1.filter((m) => elegidos.has(m)).join(';')];
+function celdaDeLista(valor: unknown): string {
+  if (!Array.isArray(valor)) return '';
+  return valor.filter((v): v is string => typeof v === 'string').join(';');
 }
 
 /** Booleano de tres estados: NULL (dato ausente) es celda vacía, no "no". */
@@ -390,10 +381,9 @@ function siNo(valor: boolean | null | undefined): string {
   return valor ? 'si' : 'no';
 }
 
-/** Una fila del CSV, terminada en CRLF (lo que espera Excel). */
+/** Una fila del CSV v3, terminada en CRLF (lo que espera Excel). */
 export function toCsvRow(encuesta: EncuestaExportRow): string {
-  const niveles = nivelesPorPersona(encuesta.conocimientoPorPersona);
-  const [mediosTipo, mediosLista] = celdasDeMedios(encuesta.mediosConocimiento);
+  const calificaciones = calificacionesPorGobernante(encuesta.aprobacionPorGobernante);
 
   return (
     [
@@ -410,19 +400,18 @@ export function toCsvRow(encuesta: EncuestaExportRow): string {
       encuesta.fechaHoraFinalizacion.toISOString(),
       encuesta.duracionSegundos,
       encuesta.estado,
-      encuesta.elegibilidad,
       encuesta.versionCuestionario,
-      encuesta.credencialVigente,
+      encuesta.sexo,
       encuesta.rangoEdad,
-      encuesta.genero,
-      encuesta.partidoPreferido,
-      // Las 7 columnas de P5. En una encuesta noElegible P2–P8 no se almacenan,
-      // así que el mapa viene vacío y las 7 celdas salen vacías.
-      ...PERSONAS_V1.map((persona) => niveles.get(persona) ?? ''),
-      mediosTipo,
-      mediosLista,
-      encuesta.mayorPersonalidad,
-      encuesta.candidatoPreferido,
+      celdaDeLista(encuesta.empresariosConocidos),
+      celdaDeLista(encuesta.politicosConocidos),
+      encuesta.conoceLalo,
+      encuesta.rolLalo,
+      encuesta.opinionLalo,
+      encuesta.preferenciaElectoral,
+      encuesta.preferenciaPartido,
+      // Las 3 columnas de aprobación por gobernante, en orden de GOBERNANTES_V3.
+      ...GOBERNANTES_V3.map((g) => calificaciones.get(g) ?? ''),
       siNo(encuesta.ubicacionDisponible),
       encuesta.ubicacionLat,
       encuesta.ubicacionLng,

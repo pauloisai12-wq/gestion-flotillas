@@ -39,13 +39,12 @@ router.get(
     const result = await service.list({
       page,
       limit,
-      estado: q.estado,
       dispositivo: q.dispositivo,
       dateFrom: q.dateFrom,
       dateTo: q.dateTo,
     });
-    // El listado lleva partido y candidato preferidos de cada encuestado: sin
-    // esta cabecera, una 200 a un GET es heurísticamente cacheable y el botón
+    // El listado lleva preferencias electorales del encuestado: sin esta
+    // cabecera, una 200 a un GET es heurísticamente cacheable y el botón
     // Atrás repintaría la lista desde el disco DESPUÉS de cerrar sesión. El
     // export.csv hermano ya la pone (setCsvHeaders).
     res.setHeader('Cache-Control', 'private, no-store');
@@ -54,9 +53,8 @@ router.get(
 );
 
 function csvFilename(q: EncuestasExportQueryInput): string {
-  // El estado va literal (`noElegible`), que es el mismo valor que el filtro:
-  // el nombre del archivo debe decir exactamente qué se descargó.
-  return `encuestas-${q.estado ?? 'todas'}-${q.dateFrom}_${q.dateTo}.csv`;
+  // En v3 no hay filtro de estado: el nombre contiene solo el rango de fechas.
+  return `encuestas-${q.dateFrom}_${q.dateTo}.csv`;
 }
 
 function setCsvHeaders(res: Response, filename: string): void {
@@ -133,7 +131,6 @@ router.get(
 
     try {
       for await (const lote of service.iterateForExport({
-        estado: q.estado,
         dispositivo: q.dispositivo,
         dateFrom: q.dateFrom,
         dateTo: q.dateTo,

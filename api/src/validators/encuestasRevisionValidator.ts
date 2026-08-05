@@ -18,9 +18,9 @@ import { z } from 'zod/v4';
 // regex no justifica atar este módulo al de GeoCampo.
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Usa formato AAAA-MM-DD');
 
-// Los valores del enum son los identificadores Prisma de EncuestaEstado
-// (schema.prisma:976-979), que son también los que manda la app móvil.
-const estadoFiltro = z.enum(['completada', 'noElegible']);
+// En v3 el enum EncuestaEstado tiene un solo valor ('completada'): un filtro de
+// una sola opción es UI muerta. Se elimina el parámetro y zod estripa cualquier
+// `?estado=...` en silencio (sin error).
 
 // A diferencia del molde —donde `dispositivo` es el id numérico del padrón— aquí
 // el filtro va por TEXTO: el revisor conoce el equipo por su etiqueta
@@ -35,7 +35,6 @@ const dispositivoFiltro = z
 export const encuestasQuerySchema = z.object({
   page: z.coerce.number().optional(),
   limit: z.coerce.number().optional(),
-  estado: estadoFiltro.optional(),
   dispositivo: dispositivoFiltro.optional(),
   dateFrom: isoDate.optional(),
   dateTo: isoDate.optional(),
@@ -52,7 +51,6 @@ export type EncuestasQueryInput = z.infer<typeof encuestasQuerySchema>;
 // borrarlo entero. Si algún día hay una tercera copia, unificar las tres.
 export const encuestasExportQuerySchema = z
   .object({
-    estado: estadoFiltro.optional(),
     dispositivo: dispositivoFiltro.optional(),
     dateFrom: isoDate,
     dateTo: isoDate,
