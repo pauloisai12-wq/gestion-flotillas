@@ -20,7 +20,7 @@
 // como llegó se conserva aparte, en payloadRaw.
 //
 // Dos cosas que a propósito NO viven aquí:
-//  - el dispatch por versión de cuestionario: una versión ≠ 1 se responde 422
+//  - el dispatch por versión de cuestionario: una versión ≠ 3 se responde 422
 //    UNSUPPORTED_VERSION en el router, antes de tocar este schema;
 //  - la forma del error: el router responde 422 inline con las issues y nunca
 //    relanza el ZodError (el handler global lo convertiría en 400).
@@ -41,38 +41,28 @@ export const UUID_RE =
 // legítima; la clave de idempotencia es idLocal.
 export const FOLIO_LOCAL_RE = /^LX-[0-9]+$/;
 
-// Catálogos de la versión 1 del cuestionario. Viven en la app (TEXT validado
-// aquí, no enums de Postgres) para que una v2 no exija ALTER TYPE.
-export const PERSONAS_V1 = [
-  'lalo_ximenez',
-  'laura_estrada',
-  'paco_nino',
-  'gabriela_delgado',
-  'irineo_molina',
-  'goyo_castaneda',
-  'ernesto_montero',
+// Catálogos de la versión 3 del cuestionario. Viven en la app (TEXT validado
+// aquí, no enums de Postgres) para que una v4 no exija ALTER TYPE.
+export const SEXOS_V3 = ['hombre', 'mujer'] as const;
+export const RANGOS_EDAD_V3 = ['18_30', '31_45', '46_mas'] as const;
+export const SI_NO_V3 = ['si', 'no'] as const;
+export const ROLES_LALO_V3 = [
+  'politico_lider_social',
+  'empresario',
+  'funcionario_publico',
+  'no_sabe_no_contesta',
 ] as const;
-
-export const NIVELES_CONOCIMIENTO_V1 = ['no_conoce', 'poco', 'algo', 'bien'] as const;
-
-export const MEDIOS_V1 = ['redes_sociales', 'otras_personas', 'labor_social'] as const;
-
-export const PARTIDOS_V1 = [
-  'morena',
-  'pri',
-  'ninguno_no_sabe',
-  'prd',
-  'mc',
-  'pvem',
-  'pt',
-  'independiente',
-  'panal',
-  'pan',
+export const OPINIONES_LALO_V3 = [
+  'muy_buena', 'buena', 'regular', 'mala', 'muy_mala', 'no_lo_conozco',
 ] as const;
-
-export const RANGOS_EDAD_V1 = ['18_29', '30_44', '45_59', '60_mas'] as const;
-
-export const GENEROS_V1 = ['hombre', 'mujer', 'otro'] as const;
+export const PREFERENCIAS_ELECTORALES_V3 = [
+  'lalo_ximenez', 'irineo_molina', 'fernando_huerta', 'paola_barrera', 'ana_gabriela_delgado',
+] as const;
+export const PARTIDOS_V3 = [
+  'pri', 'morena', 'pan', 'panal_oaxaca', 'pt', 'prd_oaxaca', 'pvem', 'pto', 'mc',
+] as const;
+export const GOBERNANTES_V3 = ['sheinbaum', 'jara', 'huerta'] as const;
+export const CALIFICACIONES_V3 = ['muy_buena', 'buena', 'regular', 'mala', 'muy_mala'] as const;
 
 /**
  * Desfase máximo tolerado entre `duracionSegundos` (cronómetro de la app) y el
@@ -85,10 +75,6 @@ export const TOLERANCIA_DURACION_SEG = 60;
 // porque `esValida` la manda el cliente y no puede contradecir a su propia
 // precisión.
 const PRECISION_VALIDA_MAX_M = 50;
-
-const personaV1 = z.enum(PERSONAS_V1, {
-  error: 'persona fuera del catálogo de la versión 1',
-});
 
 /** Fecha ISO-8601 en texto → Date. Sin coerce: un número o un null es rechazo. */
 const fechaIso = (campo: string) =>
@@ -107,110 +93,76 @@ const textoCorto = (max: number, campo: string) =>
     .max(max, `${campo} no puede exceder ${max} caracteres`);
 
 // ---------------------------------------------------------------------------
-// P5 — conocimiento por persona
+// Listas de nombres tecleados por el encuestador (empresarios, políticos)
 // ---------------------------------------------------------------------------
 
-const conocimientoPorPersonaSchema = z
+// Lista de nombres tecleados por el encuestador. Texto libre: se recorta y se
+// acota, pero no hay catálogo ni control de duplicados (dos personas pueden
+// llamarse igual).
+const listaDeNombres = (campo: string, min: number) =>
+  z
+    .array(
+      z
+        .string({ error: `cada entrada de ${campo} debe ser texto` })
+        .trim()
+        .min(1, `las entradas de ${campo} no pueden ir vacías`)
+        .max(80, `cada entrada de ${campo} no puede exceder 80 caracteres`),
+      { error: `${campo} es obligatorio` },
+    )
+    // Con min 0 el .min() nunca dispara; el mensaje solo importa para políticos.
+    .min(min, `${campo} debe traer al menos ${min} entrada`)
+    .max(3, `${campo} no puede traer más de 3 entradas`);
+
+// ---------------------------------------------------------------------------
+// P10 — aprobación por gobernante
+// ---------------------------------------------------------------------------
+
+// P10 — aprobación por gobernante: exactamente los 3 del catálogo, sin repetir.
+const aprobacionPorGobernanteSchema = z
   .array(
     z.object({
-      persona: personaV1,
-      nivel: z.enum(NIVELES_CONOCIMIENTO_V1, {
-        error: 'nivel de conocimiento fuera del catálogo de la versión 1',
-      }),
+      gobernante: z.enum(GOBERNANTES_V3, { error: 'gobernante fuera del catálogo de la versión 3' }),
+      calificacion: z.enum(CALIFICACIONES_V3, { error: 'calificacion fuera del catálogo de la versión 3' }),
     }),
   )
-  .length(7, 'conocimientoPorPersona debe traer las 7 personas del catálogo v1')
+  .length(3, 'aprobacionPorGobernante debe traer los 3 gobernantes del catálogo v3')
   .superRefine((filas, ctx) => {
-    // Los checks corren aunque el parseo previo haya fallado, así que se
-    // comprueba la forma antes de recorrer (un `"x"` en vez de un array haría
-    // estallar safeParse en lugar de devolver el 422).
+    // El check corre aunque el parseo previo haya fallado: comprobar la forma
+    // antes de recorrer (mismo criterio que el conocimientoPorPersona de v1).
     if (!Array.isArray(filas)) return;
-    // El enum ya descarta personas desconocidas y .length(7) fija el tamaño: si
-    // además no hay repetidas, las 7 son exactamente las 7 del catálogo.
-    const distintas = new Set(filas.map((f) => f.persona));
-    if (distintas.size !== filas.length) {
-      ctx.addIssue({
-        code: 'custom',
-        message: 'conocimientoPorPersona no puede repetir personas',
-      });
+    const distintos = new Set(filas.map((f) => f?.gobernante));
+    if (distintos.size !== filas.length) {
+      ctx.addIssue({ code: 'custom', message: 'aprobacionPorGobernante no puede repetir gobernantes' });
     }
   });
 
 // ---------------------------------------------------------------------------
-// P6 — medios por los que las conoce
+// Bloque de respuestas v3
 // ---------------------------------------------------------------------------
 
-const mediosConocimientoSchema = z.discriminatedUnion('tipo', [
-  // La app salta P6 cuando P5 dice que no conoce a nadie; el registro lo declara
-  // en vez de mandar una lista vacía, que sería ambigua.
-  z.object({ tipo: z.literal('omitidaPorLogica') }),
-  z.object({
-    tipo: z.literal('respondida'),
-    medios: z
-      .array(z.enum(MEDIOS_V1, { error: 'medio fuera del catálogo de la versión 1' }))
-      .min(1, 'medios debe traer al menos un medio')
-      .max(MEDIOS_V1.length, `medios no puede traer más de ${MEDIOS_V1.length} entradas`)
-      .superRefine((medios, ctx) => {
-        if (!Array.isArray(medios)) return;
-        if (new Set(medios).size !== medios.length) {
-          ctx.addIssue({ code: 'custom', message: 'medios no puede repetir valores' });
-        }
-      }),
+// Bloque de respuestas v3: TODOS los campos obligatorios, sin saltos de lógica.
+// rolLalo y opinionLalo se contestan siempre (sus catálogos ya traen
+// no_sabe_no_contesta / no_lo_conozco), así que NO hay coherencia cruzada con
+// conoceLalo que validar.
+const respuestasV3Schema = z.object({
+  sexo: z.enum(SEXOS_V3, { error: 'sexo fuera del catálogo de la versión 3' }),
+  rangoEdad: z.enum(RANGOS_EDAD_V3, { error: 'rangoEdad fuera del catálogo de la versión 3' }),
+  empresariosConocidos: listaDeNombres('empresariosConocidos', 0),
+  politicosConocidos: listaDeNombres('politicosConocidos', 1),
+  conoceLalo: z.enum(SI_NO_V3, { error: 'conoceLalo debe ser si o no' }),
+  rolLalo: z.enum(ROLES_LALO_V3, { error: 'rolLalo fuera del catálogo de la versión 3' }),
+  opinionLalo: z.enum(OPINIONES_LALO_V3, { error: 'opinionLalo fuera del catálogo de la versión 3' }),
+  preferenciaElectoral: z.enum(PREFERENCIAS_ELECTORALES_V3, {
+    error: 'preferenciaElectoral fuera del catálogo de la versión 3',
   }),
-]);
-
-// ---------------------------------------------------------------------------
-// Bloque de respuestas por rama
-// ---------------------------------------------------------------------------
-
-const respuestasCompletadaSchema = z
-  .object({
-    credencialVigente: z.literal('si'),
-    rangoEdad: z.enum(RANGOS_EDAD_V1, { error: 'rangoEdad fuera del catálogo de la versión 1' }),
-    genero: z.enum(GENEROS_V1, { error: 'genero fuera del catálogo de la versión 1' }),
-    partidoPreferido: z.enum(PARTIDOS_V1, {
-      error: 'partidoPreferido fuera del catálogo de la versión 1',
-    }),
-    conocimientoPorPersona: conocimientoPorPersonaSchema,
-    mediosConocimiento: mediosConocimientoSchema,
-    mayorPersonalidad: personaV1,
-    candidatoPreferido: personaV1,
-  })
-  .superRefine((r, ctx) => {
-    // P6 solo se pregunta si el encuestado conoce a alguien. Las DOS direcciones
-    // son rechazo: con medios respondidos sobre gente que dijo no conocer, o con
-    // P6 omitida cuando sí conoce a alguien, el registro contradice su propia
-    // lógica de captura y ya no es analizable.
-    if (!Array.isArray(r.conocimientoPorPersona) || !r.mediosConocimiento) return;
-    const conoceAAlguien = r.conocimientoPorPersona.some((f) => f.nivel !== 'no_conoce');
-    const tipo = r.mediosConocimiento.tipo;
-    if (conoceAAlguien && tipo !== 'respondida') {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['mediosConocimiento', 'tipo'],
-        message: 'mediosConocimiento debe venir respondida si conoce al menos a una persona',
-      });
-    }
-    if (!conoceAAlguien && tipo !== 'omitidaPorLogica') {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['mediosConocimiento', 'tipo'],
-        message: 'mediosConocimiento debe venir omitidaPorLogica si no conoce a ninguna persona',
-      });
-    }
-  });
-
-const respuestasNoElegibleSchema = z.object({
-  credencialVigente: z.literal('no'),
-  // P2–P8 no se declaran: si el teléfono manda el borrador previo al "no" de P1,
-  // zod lo estripa y esas respuestas no se hashean ni se guardan.
-  conocimientoPorPersona: z
-    .array(z.never())
-    .length(0, 'conocimientoPorPersona debe ir vacío cuando la credencial no está vigente'),
+  preferenciaPartido: z.enum(PARTIDOS_V3, {
+    error: 'preferenciaPartido fuera del catálogo de la versión 3',
+  }),
+  aprobacionPorGobernante: aprobacionPorGobernanteSchema,
 });
 
 // ---------------------------------------------------------------------------
-// Ubicación
+// Ubicación (sin cambios entre v1 y v3)
 // ---------------------------------------------------------------------------
 
 const ubicacionDisponibleSchema = z
@@ -289,13 +241,13 @@ const ubicacionNoDisponibleSchema = z
     }
   });
 
-const ubicacionV1Schema = z.discriminatedUnion('disponible', [
+const ubicacionSchema = z.discriminatedUnion('disponible', [
   ubicacionDisponibleSchema,
   ubicacionNoDisponibleSchema,
 ]);
 
 // ---------------------------------------------------------------------------
-// Encuesta v1
+// Encuesta v3
 // ---------------------------------------------------------------------------
 
 const camposComunes = {
@@ -315,7 +267,7 @@ const camposComunes = {
     .min(1, 'encuestador no puede ir vacío: si no se conoce, omite la clave')
     .max(120, 'encuestador no puede exceder 120 caracteres')
     .optional(),
-  versionCuestionario: z.literal(1),
+  versionCuestionario: z.literal(3),
   fechaHoraInicio: fechaIso('fechaHoraInicio'),
   fechaHoraFinalizacion: fechaIso('fechaHoraFinalizacion'),
   duracionSegundos: z
@@ -325,7 +277,7 @@ const camposComunes = {
   // AUSENTE se acepta (registro capturado por una versión de la app sin GPS);
   // `null` NO: un bloque explícitamente vacío no dice lo mismo que uno que nunca
   // existió, y la columna ubicacionDisponible distingue los dos casos.
-  ubicacion: ubicacionV1Schema.optional(),
+  ubicacion: ubicacionSchema.optional(),
   dispositivo: z.object({
     plataforma: textoCorto(120, 'dispositivo.plataforma'),
     modelo: textoCorto(120, 'dispositivo.modelo'),
@@ -334,22 +286,12 @@ const camposComunes = {
   versionAplicacion: textoCorto(60, 'versionAplicacion'),
 };
 
-const ramaCompletada = z.object({
-  ...camposComunes,
-  estado: z.literal('completada'),
-  elegibilidad: z.literal('elegible'),
-  respuestas: respuestasCompletadaSchema,
-});
-
-const ramaNoElegible = z.object({
-  ...camposComunes,
-  estado: z.literal('noElegible'),
-  elegibilidad: z.literal('noElegible'),
-  respuestas: respuestasNoElegibleSchema,
-});
-
-export const encuestaV1Schema = z
-  .discriminatedUnion('estado', [ramaCompletada, ramaNoElegible])
+export const encuestaV3Schema = z
+  .object({
+    ...camposComunes,
+    estado: z.literal('completada'),
+    respuestas: respuestasV3Schema,
+  })
   .superRefine((d, ctx) => {
     // Igual que en los arrays: el check corre aunque una fecha haya fallado su
     // refine (y entonces sigue siendo string), así que se valida la forma antes
@@ -384,4 +326,4 @@ export const encuestaV1Schema = z
     }
   });
 
-export type EncuestaV1 = z.infer<typeof encuestaV1Schema>;
+export type EncuestaV3 = z.infer<typeof encuestaV3Schema>;
