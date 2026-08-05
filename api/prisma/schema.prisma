@@ -971,8 +971,8 @@ model QaExternaPersona {
 
 // Los valores wire son los identificadores Prisma (sin @map): la app móvil
 // manda exactamente estas cadenas. Los catálogos versionables del cuestionario
-// (partido, rango de edad, género, personas) NO son enums: van como TEXT
-// validado en la app para poder publicar una v2 sin ALTER TYPE.
+// (ej. sexo, rango de edad, preferencias) NO son enums: van como TEXT
+// validado en la app para poder publicar una v4 sin ALTER TYPE.
 enum EncuestaEstado {
   completada
 }

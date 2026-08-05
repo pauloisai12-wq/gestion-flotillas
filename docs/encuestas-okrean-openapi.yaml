@@ -6,7 +6,7 @@
 # no publicar el mapa completo de endpoints en internet—, así que el contrato que
 # consume el equipo móvil no puede depender de él.
 #
-# Alcance: solo la ingesta v1. La cara del revisor (`/api/encuestas`,
+# Alcance: solo la ingesta `/api/v1/encuestas`. La cara del revisor (`/api/encuestas`,
 # `/api/encuestas/export.csv`, JWT + rol REVISOR_QA) vive en `docs/encuestas-okrean.md`
 # y no se publica aquí: es interna del portal, no del contrato con la app.
 #

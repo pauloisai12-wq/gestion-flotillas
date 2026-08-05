@@ -582,8 +582,8 @@ el log y el archivo se cierra truncado.
 | `recibido_en` | `timestamp` | **servidor** | Estampa de llegada, independiente del reloj del teléfono |
 | `created_at` / `updated_at` | `timestamp` | servidor | Auditoría estándar |
 
-Índices: `dispositivo_id`, `recibido_en`, `fecha_hora_finalizacion`, `estado` — los cuatro ejes por
-los que filtra y ordena el portal.
+Índices: `dispositivo_id`, `recibido_en`, `fecha_hora_finalizacion` — los tres ejes por los que filtra
+y ordena el portal. `estado` queda como índice heredado de v1, hoy con cardinalidad 1 (`completada`).
 
 ### Tabla `encuestas_dispositivos`
 
