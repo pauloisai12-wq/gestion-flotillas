@@ -45,17 +45,16 @@ function crearApp(role?: UserRole) {
 
 const RUTA = '/api/encuestas';
 
-/** Las 14 claves del EncuestaDto del contrato: ni una más. */
+/** Las 12 claves del EncuestaDto del contrato v3: ni una más. */
 const CLAVES_DTO = [
   'id',
   'idRemoto',
   'folioLocal',
   'encuestador',
-  'estado',
-  'elegibilidad',
   'versionCuestionario',
-  'partidoPreferido',
-  'candidatoPreferido',
+  'preferenciaElectoral',
+  'preferenciaPartido',
+  'conoceLalo',
   'duracionSegundos',
   'fechaHoraFinalizacion',
   'recibidoEn',
@@ -69,11 +68,10 @@ function encuesta(overrides: Partial<EncuestaDto> = {}): EncuestaDto {
     idRemoto: '7a1d9c22-1f4e-4f2a-9d3b-5c6e7f8a9b01',
     folioLocal: 'LX-1042',
     encuestador: 'María López',
-    estado: 'completada',
-    elegibilidad: 'elegible',
-    versionCuestionario: 1,
-    partidoPreferido: 'morena',
-    candidatoPreferido: 'lalo_ximenez',
+    versionCuestionario: 3,
+    preferenciaElectoral: 'lalo_ximenez',
+    preferenciaPartido: 'morena',
+    conoceLalo: 'si',
     duracionSegundos: 400,
     fechaHoraFinalizacion: new Date('2026-07-30T10:06:40.000Z'),
     recibidoEn: new Date('2026-07-30T10:07:05.000Z'),
@@ -99,7 +97,10 @@ describe('GET /api/encuestas — listado', () => {
     expect(response.body.data[0]).toMatchObject({
       idRemoto: '7a1d9c22-1f4e-4f2a-9d3b-5c6e7f8a9b01',
       encuestador: 'María López',
-      estado: 'completada',
+      versionCuestionario: 3,
+      preferenciaElectoral: 'lalo_ximenez',
+      preferenciaPartido: 'morena',
+      conoceLalo: 'si',
       // Las fechas viajan serializadas en UTC.
       fechaHoraFinalizacion: '2026-07-30T10:06:40.000Z',
       dispositivo: { id: 3, identificador: 'encuestador-01' },
@@ -107,6 +108,8 @@ describe('GET /api/encuestas — listado', () => {
     // El body crudo del teléfono y su hash no salen del servidor.
     expect(response.body.data[0]).not.toHaveProperty('payloadRaw');
     expect(response.body.data[0]).not.toHaveProperty('payloadHash');
+    expect(response.body.data[0]).not.toHaveProperty('estado');
+    expect(response.body.data[0]).not.toHaveProperty('elegibilidad');
   });
 
   it('no cachea: las respuestas políticas no pueden repintarse tras cerrar sesión', async () => {
@@ -120,13 +123,12 @@ describe('GET /api/encuestas — listado', () => {
   // validateQuery REEMPLAZA req.query por el objeto parseado, así que si el
   // schema no declarara page/limit, zod los estriparía y parsePagination —que
   // corre después— serviría siempre la página 1 en silencio.
-  it('reenvía paginación y filtros al servicio', async () => {
+  it('reenvía paginación y filtros al servicio (sin estado)', async () => {
     list.mockResolvedValue(pagina());
 
     await request(crearApp(Roles.REVISOR_QA)).get(RUTA).query({
       page: '3',
       limit: '10',
-      estado: 'noElegible',
       dispositivo: 'encuestador',
       dateFrom: '2026-07-01',
       dateTo: '2026-07-31',
@@ -135,8 +137,26 @@ describe('GET /api/encuestas — listado', () => {
     expect(list.mock.calls[0][0]).toEqual({
       page: 3,
       limit: 10,
-      estado: 'noElegible',
       dispositivo: 'encuestador',
+      dateFrom: '2026-07-01',
+      dateTo: '2026-07-31',
+    });
+  });
+
+  it('zod estripa un parámetro `estado` sin error (enum de una sola opción)', async () => {
+    list.mockResolvedValue(pagina());
+
+    const response = await request(crearApp(Roles.REVISOR_QA)).get(RUTA).query({
+      estado: 'completada',
+      dateFrom: '2026-07-01',
+      dateTo: '2026-07-31',
+    });
+
+    expect(response.status).toBe(200);
+    // El `estado` se estripa en la validación; no llega al servicio.
+    expect(list.mock.calls[0][0]).toEqual({
+      page: 1,
+      limit: 20,
       dateFrom: '2026-07-01',
       dateTo: '2026-07-31',
     });
@@ -165,16 +185,6 @@ describe('GET /api/encuestas — acceso', () => {
 });
 
 describe('GET /api/encuestas — filtros inválidos', () => {
-  it('rechaza un estado fuera del enum con 400', async () => {
-    const response = await request(crearApp(Roles.REVISOR_QA))
-      .get(RUTA)
-      .query({ estado: 'cancelada' });
-
-    expect(response.status).toBe(400);
-    expect(response.body.error).toBe('Parámetros inválidos');
-    expect(list).not.toHaveBeenCalled();
-  });
-
   it('rechaza una fecha que no sea AAAA-MM-DD con 400', async () => {
     const response = await request(crearApp(Roles.REVISOR_QA))
       .get(RUTA)

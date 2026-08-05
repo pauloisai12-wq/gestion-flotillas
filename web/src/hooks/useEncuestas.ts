@@ -9,11 +9,6 @@ import { useQuery } from '@tanstack/react-query';
 import api, { getApiError } from '@/lib/api';
 import { toast } from '@/components/ui/toast';
 
-// Valores de wire de los enums de Prisma (EncuestaEstado / EncuestaElegibilidad):
-// viajan tal cual, sin mapeo, así que el tipo del cliente los repite literales.
-export type EncuestaEstado = 'completada' | 'noElegible';
-export type EncuestaElegibilidad = 'elegible' | 'noElegible';
-
 // Proyección que devuelve la API al revisor: deliberadamente NO trae payloadRaw,
 // payloadHash ni los JSON de respuestas (esos solo salen en el CSV).
 export interface Encuesta {
@@ -23,11 +18,10 @@ export interface Encuesta {
   // null = el teléfono no mandó el campo (app anterior a su captura): es
   // opcional en el contrato de ingesta, igual que folioLocal.
   encuestador: string | null;
-  estado: EncuestaEstado;
-  elegibilidad: EncuestaElegibilidad;
   versionCuestionario: number;
-  partidoPreferido: string | null;
-  candidatoPreferido: string | null;
+  preferenciaElectoral: string | null;
+  preferenciaPartido: string | null;
+  conoceLalo: string | null;
   duracionSegundos: number;
   fechaHoraFinalizacion: string;
   recibidoEn: string;
@@ -45,7 +39,6 @@ export interface EncuestasResponse {
 interface EncuestaQuery {
   page?: number;
   limit?: number;
-  estado?: string;
   dateFrom?: string;
   dateTo?: string;
 }
@@ -54,7 +47,6 @@ function buildParams(query: EncuestaQuery): URLSearchParams {
   const params = new URLSearchParams();
   if (query.page) params.set('page', query.page.toString());
   if (query.limit) params.set('limit', query.limit.toString());
-  if (query.estado) params.set('estado', query.estado);
   if (query.dateFrom) params.set('dateFrom', query.dateFrom);
   if (query.dateTo) params.set('dateTo', query.dateTo);
   return params;
@@ -74,7 +66,6 @@ export function useEncuestas(query: EncuestaQuery = {}) {
 
 // La API exige rango de fechas para exportar, así que aquí también es obligatorio.
 export interface EncuestasCsvParams {
-  estado?: string;
   dateFrom: string;
   dateTo: string;
 }
@@ -122,7 +113,7 @@ export async function descargarEncuestasCsv(params: EncuestasCsvParams) {
     link.href = `/api${apiPath}`;
     // El nombre definitivo lo fija el Content-Disposition de la API; este es
     // solo el respaldo por si la cabecera no llegara.
-    link.download = `encuestas-${params.estado || 'todas'}-${params.dateFrom}_${params.dateTo}.csv`;
+    link.download = `encuestas-${params.dateFrom}_${params.dateTo}.csv`;
     document.body.appendChild(link);
     link.click();
     link.remove();

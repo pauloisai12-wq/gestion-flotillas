@@ -1,4 +1,4 @@
-// Ingesta de la app "Encuestas Okrean". El guard de dispositivo
+// Ingesta de la app "Encuestas Okrean" (v3). El guard de dispositivo
 // (encuestasDeviceAuthMiddleware), el cubo de rate-limit por IP y el
 // express.json de 256 KB se aplican en el MONTAJE (index.ts), de modo que el
 // auth precede a TODA ruta/método de aquí — incluido el 405 de GET /.
@@ -16,13 +16,13 @@ import { Router, Request, Response } from 'express';
 import { rateLimit } from '../middlewares/rateLimit';
 import { ah } from '../lib/asyncHandler';
 import { BadRequest } from '../middlewares/errorHandler';
-import { encuestaV1Schema } from '../validators/encuestasIngestValidator';
-import { hashEncuestaV1 } from '../lib/encuestasCanonical';
+import { encuestaV3Schema } from '../validators/encuestasIngestValidator';
+import { hashEncuestaV3 } from '../lib/encuestasCanonical';
 import { ingestEncuesta } from '../services/encuestasIngestService';
 import { env } from '../config/env';
 
 /** Única versión de cuestionario que este servidor sabe persistir. */
-const VERSION_SOPORTADA = 1;
+const VERSION_SOPORTADA = 3;
 
 // Cuota de captura POR DISPOSITIVO (cubo `rl:enc:dev:<id>`), separada del cubo
 // por IP del montaje (`rl:enc:ip:<ip>`, pre-auth y anti-sondeo de keys). Cubos
@@ -69,10 +69,11 @@ router.post(
       throw BadRequest('Se esperaba un objeto JSON (Content-Type: application/json)');
     }
 
-    // Dispatch de versión ANTES del schema: encuestaV1Schema es el schema de la
-    // v1 y solo sabe rechazar; un cuestionario v2 legítimo merece un código
-    // propio (UNSUPPORTED_VERSION) para que la app distinga "tengo que
-    // actualizar el servidor" de "este registro está mal y nunca subirá".
+    // Dispatch de versión ANTES del schema: encuestaV3Schema es el schema de la
+    // v3 y solo sabe rechazar; un cuestionario v1 o v2 legítimo (de una app
+    // antigua) merece un código propio (UNSUPPORTED_VERSION) para que la app
+    // distinga "tengo que actualizar el servidor" de "este registro está mal y
+    // nunca subirá".
     const versionCuestionario = (body as Record<string, unknown>).versionCuestionario;
     if (
       typeof versionCuestionario !== 'number' ||
@@ -102,7 +103,7 @@ router.post(
       return;
     }
 
-    const parsed = encuestaV1Schema.safeParse(body);
+    const parsed = encuestaV3Schema.safeParse(body);
     if (!parsed.success) {
       // Mismo formato que el errorHandler global (VALIDATION_ERROR), inline y
       // con status 422: relanzar el ZodError lo convertiría en 400, que aquí
@@ -122,7 +123,7 @@ router.post(
 
     // El hash sale de lo VALIDADO (ya sin los campos de la cola de envío del
     // teléfono); el crudo se guarda aparte, solo para auditoría.
-    const payloadHash = hashEncuestaV1(parsed.data);
+    const payloadHash = hashEncuestaV3(parsed.data);
     const payloadRaw = JSON.stringify(req.body);
 
     const { idRemoto, created } = await ingestEncuesta({

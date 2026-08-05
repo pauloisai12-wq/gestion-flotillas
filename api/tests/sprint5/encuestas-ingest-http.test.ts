@@ -85,7 +85,6 @@ import encuestasIngestRouter from '../../src/routes/encuestasIngestRouter';
 import { errorHandler } from '../../src/middlewares/errorHandler';
 import {
   encuestaCompletaValida,
-  encuestaNoElegibleValida,
   type PayloadEncuesta,
 } from './fixtures';
 
@@ -136,12 +135,6 @@ describe('POST /api/v1/encuestas — alta', () => {
     expect(almacen.filas.size).toBe(1);
   });
 
-  it('una encuesta noElegible válida también responde 201', async () => {
-    const response = await request(crearApp()).post(RUTA).send(encuestaNoElegibleValida());
-
-    expect(response.status).toBe(201);
-    expect(typeof response.body.idRemoto).toBe('string');
-  });
 
   it('el reenvío idéntico responde 200 con el MISMO idRemoto y no duplica', async () => {
     const app = crearApp();
@@ -161,7 +154,7 @@ describe('POST /api/v1/encuestas — alta', () => {
     await request(app).post(RUTA).send(encuestaCompletaValida());
     const response = await request(app)
       .post(RUTA)
-      .send(conRespuestas({ partidoPreferido: 'pri' }));
+      .send(conRespuestas({ opinionLalo: 'mala' }));
 
     expect(response.status).toBe(409);
     expect(response.body.code).toBe('CONFLICT');
@@ -172,10 +165,10 @@ describe('POST /api/v1/encuestas — alta', () => {
     const app = crearApp();
 
     await request(app).post(RUTA).send(encuestaCompletaValida());
-    await request(app).post(RUTA).send(conRespuestas({ partidoPreferido: 'pri' })); // 409
+    await request(app).post(RUTA).send(conRespuestas({ opinionLalo: 'mala' })); // 409
 
     const log = textoDelLog();
-    expect(log).not.toContain('morena');
+    expect(log).not.toContain('buena');
     expect(log).not.toContain('19.432608');
     expect(log).not.toContain('estadoSincronizacion');
     expect(registrado.error).not.toHaveBeenCalled();
@@ -183,7 +176,18 @@ describe('POST /api/v1/encuestas — alta', () => {
 });
 
 describe('POST /api/v1/encuestas — rechazos', () => {
-  it('una versión de cuestionario que el servidor no conoce responde 422 UNSUPPORTED_VERSION', async () => {
+  it('una versión de cuestionario que el servidor no conoce responde 422 UNSUPPORTED_VERSION (v1)', async () => {
+    const response = await request(crearApp())
+      .post(RUTA)
+      .send(encuestaCompletaValida({ versionCuestionario: 1 }));
+
+    expect(response.status).toBe(422);
+    expect(response.body.code).toBe('UNSUPPORTED_VERSION');
+    expect(response.body.details).toEqual({ versionCuestionario: 1 });
+    expect(almacen.filas.size).toBe(0);
+  });
+
+  it('una versión de cuestionario que el servidor no conoce responde 422 UNSUPPORTED_VERSION (v2)', async () => {
     const response = await request(crearApp())
       .post(RUTA)
       .send(encuestaCompletaValida({ versionCuestionario: 2 }));
@@ -211,7 +215,7 @@ describe('POST /api/v1/encuestas — rechazos', () => {
     // objeto); confundirlos deja a la app sin saber si reintentar.
     const response = await request(crearApp())
       .post(RUTA)
-      .send(conRespuestas({ partidoPreferido: 'verde_ecologista' }));
+      .send(conRespuestas({ sexo: 'otro' }));
 
     expect(response.status).toBe(422);
     expect(response.body.code).toBe('VALIDATION_ERROR');

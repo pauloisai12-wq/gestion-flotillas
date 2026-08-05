@@ -8,7 +8,6 @@ import {
 } from '@/hooks/useEncuestas';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
 import DataTable from '@/components/ui/data-table';
 import { toast } from '@/components/ui/toast';
 import { Download } from 'lucide-react';
@@ -33,13 +32,6 @@ function diasDelRango(desde: string, hasta: string): number {
   if (Number.isNaN(from) || Number.isNaN(to)) return 0;
   return Math.floor((to - from) / 86_400_000) + 1;
 }
-
-// Valores de wire del enum EncuestaEstado; '' = sin filtro.
-const ESTADO_OPTIONS: { value: string; label: string }[] = [
-  { value: '', label: 'Todos' },
-  { value: 'completada', label: 'Completada' },
-  { value: 'noElegible', label: 'No elegible' },
-];
 
 // El cronómetro de la app manda segundos; en la tabla se leen comparando entre
 // filas, así que se muestran como mm:ss y con cifras tabulares.
@@ -73,31 +65,24 @@ const columns: ColumnDef<Encuesta, unknown>[] = [
     cell: ({ row }) => row.original.encuestador ?? '—',
   },
   {
-    accessorKey: 'estado',
-    header: 'Estado',
-    cell: ({ row }) =>
-      row.original.estado === 'completada' ? (
-        <Badge>Completada</Badge>
-      ) : (
-        <Badge variant="secondary">No elegible</Badge>
-      ),
+    accessorKey: 'preferenciaElectoral',
+    header: 'Preferencia electoral',
+    cell: ({ row }) => row.original.preferenciaElectoral ?? '—',
   },
   {
-    accessorKey: 'elegibilidad',
-    header: 'Elegibilidad',
-    cell: ({ row }) =>
-      row.original.elegibilidad === 'elegible' ? 'Elegible' : 'No elegible',
+    accessorKey: 'preferenciaPartido',
+    header: 'Preferencia partido',
+    cell: ({ row }) => row.original.preferenciaPartido ?? '—',
   },
   {
-    accessorKey: 'partidoPreferido',
-    header: 'Partido preferido',
-    // Nulo en toda encuesta no elegible: de esas solo se almacena P1.
-    cell: ({ row }) => row.original.partidoPreferido ?? '—',
-  },
-  {
-    accessorKey: 'candidatoPreferido',
-    header: 'Candidato preferido',
-    cell: ({ row }) => row.original.candidatoPreferido ?? '—',
+    accessorKey: 'conoceLalo',
+    header: 'Conoce a Lalo',
+    // 'si'/'no' del catálogo v3; null = fila v1 residual sin el dato.
+    cell: ({ row }) => {
+      const v = row.original.conoceLalo;
+      if (v === null || v === undefined) return '—';
+      return v === 'si' ? 'Sí' : 'No';
+    },
   },
   {
     accessorKey: 'duracionSegundos',
@@ -131,13 +116,11 @@ export default function RevisionEncuestasPage() {
   const [page, setPage] = useState(1);
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
-  const [estado, setEstado] = useState('');
   const [descargando, setDescargando] = useState(false);
 
   const { data, isLoading, isError, refetch } = useEncuestas({
     page,
     limit: 20,
-    estado: estado || undefined,
     dateFrom: dateFrom || undefined,
     dateTo: dateTo || undefined,
   });
@@ -145,7 +128,6 @@ export default function RevisionEncuestasPage() {
   const limpiarFiltros = () => {
     setDateFrom('');
     setDateTo('');
-    setEstado('');
     setPage(1);
   };
 
@@ -172,7 +154,6 @@ export default function RevisionEncuestasPage() {
     setDescargando(true);
     try {
       await descargarEncuestasCsv({
-        estado: estado || undefined,
         dateFrom,
         dateTo,
       });
@@ -181,7 +162,7 @@ export default function RevisionEncuestasPage() {
     }
   };
 
-  const hasFilters = Boolean(dateFrom || dateTo || estado);
+  const hasFilters = Boolean(dateFrom || dateTo);
   const totalEncuestas = data?.pagination?.total ?? 0;
 
   // Con el rango a medio llenar no se avisa nada: el título del botón ya dice
@@ -202,7 +183,7 @@ export default function RevisionEncuestasPage() {
         </p>
       </div>
 
-      {/* Filtros: rango de fechas (sobre la fecha de finalización) + estado. */}
+      {/* Filtros: rango de fechas (sobre la fecha de finalización). */}
       <div className="flex gap-2 items-end flex-wrap">
         <div>
           <label htmlFor="encuestas-date-from" className="text-xs text-muted-foreground">Desde</label>
@@ -222,21 +203,6 @@ export default function RevisionEncuestasPage() {
             onChange={(e) => { setDateTo(e.target.value); setPage(1); }}
           />
         </div>
-        <div>
-          <label htmlFor="encuestas-estado" className="text-xs text-muted-foreground">Estado</label>
-          {/* Select nativo con las clases del Input para que case con los
-              campos de fecha (mismo recurso que revision/evidencias). */}
-          <select
-            id="encuestas-estado"
-            value={estado}
-            onChange={(e) => { setEstado(e.target.value); setPage(1); }}
-            className="h-9 w-full min-w-0 rounded-md border border-input bg-transparent px-3 py-1 text-sm transition-colors outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40"
-          >
-            {ESTADO_OPTIONS.map((opt) => (
-              <option key={opt.value} value={opt.value}>{opt.label}</option>
-            ))}
-          </select>
-        </div>
         {hasFilters && (
           <Button variant="outline" size="sm" onClick={limpiarFiltros}>
             Limpiar
@@ -254,7 +220,7 @@ export default function RevisionEncuestasPage() {
         error={isError ? 'No fue posible consultar las encuestas.' : null}
         onRetry={() => refetch()}
         emptyTitle="No hay encuestas para estos filtros"
-        emptyDescription="Cambia el estado o el rango de fechas e intenta nuevamente."
+        emptyDescription="Cambia el rango de fechas e intenta nuevamente."
         headerActions={
           <div className="flex flex-wrap items-center justify-end gap-2">
             {avisoRango ? (

@@ -971,16 +971,10 @@ model QaExternaPersona {
 
 // Los valores wire son los identificadores Prisma (sin @map): la app móvil
 // manda exactamente estas cadenas. Los catálogos versionables del cuestionario
-// (partido, rango de edad, género, personas) NO son enums: van como TEXT
-// validado en la app para poder publicar una v2 sin ALTER TYPE.
+// (ej. sexo, rango de edad, preferencias) NO son enums: van como TEXT
+// validado en la app para poder publicar una v4 sin ALTER TYPE.
 enum EncuestaEstado {
   completada
-  noElegible
-}
-
-enum EncuestaElegibilidad {
-  elegible
-  noElegible
 }
 
 // Espejo de QaExternaDispositivo, sin `programa`: la separación entre módulos
@@ -1000,10 +994,11 @@ model EncuestaDispositivo {
   @@map("encuestas_dispositivos")
 }
 
-// Una fila por encuesta: P5/P6 van en JSONB en vez de tabla hija para que el
-// alta sea un solo INSERT atómico (sin $transaction ⇒ imposible dejar
-// escrituras parciales); la integridad de las 7 personas la sella el validador
-// v1 y el `payloadHash` antes de persistir.
+// Una fila por encuesta v3: P5/P6 (listas de empresarios y políticos) y la
+// aprobación por gobernante van en JSONB en vez de tabla hija para que el alta
+// sea un solo INSERT atómico (sin $transaction ⇒ imposible dejar escrituras
+// parciales); la integridad de las dos listas y la escala por gobernante la sella
+// el validador v3 y el `payloadHash` antes de persistir.
 //
 // `idLocal` (UUID del teléfono) es LA restricción de idempotencia: el reenvío
 // del mismo id devuelve el mismo `idRemoto`; si llega con contenido sustantivo
@@ -1022,19 +1017,22 @@ model Encuesta {
   /// versión de la app anterior al campo (es opcional en el contrato).
   encuestador                 String?
   estado                      EncuestaEstado
-  elegibilidad                EncuestaElegibilidad
   fechaHoraInicio             DateTime             @map("fecha_hora_inicio")
   fechaHoraFinalizacion       DateTime             @map("fecha_hora_finalizacion")
   duracionSegundos            Int                  @map("duracion_segundos")
-  credencialVigente           String               @map("credencial_vigente")
-  /// P2–P8: todas NULL cuando la encuesta es noElegible (no se almacenan).
+  /// Respuestas v3. NULLABLES en BD aunque el contrato las exige todas: la
+  /// obligatoriedad la sella el validador y el servicio siempre escribe valor.
+  /// NULL = fila v1 residual de una BD de dev (version_cuestionario = 1).
+  sexo                        String?
   rangoEdad                   String?              @map("rango_edad")
-  genero                      String?
-  partidoPreferido            String?              @map("partido_preferido")
-  conocimientoPorPersona      Json?                @map("conocimiento_por_persona")
-  mediosConocimiento          Json?                @map("medios_conocimiento")
-  mayorPersonalidad           String?              @map("mayor_personalidad")
-  candidatoPreferido          String?              @map("candidato_preferido")
+  empresariosConocidos        Json?                @map("empresarios_conocidos")
+  politicosConocidos          Json?                @map("politicos_conocidos")
+  conoceLalo                  String?              @map("conoce_lalo")
+  rolLalo                     String?              @map("rol_lalo")
+  opinionLalo                 String?              @map("opinion_lalo")
+  preferenciaElectoral        String?              @map("preferencia_electoral")
+  preferenciaPartido          String?              @map("preferencia_partido")
+  aprobacionPorGobernante     Json?                @map("aprobacion_por_gobernante")
   /// NULL = el payload no traía bloque de ubicación (registro antiguo);
   /// distinto de `false`, que significa "el teléfono no pudo capturarla".
   ubicacionDisponible         Boolean?             @map("ubicacion_disponible")
