@@ -997,8 +997,8 @@ model EncuestaDispositivo {
 // Una fila por encuesta v3: P5/P6 (listas de empresarios y políticos) y la
 // aprobación por gobernante van en JSONB en vez de tabla hija para que el alta
 // sea un solo INSERT atómico (sin $transaction ⇒ imposible dejar escrituras
-// parciales); la integridad de las 7 personas la sella el validador v3 y el
-// `payloadHash` antes de persistir.
+// parciales); la integridad de las dos listas y la escala por gobernante la sella
+// el validador v3 y el `payloadHash` antes de persistir.
 //
 // `idLocal` (UUID del teléfono) es LA restricción de idempotencia: el reenvío
 // del mismo id devuelve el mismo `idRemoto`; si llega con contenido sustantivo
