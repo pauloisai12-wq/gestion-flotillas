@@ -1,14 +1,14 @@
-// Canonicalización y hash del contenido de una encuesta v1. El hash es la mitad
-// sustantiva de la idempotencia: el UNIQUE de idLocal decide si la fila ya
+// Canonicalización y hash del contenido de una encuesta (v1 y v3). El hash es la
+// mitad sustantiva de la idempotencia: el UNIQUE de idLocal decide si la fila ya
 // existe, y este hash decide si el reenvío trae el MISMO contenido (200 con el
 // idRemoto original) o uno distinto (409, sin sobrescribir).
 //
 // Qué entra al hash: todo lo que el validador dejó pasar — identidad (idLocal,
-// folioLocal, encuestador), versión del cuestionario, estado/elegibilidad,
-// fechas, duración, respuestas, ubicación, y también `dispositivo{...}` y
-// `versionAplicacion` (el contrato solo excluye lo de abajo; si el equipo móvil
-// confirmara que esos metadatos se estampan al ENVIAR y no al capturar, habría
-// que sacarlos, porque un reintento tras actualizar la app daría 409).
+// folioLocal, encuestador), versión del cuestionario, estado, fechas, duración,
+// respuestas, ubicación, y también `dispositivo{...}` y `versionAplicacion` (el
+// contrato solo excluye lo de abajo; si el equipo móvil confirmara que esos
+// metadatos se estampan al ENVIAR y no al capturar, habría que sacarlos, porque
+// un reintento tras actualizar la app daría 409).
 //
 // Qué NO entra: el idRemoto que el servidor devolvió y los cuatro campos de la
 // cola de envío del teléfono (estadoSincronizacion, numeroIntentosSincronizacion,
@@ -23,9 +23,10 @@
 //    ordenar claves ni depender de cómo llegó el body;
 //  - fechas por toISOString(): 'Z', '+00:00' y los milisegundos explícitos son
 //    el mismo instante escrito de tres formas;
-//  - conocimientoPorPersona reordenado al orden de PERSONAS_V1 y medios al de
-//    MEDIOS_V1: son conjuntos de respuestas, el orden en que la app los serializa
-//    no es dato;
+//  - aprobacionPorGobernante reordenado al orden de GOBERNANTES_V3: es un
+//    conjunto de respuestas, el orden en que la app los serializa no es dato;
+//  - politicosConocidos y empresariosConocidos NO se reordenan: son listas de
+//    texto libre donde el orden en que el encuestador las dictó es parte del dato;
 //  - folioLocal, encuestador y ubicacion ausentes ≡ null.
 //
 // `v` es la versión del ALGORITMO de canonicalización, no la del cuestionario:
@@ -34,47 +35,40 @@
 
 import { createHash } from 'crypto';
 import {
-  MEDIOS_V1,
-  PERSONAS_V1,
-  type EncuestaV1,
+  GOBERNANTES_V3,
+  type EncuestaV3,
 } from '../validators/encuestasIngestValidator';
 
-const VERSION_CANONICA = 1;
+const VERSION_CANONICA = 2;
 
-function respuestasCanonicas(d: EncuestaV1) {
-  if (d.estado === 'noElegible') {
-    // P2–P8 no existen en esta rama: el bloque es fijo y siempre el mismo.
-    return {
-      credencialVigente: d.respuestas.credencialVigente,
-      conocimientoPorPersona: [] as const,
-    };
-  }
+function respuestasCanonicas(d: EncuestaV3) {
   const r = d.respuestas;
-  // El validador garantiza las 7 personas del catálogo sin repetir, así que este
-  // índice es total y el .get() de abajo nunca queda en undefined.
-  const nivelPorPersona = new Map(
-    r.conocimientoPorPersona.map((fila) => [fila.persona, fila.nivel] as const),
+  // El validador garantiza los 3 gobernantes sin repetir: el índice es total y
+  // el .get() nunca queda en undefined. Se reordena al catálogo porque es un
+  // conjunto de respuestas; las listas de texto libre NO se reordenan (el orden
+  // en que el encuestador las dictó es parte del dato y el teléfono reenvía el
+  // mismo JSON).
+  const califPorGobernante = new Map(
+    r.aprobacionPorGobernante.map((fila) => [fila.gobernante, fila.calificacion] as const),
   );
-  const medios = r.mediosConocimiento;
   return {
-    credencialVigente: r.credencialVigente,
+    sexo: r.sexo,
     rangoEdad: r.rangoEdad,
-    genero: r.genero,
-    partidoPreferido: r.partidoPreferido,
-    conocimientoPorPersona: PERSONAS_V1.map((persona) => ({
-      persona,
-      nivel: nivelPorPersona.get(persona)!,
+    empresariosConocidos: r.empresariosConocidos,
+    politicosConocidos: r.politicosConocidos,
+    conoceLalo: r.conoceLalo,
+    rolLalo: r.rolLalo,
+    opinionLalo: r.opinionLalo,
+    preferenciaElectoral: r.preferenciaElectoral,
+    preferenciaPartido: r.preferenciaPartido,
+    aprobacionPorGobernante: GOBERNANTES_V3.map((gobernante) => ({
+      gobernante,
+      calificacion: califPorGobernante.get(gobernante)!,
     })),
-    mediosConocimiento:
-      medios.tipo === 'respondida'
-        ? { tipo: medios.tipo, medios: MEDIOS_V1.filter((m) => medios.medios.includes(m)) }
-        : { tipo: medios.tipo },
-    mayorPersonalidad: r.mayorPersonalidad,
-    candidatoPreferido: r.candidatoPreferido,
   };
 }
 
-function ubicacionCanonica(u: EncuestaV1['ubicacion']) {
+function ubicacionCanonica(u: EncuestaV3['ubicacion']) {
   if (!u) return null;
   if (u.disponible) {
     return {
@@ -96,18 +90,14 @@ function ubicacionCanonica(u: EncuestaV1['ubicacion']) {
   };
 }
 
-/** Representación estable del contenido sustantivo de una encuesta ya validada. */
-export function canonicalizarEncuestaV1(d: EncuestaV1): string {
+export function canonicalizarEncuestaV3(d: EncuestaV3): string {
   return JSON.stringify({
     v: VERSION_CANONICA,
     idLocal: d.idLocal,
     folioLocal: d.folioLocal ?? null,
-    // Se sumó SIN subir `v`: el campo entró antes de cualquier despliegue, así
-    // que no existe ni un payloadHash guardado con el que pudiera chocar.
     encuestador: d.encuestador ?? null,
     versionCuestionario: d.versionCuestionario,
     estado: d.estado,
-    elegibilidad: d.elegibilidad,
     fechaHoraInicio: d.fechaHoraInicio.toISOString(),
     fechaHoraFinalizacion: d.fechaHoraFinalizacion.toISOString(),
     duracionSegundos: d.duracionSegundos,
@@ -122,7 +112,6 @@ export function canonicalizarEncuestaV1(d: EncuestaV1): string {
   });
 }
 
-/** sha256 hex de la forma canónica. Es lo que se guarda en `payloadHash`. */
-export function hashEncuestaV1(d: EncuestaV1): string {
-  return createHash('sha256').update(canonicalizarEncuestaV1(d), 'utf8').digest('hex');
+export function hashEncuestaV3(d: EncuestaV3): string {
+  return createHash('sha256').update(canonicalizarEncuestaV3(d), 'utf8').digest('hex');
 }

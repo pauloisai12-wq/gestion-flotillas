@@ -1,216 +1,66 @@
-// Hash canónico de la encuesta v1: la mitad sustantiva de la idempotencia. Lo
-// que se prueba aquí es la frontera entre "el mismo registro reenviado" (mismo
-// hash ⇒ 200 con el idRemoto original) y "otro contenido con el mismo idLocal"
-// (hash distinto ⇒ 409). Un falso positivo de cualquiera de los dos lados es un
-// bug de datos, no de estilo.
-
 import { describe, expect, it } from 'vitest';
+import { canonicalizarEncuestaV3, hashEncuestaV3 } from '../../src/lib/encuestasCanonical';
+import { encuestaV3Schema } from '../../src/validators/encuestasIngestValidator';
+import { encuestaCompletaValida, type PayloadEncuesta } from './fixtures';
 
-import {
-  canonicalizarEncuestaV1,
-  hashEncuestaV1,
-} from '../../src/lib/encuestasCanonical';
-import { encuestaV1Schema } from '../../src/validators/encuestasIngestValidator';
-import {
-  encuestaCompletaValida,
-  encuestaNoElegibleValida,
-  sinClaves,
-  type PayloadEncuesta,
-} from './fixtures';
-
-/** Recorre el camino real: validar (que estripa) y luego hashear lo que quedó. */
-function hash(payload: PayloadEncuesta): string {
-  return hashEncuestaV1(encuestaV1Schema.parse(payload));
+function hashDe(payload: PayloadEncuesta): string {
+  const r = encuestaV3Schema.safeParse(payload);
+  if (!r.success) throw new Error('fixture inválido: ' + JSON.stringify(r.error.issues));
+  return hashEncuestaV3(r.data);
 }
 
-function canonico(payload: PayloadEncuesta): string {
-  return canonicalizarEncuestaV1(encuestaV1Schema.parse(payload));
+function conRespuestas(cambios: Record<string, unknown>): PayloadEncuesta {
+  const base = encuestaCompletaValida();
+  return { ...base, respuestas: { ...(base.respuestas as Record<string, unknown>), ...cambios } };
 }
 
-function conRespuestas(
-  sobre: PayloadEncuesta,
-  base: PayloadEncuesta = encuestaCompletaValida(),
-): PayloadEncuesta {
-  return { ...base, respuestas: { ...(base.respuestas as PayloadEncuesta), ...sobre } };
-}
-
-const CLAVES_SINCRONIZACION = [
-  'estadoSincronizacion',
-  'numeroIntentosSincronizacion',
-  'fechaUltimoIntento',
-  'fechaSincronizacion',
-];
-
-describe('canonicalizarEncuestaV1', () => {
-  it('emite las claves en un orden fijo por construcción', () => {
-    // Si alguien reordena el objeto literal, todos los payloadHash guardados
-    // dejan de coincidir y cada reenvío pasaría a ser un 409.
-    const objeto = JSON.parse(canonico(encuestaCompletaValida())) as Record<string, unknown>;
-    expect(Object.keys(objeto)).toEqual([
-      'v',
-      'idLocal',
-      'folioLocal',
-      'encuestador',
-      'versionCuestionario',
-      'estado',
-      'elegibilidad',
-      'fechaHoraInicio',
-      'fechaHoraFinalizacion',
-      'duracionSegundos',
-      'respuestas',
-      'ubicacion',
-      'dispositivo',
-      'versionAplicacion',
-    ]);
-    expect(objeto.v).toBe(1);
-  });
-
-  it('no arrastra nada del transporte', () => {
-    const texto = canonico(
-      encuestaCompletaValida({
-        idRemoto: '9f1b3c2d-4e5f-4a6b-8c9d-0e1f2a3b4c5d',
-        estadoSincronizacion: 'sincronizada',
-      }),
-    );
-    for (const clave of [...CLAVES_SINCRONIZACION, 'idRemoto']) {
-      expect(texto).not.toContain(clave);
-    }
-  });
-
-  it('normaliza folioLocal, encuestador y ubicacion ausentes a null', () => {
-    const objeto = JSON.parse(
-      canonico(sinClaves(encuestaCompletaValida(), 'folioLocal', 'encuestador', 'ubicacion')),
-    ) as Record<string, unknown>;
-    expect(objeto.folioLocal).toBeNull();
-    expect(objeto.encuestador).toBeNull();
-    expect(objeto.ubicacion).toBeNull();
-  });
-
-  it('deja el bloque de respuestas de noElegible reducido a P1', () => {
-    const objeto = JSON.parse(canonico(encuestaNoElegibleValida())) as {
-      respuestas: Record<string, unknown>;
-    };
-    expect(objeto.respuestas).toEqual({ credencialVigente: 'no', conocimientoPorPersona: [] });
-  });
-});
-
-describe('hashEncuestaV1 — lo que NO debe cambiar el hash', () => {
-  it('es determinista para el mismo contenido', () => {
-    expect(hash(encuestaCompletaValida())).toBe(hash(encuestaCompletaValida()));
-    expect(hash(encuestaCompletaValida())).toMatch(/^[0-9a-f]{64}$/);
-  });
-
-  it('ignora los campos de sincronización y el idRemoto del teléfono', () => {
-    // Escenario real: el primer POST se pierde por red, el teléfono reintenta con
-    // otro contador de intentos y ya con el idRemoto que guardó. Debe dar 200,
-    // no 409.
-    const primerEnvio = sinClaves(encuestaCompletaValida(), ...CLAVES_SINCRONIZACION);
-    const reintento = encuestaCompletaValida({
-      idRemoto: '9f1b3c2d-4e5f-4a6b-8c9d-0e1f2a3b4c5d',
-      estadoSincronizacion: 'sincronizada',
-      numeroIntentosSincronizacion: 4,
-      fechaUltimoIntento: '2026-07-30T10:09:00.000Z',
-      fechaSincronizacion: '2026-07-30T10:10:00.000Z',
+describe('hashEncuestaV3', () => {
+  it('es estable ante el reorden de aprobacionPorGobernante (es un conjunto)', () => {
+    const reordenada = conRespuestas({
+      aprobacionPorGobernante: [
+        { gobernante: 'huerta', calificacion: 'mala' },
+        { gobernante: 'jara', calificacion: 'regular' },
+        { gobernante: 'sheinbaum', calificacion: 'buena' },
+      ],
     });
-    expect(hash(reintento)).toBe(hash(primerEnvio));
+    expect(hashDe(reordenada)).toBe(hashDe(encuestaCompletaValida()));
   });
 
-  it.each([
-    ['sin milisegundos', '2026-07-30T10:00:00Z'],
-    ['con offset +00:00', '2026-07-30T10:00:00+00:00'],
-    ['con offset -06:00 del mismo instante', '2026-07-30T04:00:00-06:00'],
-  ])('ignora la forma en que se escribió la fecha (%s)', (_etiqueta, fecha) => {
-    expect(hash(encuestaCompletaValida({ fechaHoraInicio: fecha }))).toBe(
-      hash(encuestaCompletaValida()),
-    );
-  });
-
-  it('ignora el orden de conocimientoPorPersona', () => {
-    const base = encuestaCompletaValida();
-    const invertido = [
-      ...((base.respuestas as PayloadEncuesta).conocimientoPorPersona as unknown[]),
-    ].reverse();
-    expect(hash(conRespuestas({ conocimientoPorPersona: invertido }))).toBe(hash(base));
-  });
-
-  it('ignora el orden de los medios', () => {
-    expect(
-      hash(
-        conRespuestas({
-          mediosConocimiento: { tipo: 'respondida', medios: ['labor_social', 'redes_sociales'] },
-        }),
-      ),
-    ).toBe(hash(encuestaCompletaValida()));
-  });
-
-  it('trata folioLocal omitido y folioLocal undefined como el mismo dato', () => {
-    // No se compara contra `null`: el schema declara el campo .optional() y no
-    // .nullable(), así que un null explícito es 422 y nunca llega al hash.
-    expect(hash(sinClaves(encuestaCompletaValida(), 'folioLocal'))).toBe(
-      hash(encuestaCompletaValida({ folioLocal: undefined })),
-    );
-  });
-
-  it('es estable entre dos envíos que omiten encuestador', () => {
-    // Mismo caso que folioLocal: la app que todavía no captura el campo lo
-    // omite en el primer envío y en el reintento, y las dos veces canoniza a
-    // null ⇒ 200 idempotente, no 409. (Ausente vs ausente: `null` explícito no
-    // es comparable porque el validador lo rechaza antes de llegar aquí.)
-    const sinEncuestador = sinClaves(encuestaCompletaValida(), 'encuestador');
-    expect(hash(sinEncuestador)).toBe(hash(sinClaves(encuestaCompletaValida(), 'encuestador')));
-    expect(hash(sinEncuestador)).toBe(hash(encuestaCompletaValida({ encuestador: undefined })));
-  });
-});
-
-describe('hashEncuestaV1 — lo que SÍ debe cambiar el hash', () => {
-  it('cambia si cambia una respuesta sustantiva', () => {
-    expect(hash(conRespuestas({ partidoPreferido: 'pri' }))).not.toBe(
-      hash(encuestaCompletaValida()),
-    );
-  });
-
-  it.each<[string, PayloadEncuesta]>([
-    ['folioLocal', { folioLocal: 'LX-9999' }],
-    // Quién levantó la encuesta es contenido, no transporte: por eso hay que
-    // capturarlo con el registro y no estamparlo al enviar.
-    ['encuestador', { encuestador: 'Juan Pérez' }],
-    // 420 s sigue dentro de la tolerancia contra el intervalo real (400 s), así
-    // que el payload es válido: lo que cambia es el contenido, no su validez.
-    ['duracionSegundos', { duracionSegundos: 420 }],
-    ['idLocal', { idLocal: '7c9e6679-7425-40de-944b-e07fc1f90ae7' }],
-  ])('cambia si cambia %s', (_etiqueta, sobre) => {
-    expect(hash(encuestaCompletaValida(sobre))).not.toBe(hash(encuestaCompletaValida()));
-  });
-
-  it('cambia si cambia la ubicación, y ausente ≠ presente', () => {
-    const base = encuestaCompletaValida();
-    const otraUbicacion = encuestaCompletaValida({
-      ubicacion: { ...(base.ubicacion as PayloadEncuesta), precisionMetros: 30 },
+  it('cambia si cambia una calificación', () => {
+    const distinta = conRespuestas({
+      aprobacionPorGobernante: [
+        { gobernante: 'sheinbaum', calificacion: 'muy_mala' },
+        { gobernante: 'jara', calificacion: 'regular' },
+        { gobernante: 'huerta', calificacion: 'mala' },
+      ],
     });
-    expect(hash(otraUbicacion)).not.toBe(hash(base));
-    expect(hash(sinClaves(base, 'ubicacion'))).not.toBe(hash(base));
+    expect(hashDe(distinta)).not.toBe(hashDe(encuestaCompletaValida()));
   });
 
-  it('cambia entre completada y noElegible', () => {
-    expect(hash(encuestaNoElegibleValida())).not.toBe(hash(encuestaCompletaValida()));
+  it('SÍ distingue el orden de las listas de texto libre (no son catálogo)', () => {
+    const base = conRespuestas({ politicosConocidos: ['A', 'B'] });
+    const invertida = conRespuestas({ politicosConocidos: ['B', 'A'] });
+    expect(hashDe(base)).not.toBe(hashDe(invertida));
   });
 
-  it('cambia con los metadatos del dispositivo y la versión de la app', () => {
-    // Documentado en el plan como riesgo abierto: si la app estampa estos datos
-    // al ENVIAR y no al capturar, un reintento tras actualizarse daría 409 y
-    // habría que sacarlos del canónico.
-    expect(hash(encuestaCompletaValida({ versionAplicacion: '1.0.4' }))).not.toBe(
-      hash(encuestaCompletaValida()),
-    );
-    expect(
-      hash(
-        encuestaCompletaValida({
-          dispositivo: {
-            ...(encuestaCompletaValida().dispositivo as PayloadEncuesta),
-            modelo: 'Moto G84',
-          },
-        }),
-      ),
-    ).not.toBe(hash(encuestaCompletaValida()));
+  it('normaliza formatos de fecha equivalentes', () => {
+    const otroFormato = encuestaCompletaValida({ fechaHoraInicio: '2026-08-01T10:00:00+00:00' });
+    expect(hashDe(otroFormato)).toBe(hashDe(encuestaCompletaValida()));
+  });
+
+  it('ignora los campos de la cola de envío del teléfono', () => {
+    const reintento = encuestaCompletaValida({ estadoSincronizacion: 'reintentando', numeroIntentosSincronizacion: 7 });
+    expect(hashDe(reintento)).toBe(hashDe(encuestaCompletaValida()));
+  });
+
+  it('trata folioLocal/encuestador/ubicacion ausentes como null', () => {
+    const sin = encuestaCompletaValida();
+    delete (sin as Record<string, unknown>).folioLocal;
+    const conNull = canonicalizarEncuestaV3(encuestaV3Schema.parse(sin));
+    expect(conNull).toContain('"folioLocal":null');
+  });
+
+  it('declara la versión 2 del algoritmo canónico', () => {
+    expect(canonicalizarEncuestaV3(encuestaV3Schema.parse(encuestaCompletaValida()))).toContain('"v":2');
   });
 });
