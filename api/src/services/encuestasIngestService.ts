@@ -110,7 +110,7 @@ function respuestasRow(d: EncuestaV3): RespuestasRow {
   };
 }
 
-function ubicacionRow(u: EncuestaV1['ubicacion']): UbicacionRow {
+function ubicacionRow(u: EncuestaV3['ubicacion']): UbicacionRow {
   if (!u) {
     // Bloque AUSENTE (app vieja sin GPS): `ubicacionDisponible` queda en NULL,
     // que es distinto de `false` ("el teléfono no la pudo capturar"). El
