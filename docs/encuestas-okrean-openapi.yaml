@@ -218,13 +218,13 @@ paths:
                   - $ref: '#/components/schemas/ErrorRespuesta'
               examples:
                 validacion:
-                  summary: Fallo del schema v1
+                  summary: Fallo del schema v3
                   value:
                     error: 'Datos inválidos'
                     code: VALIDATION_ERROR
                     issues:
-                      - field: respuestas.conocimientoPorPersona
-                        message: 'conocimientoPorPersona debe traer las 7 personas del catálogo v1'
+                      - field: respuestas.aprobacionPorGobernante
+                        message: 'aprobacionPorGobernante debe traer los 3 gobernantes del catálogo v3'
                       - field: ubicacion.esValida
                         message: 'esValida debe ser true exactamente cuando precisionMetros <= 50'
                     requestId: '0f0c1a7e-…'
@@ -737,7 +737,7 @@ components:
     ErrorValidacion:
       type: object
       required: [error, code, issues]
-      description: Error 422 del cuestionario v1, con el detalle campo a campo.
+      description: Error 422 del cuestionario v3, con el detalle campo a campo.
       properties:
         error:
           type: string

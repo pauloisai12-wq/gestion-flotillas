@@ -128,8 +128,8 @@ números**: `"duracionSegundos": "397"` es un `422`, no un 397.
 | `dispositivo` | objeto | sí | `{ plataforma, modelo, versionSistema }` — texto no vacío, máx. 120 caracteres cada uno |
 | `versionAplicacion` | string | sí | Versión de la app (máx. 60 caracteres). Entra al hash canónico |
 
-> ⚠️ **P1–P8 no viven en la raíz del payload.** Van dentro del objeto `respuestas`
-> (`"respuestas": { "credencialVigente": "si", … }`). Mandarlas sueltas en la raíz es `422`: el
+> ⚠️ **Las respuestas no viven en la raíz del payload.** Van dentro del objeto `respuestas`
+> (`"respuestas": { "sexo": "mujer", "rangoEdad": "31_45", … }`). Mandarlas sueltas en la raíz es `422`: el
 > schema exige `respuestas` y descarta lo que sobra.
 
 > ⚠️ **`encuestador`: si no se conoce, se OMITE la clave — no se manda `null`.** El campo es
@@ -425,7 +425,7 @@ Content-Type: application/json; charset=utf-8
 {"idRemoto":"c1a7e0b2-9d44-4f0a-b7c3-2e5f8a91d033"}
 ```
 
-Si en cambio cambias un campo **sustantivo** (por ejemplo `respuestas.partidoPreferido`) manteniendo
+Si en cambio cambias un campo **sustantivo** (por ejemplo `respuestas.preferenciaPartido`) manteniendo
 el `idLocal`, la respuesta es `409` y la fila original queda intacta.
 
 
