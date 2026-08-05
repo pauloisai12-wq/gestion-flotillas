@@ -57,17 +57,28 @@ lleva `estado: "completada"` — la rama `noElegible` de v1 desaparece.
 
 ## 3. Esquema de datos (migración `20260805*_encuestas_v3`)
 
+**Restricción dura:** el gate `test:migrations`
+(`api/scripts/check-qa-migrations-safe.js`) prohíbe `TRUNCATE`, `DELETE FROM`
+y `DROP TABLE` sobre las tablas `encuestas*`: las capturas de campo se
+reestructuran con `ALTER`/`UPDATE`, nunca vaciando la tabla. La migración por
+tanto NO trunca; una fila v1 residual (solo en BDs de dev — producción no
+tiene) sobrevive con `versionCuestionario = 1` y las columnas v3 en NULL.
+
 Una sola migración SQL que:
 
-1. `TRUNCATE encuestas` — no hay datos que conservar; protege contra filas v1
-   en BDs de dev/CI que impedirían los `NOT NULL` nuevos.
-2. Elimina las columnas v1 de respuestas: `credencial_vigente`, `rango_edad`
-   (se recrea con catálogo nuevo), `genero`, `partido_preferido`,
-   `conocimiento_por_persona`, `medios_conocimiento`, `mayor_personalidad`,
-   `candidato_preferido`, y la columna `elegibilidad`.
-3. Elimina el enum `EncuestaElegibilidad`; recrea `EncuestaEstado` con el único
-   valor `completada` (sin `noElegible`).
-4. Agrega las columnas v3, todas `NOT NULL` (en v3 todo es obligatorio):
+1. Normaliza `estado` con `UPDATE encuestas SET estado = 'completada' WHERE
+   estado <> 'completada'` y recrea el enum `EncuestaEstado` con el único
+   valor `completada` (receta estándar: `CREATE TYPE ..._new` → `ALTER COLUMN
+   ... TYPE ... USING` → `DROP TYPE` → `RENAME`).
+2. Elimina las columnas v1 de respuestas (`DROP COLUMN`, permitido por el
+   gate): `credencial_vigente`, `rango_edad` (se recrea con catálogo nuevo),
+   `genero`, `partido_preferido`, `conocimiento_por_persona`,
+   `medios_conocimiento`, `mayor_personalidad`, `candidato_preferido`, y la
+   columna `elegibilidad`; después `DROP TYPE "EncuestaElegibilidad"`.
+3. Agrega las columnas v3, todas **NULLABLE**: la obligatoriedad la impone el
+   validador (en v3 todo es obligatorio y el servicio siempre escribe valor),
+   igual que en v1 la rama `completada` dependía del validador. NULL queda
+   como la representación natural de una fila v1 residual.
    - `sexo TEXT`, `rango_edad TEXT`, `conoce_lalo TEXT`, `rol_lalo TEXT`,
      `opinion_lalo TEXT`, `preferencia_electoral TEXT`,
      `preferencia_partido TEXT` — catálogos como TEXT validado en la app, no
@@ -108,9 +119,13 @@ encuesta, un solo INSERT atómico**, sin `$transaction`.
 - **`api/src/routes/encuestasIngestRouter.ts`** — `VERSION_SOPORTADA = 3`.
   Nada más.
 - **`api/src/services/encuestasRevisionService.ts`** — DTO del listado: fuera
-  `elegibilidad`, `partidoPreferido`, `candidatoPreferido`; entran
-  `preferenciaElectoral`, `preferenciaPartido`, `conoceLalo`. Selects
-  actualizados (siguen excluyendo `payloadRaw`/`payloadHash`). CSV nuevo:
+  `estado`, `elegibilidad`, `partidoPreferido`, `candidatoPreferido`; entran
+  `preferenciaElectoral`, `preferenciaPartido`, `conoceLalo`. Con el enum
+  reducido a un solo valor, el **filtro `estado` desaparece** del portal
+  (query, `buildWhere`, UI y nombre del archivo CSV, que pasa a
+  `encuestas-<dateFrom>_<dateTo>.csv`); el CSV conserva su columna `Estado`
+  como dato del registro. Selects actualizados (siguen excluyendo
+  `payloadRaw`/`payloadHash`). CSV nuevo:
 
   | Grupo | Columnas |
   |---|---|
@@ -126,15 +141,18 @@ encuesta, un solo INSERT atómico**, sin `$transaction`.
   como el resto. El pivoteo tolera formas anómalas sin reventar (mismo criterio
   que `nivelesPorPersona` hoy). Filtro `estado` del portal queda con el único
   valor `completada`.
-- **`api/src/validators/encuestasRevisionValidator.ts`** — ajustar el filtro
-  `estado` al enum reducido (si lo referencia).
+- **`api/src/validators/encuestasRevisionValidator.ts`** — eliminar
+  `estadoFiltro` y el campo `estado` de ambos schemas (listado y export).
 
 ## 5. Web
 
-- **`web/src/hooks/useEncuestas.ts`** — tipo del DTO actualizado a v3.
+- **`web/src/hooks/useEncuestas.ts`** — tipo del DTO actualizado a v3; fuera
+  `estado`/`elegibilidad` y sus tipos; `estado` desaparece de los parámetros
+  de listado y de descarga.
 - **`web/src/app/revision/encuestas/page.tsx`** — columnas de la tabla:
-  Partido/Candidato → Preferencia electoral / Preferencia partido (+ Conoce
-  Lalo si cabe); fuera elegibilidad.
+  fuera Estado, Elegibilidad, Partido y Candidato; entran Preferencia
+  electoral, Preferencia partido y Conoce Lalo. El select de estado y
+  `ESTADO_OPTIONS` se eliminan de los filtros.
 
 ## 6. Tests (api/tests/sprint5)
 
