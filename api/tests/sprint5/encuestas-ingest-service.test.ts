@@ -25,11 +25,10 @@ import {
   ingestEncuestaWithDeps,
   type IngestEncuestaInput,
 } from '../../src/services/encuestasIngestService';
-import { encuestaV1Schema } from '../../src/validators/encuestasIngestValidator';
-import { hashEncuestaV1 } from '../../src/lib/encuestasCanonical';
+import { encuestaV3Schema } from '../../src/validators/encuestasIngestValidator';
+import { hashEncuestaV3 } from '../../src/lib/encuestasCanonical';
 import {
   encuestaCompletaValida,
-  encuestaNoElegibleValida,
   sinClaves,
   type PayloadEncuesta,
 } from './fixtures';
@@ -86,11 +85,11 @@ function entrada(
   payload: PayloadEncuesta,
   overrides: Partial<IngestEncuestaInput> = {},
 ): IngestEncuestaInput {
-  const parsed = encuestaV1Schema.parse(payload);
+  const parsed = encuestaV3Schema.parse(payload);
   return {
     parsed,
     dispositivoId: 1,
-    payloadHash: hashEncuestaV1(parsed),
+    payloadHash: hashEncuestaV3(parsed),
     payloadRaw: JSON.stringify(payload),
     ...overrides,
   };
@@ -114,7 +113,10 @@ describe('ingestEncuestaWithDeps — idempotencia', () => {
 
     const primera = await ingestEncuestaWithDeps(entrada(encuestaCompletaValida()), { db });
     const reenvio = await ingestEncuestaWithDeps(entrada(encuestaCompletaValida()), { db });
-    const otra = await ingestEncuestaWithDeps(entrada(encuestaNoElegibleValida()), { db });
+    const otra = await ingestEncuestaWithDeps(
+      entrada(encuestaCompletaValida({ idLocal: OTRO_ID_LOCAL })),
+      { db },
+    );
 
     expect(primera.created).toBe(true);
     expect(reenvio).toEqual({ idRemoto: primera.idRemoto, created: false });
@@ -139,7 +141,7 @@ describe('ingestEncuestaWithDeps — idempotencia', () => {
     const original = await ingestEncuestaWithDeps(entrada(encuestaCompletaValida()), { db });
 
     await expect(
-      ingestEncuestaWithDeps(entrada(conRespuestas({ partidoPreferido: 'pri' })), { db }),
+      ingestEncuestaWithDeps(entrada(conRespuestas({ opinionLalo: 'mala' })), { db }),
     ).rejects.toMatchObject({
       name: 'AppError',
       statusCode: 409,
@@ -149,7 +151,7 @@ describe('ingestEncuestaWithDeps — idempotencia', () => {
     expect(filas.size).toBe(1);
     const fila = filas.get(encuestaCompletaValida().idLocal)!;
     expect(fila.idRemoto).toBe(original.idRemoto);
-    expect(fila.partidoPreferido).toBe('morena');
+    expect(fila.opinionLalo).toBe('buena');
     expect(fila.payloadHash).toBe(entrada(encuestaCompletaValida()).payloadHash);
   });
 
@@ -241,7 +243,7 @@ describe('ingestEncuestaWithDeps — carreras y errores', () => {
 });
 
 describe('ingestEncuestaWithDeps — aplanado a columnas', () => {
-  it('la encuesta completada guarda P1–P8 y la ubicación disponible', async () => {
+  it('la encuesta completada guarda todos los campos v3 y la ubicación disponible', async () => {
     const { db, create } = fakeDbConMemoria();
 
     await ingestEncuestaWithDeps(entrada(encuestaCompletaValida()), { db });
@@ -249,18 +251,25 @@ describe('ingestEncuestaWithDeps — aplanado a columnas', () => {
     expect(datosDelCreate(create)).toMatchObject({
       idLocal: '3f2504e0-4f89-41d3-9a0c-0305e82c3301',
       dispositivoId: 1,
-      versionCuestionario: 1,
+      versionCuestionario: 3,
       folioLocal: 'LX-1042',
       encuestador: 'María López',
       estado: 'completada',
-      elegibilidad: 'elegible',
       duracionSegundos: 400,
-      credencialVigente: 'si',
-      rangoEdad: '30_44',
-      genero: 'mujer',
-      partidoPreferido: 'morena',
-      mayorPersonalidad: 'lalo_ximenez',
-      candidatoPreferido: 'laura_estrada',
+      sexo: 'mujer',
+      rangoEdad: '31_45',
+      empresariosConocidos: ['Juan Pérez'],
+      politicosConocidos: ['Lalo Ximénez', 'Irineo Molina'],
+      conoceLalo: 'si',
+      rolLalo: 'politico_lider_social',
+      opinionLalo: 'buena',
+      preferenciaElectoral: 'lalo_ximenez',
+      preferenciaPartido: 'morena',
+      aprobacionPorGobernante: [
+        { gobernante: 'sheinbaum', calificacion: 'buena' },
+        { gobernante: 'jara', calificacion: 'regular' },
+        { gobernante: 'huerta', calificacion: 'mala' },
+      ],
       ubicacionDisponible: true,
       ubicacionLat: 19.432608,
       ubicacionLng: -99.133209,
@@ -272,7 +281,7 @@ describe('ingestEncuestaWithDeps — aplanado a columnas', () => {
       dispositivoPlataforma: 'android',
       dispositivoModelo: 'Moto G54',
       dispositivoVersionSistema: '14',
-      versionAplicacion: '1.0.3',
+      versionAplicacion: '2.0.0',
     });
     const datos = datosDelCreate(create);
     expect(datos.fechaHoraFinalizacion).toBeInstanceOf(Date);
@@ -280,38 +289,7 @@ describe('ingestEncuestaWithDeps — aplanado a columnas', () => {
     // El crudo se guarda para auditoría, con los campos de sincronización que
     // el validador estripa.
     expect(String(datos.payloadRaw)).toContain('estadoSincronizacion');
-  });
-
-  it('la noElegible deja P2–P8 en NULL y no arrastra la ubicación que no hubo', async () => {
-    const { db, create } = fakeDbConMemoria();
-
-    await ingestEncuestaWithDeps(entrada(encuestaNoElegibleValida()), { db });
-
-    const datos = datosDelCreate(create);
-    expect(datos).toMatchObject({
-      estado: 'noElegible',
-      elegibilidad: 'noElegible',
-      credencialVigente: 'no',
-      rangoEdad: null,
-      genero: null,
-      partidoPreferido: null,
-      mayorPersonalidad: null,
-      candidatoPreferido: null,
-      // La rama `disponible:false` sí conserva el porqué; lo que no existe son
-      // las coordenadas.
-      ubicacionDisponible: false,
-      ubicacionLat: null,
-      ubicacionLng: null,
-      ubicacionPrecisionM: null,
-      ubicacionCapturadaAt: null,
-      ubicacionEsValida: null,
-      ubicacionPermiso: 'denegado',
-      ubicacionMotivoNoDisponible: 'permisoDenegado',
-    });
-    // En un `Json?` Prisma exige DbNull para escribir el NULL de la columna:
-    // `null` a secas es el valor JSON null, que no es lo mismo.
-    expect(datos.conocimientoPorPersona).toBe(Prisma.DbNull);
-    expect(datos.mediosConocimiento).toBe(Prisma.DbNull);
+    expect(datos).not.toHaveProperty('elegibilidad');
   });
 
   it('la ubicación AUSENTE se guarda como NULL, distinta de "no disponible"', async () => {
@@ -342,38 +320,25 @@ describe('ingestEncuestaWithDeps — aplanado a columnas', () => {
     expect(datosDelCreate(create).encuestador).toBeNull();
   });
 
-  it('P5 y P6 se almacenan en el orden del catálogo, no en el del teléfono', async () => {
+  it('aprobacionPorGobernante se almacena en el orden del catálogo, no en el del teléfono', async () => {
     // Mismo reordenado que aplica el hash canónico. Fijarlo en la columna es lo
     // que permite pivotear el CSV sin ordenar al exportar.
     const desordenada = conRespuestas({
-      conocimientoPorPersona: [
-        { persona: 'ernesto_montero', nivel: 'no_conoce' },
-        { persona: 'goyo_castaneda', nivel: 'no_conoce' },
-        { persona: 'irineo_molina', nivel: 'no_conoce' },
-        { persona: 'gabriela_delgado', nivel: 'no_conoce' },
-        { persona: 'paco_nino', nivel: 'poco' },
-        { persona: 'laura_estrada', nivel: 'algo' },
-        { persona: 'lalo_ximenez', nivel: 'bien' },
+      aprobacionPorGobernante: [
+        { gobernante: 'huerta', calificacion: 'mala' },
+        { gobernante: 'sheinbaum', calificacion: 'buena' },
+        { gobernante: 'jara', calificacion: 'regular' },
       ],
-      mediosConocimiento: { tipo: 'respondida', medios: ['labor_social', 'redes_sociales'] },
     });
     const { db, create } = fakeDbConMemoria();
 
     await ingestEncuestaWithDeps(entrada(desordenada), { db });
 
     const datos = datosDelCreate(create);
-    expect(datos.conocimientoPorPersona).toEqual([
-      { persona: 'lalo_ximenez', nivel: 'bien' },
-      { persona: 'laura_estrada', nivel: 'algo' },
-      { persona: 'paco_nino', nivel: 'poco' },
-      { persona: 'gabriela_delgado', nivel: 'no_conoce' },
-      { persona: 'irineo_molina', nivel: 'no_conoce' },
-      { persona: 'goyo_castaneda', nivel: 'no_conoce' },
-      { persona: 'ernesto_montero', nivel: 'no_conoce' },
+    expect(datos.aprobacionPorGobernante).toEqual([
+      { gobernante: 'sheinbaum', calificacion: 'buena' },
+      { gobernante: 'jara', calificacion: 'regular' },
+      { gobernante: 'huerta', calificacion: 'mala' },
     ]);
-    expect(datos.mediosConocimiento).toEqual({
-      tipo: 'respondida',
-      medios: ['redes_sociales', 'labor_social'],
-    });
   });
 });
