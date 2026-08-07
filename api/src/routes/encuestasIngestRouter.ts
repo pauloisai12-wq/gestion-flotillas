@@ -13,19 +13,53 @@
 //     coordenadas, ni la API key. Solo el requestId que estampa pino-http.
 
 import { Router, Request, Response } from 'express';
+import type { ZodType } from 'zod';
 import { rateLimit } from '../middlewares/rateLimit';
 import { ah } from '../lib/asyncHandler';
 import { BadRequest } from '../middlewares/errorHandler';
 import {
   encuestaV1Schema,
   encuestaV3Schema,
+  type EncuestaV1,
+  type EncuestaV3,
 } from '../validators/encuestasIngestValidator';
 import { hashEncuestaV1, hashEncuestaV3 } from '../lib/encuestasCanonical';
 import { ingestEncuesta } from '../services/encuestasIngestService';
 import { env } from '../config/env';
 
-/** Versiones de cuestionario que este servidor sabe persistir. */
-const VERSIONES_SOPORTADAS = [1, 3] as const;
+/** Lo que deja el paso "validar + hashear" de una versión, ya sin zod a la vista. */
+type ResultadoVersion =
+  | { ok: true; parsed: EncuestaV1 | EncuestaV3; payloadHash: string }
+  | { ok: false; issues: { path: PropertyKey[]; message: string }[] };
+
+/**
+ * Empareja el schema de una versión con SU canónico en un solo paso. El
+ * genérico ata ambos: el hash recibe exactamente lo que produce el schema, así
+ * que una pareja cruzada (validar con v3 y hashear con v1) no compila.
+ */
+function validadorDe<T extends EncuestaV1 | EncuestaV3>(
+  schema: ZodType<T>,
+  hash: (d: T) => string,
+): (body: unknown) => ResultadoVersion {
+  return (body) => {
+    const p = schema.safeParse(body);
+    return p.success
+      ? { ok: true, parsed: p.data, payloadHash: hash(p.data) }
+      : { ok: false, issues: p.error.issues };
+  };
+}
+
+/**
+ * ÚNICA fuente de verdad de las versiones soportadas: el gate se deriva de las
+ * llaves de esta tabla, no de una lista aparte. Sin este acoplamiento, declarar
+ * una v4 soportada sin darle schema/canónico propios la haría pasar el gate y
+ * persistirse en silencio con el canónico de otra versión; aquí una versión sin
+ * entrada cae siempre en UNSUPPORTED_VERSION.
+ */
+const POR_VERSION: Partial<Record<number, (body: unknown) => ResultadoVersion>> = {
+  1: validadorDe(encuestaV1Schema, hashEncuestaV1),
+  3: validadorDe(encuestaV3Schema, hashEncuestaV3),
+};
 
 // Cuota de captura POR DISPOSITIVO (cubo `rl:enc:dev:<id>`), separada del cubo
 // por IP del montaje (`rl:enc:ip:<ip>`, pre-auth y anti-sondeo de keys). Cubos
@@ -96,7 +130,8 @@ router.post(
       });
       return;
     }
-    if (!VERSIONES_SOPORTADAS.includes(versionCuestionario as 1 | 3)) {
+    const validarVersion = POR_VERSION[versionCuestionario];
+    if (!validarVersion) {
       res.status(422).json({
         error: 'Versión de cuestionario no soportada',
         code: 'UNSUPPORTED_VERSION',
@@ -106,24 +141,11 @@ router.post(
       return;
     }
 
-    // Cada versión valida y hashea con su propio schema/canónico; el resto del
-    // flujo (idempotencia, respuesta) es común. El hash sale de lo VALIDADO (ya
-    // sin los campos de la cola de envío del teléfono); el crudo se guarda
-    // aparte, solo para auditoría.
-    const resultado =
-      versionCuestionario === 1
-        ? (() => {
-            const p = encuestaV1Schema.safeParse(body);
-            return p.success
-              ? { ok: true as const, parsed: p.data, payloadHash: hashEncuestaV1(p.data) }
-              : { ok: false as const, issues: p.error.issues };
-          })()
-        : (() => {
-            const p = encuestaV3Schema.safeParse(body);
-            return p.success
-              ? { ok: true as const, parsed: p.data, payloadHash: hashEncuestaV3(p.data) }
-              : { ok: false as const, issues: p.error.issues };
-          })();
+    // Cada versión valida y hashea con su propio schema/canónico (la pareja que
+    // fija POR_VERSION); el resto del flujo (idempotencia, respuesta) es común.
+    // El hash sale de lo VALIDADO (ya sin los campos de la cola de envío del
+    // teléfono); el crudo se guarda aparte, solo para auditoría.
+    const resultado = validarVersion(body);
 
     if (!resultado.ok) {
       // Mismo formato que el errorHandler global (VALIDATION_ERROR), inline y
