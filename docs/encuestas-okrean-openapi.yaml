@@ -70,7 +70,9 @@ paths:
   /api/v1/encuestas:
     post:
       tags: [ingesta]
-      operationId: ingestarEncuesta
+      # El nombre conserva el sufijo V3 del spec 3.0.0 aunque hoy también ingesta
+      # v1: renombrarlo rompería cualquier cliente ya generado de ese spec.
+      operationId: ingestarEncuestaV3
       summary: Envía una encuesta.
       description: |
         Alta idempotente de una encuesta. El servidor mira `versionCuestionario`,
@@ -529,31 +531,40 @@ components:
         un medio. Las dos formas se rechazan cruzadas: `respondida` con la lista
         vacía y `omitidaPorLogica` con `medios` son ambas 422.
       oneOf:
-        - title: Omitida por lógica del cuestionario
-          type: object
-          additionalProperties: false
-          required: [tipo]
-          properties:
-            tipo:
-              type: string
-              const: omitidaPorLogica
-        - title: Respondida
-          type: object
-          additionalProperties: false
-          required: [tipo, medios]
-          properties:
-            tipo:
-              type: string
-              const: respondida
-            medios:
-              type: array
-              minItems: 1
-              maxItems: 3
-              uniqueItems: true
-              items:
-                $ref: '#/components/schemas/MedioV1'
+        - $ref: '#/components/schemas/MediosConocimientoOmitidaV1'
+        - $ref: '#/components/schemas/MediosConocimientoRespondidaV1'
       discriminator:
         propertyName: tipo
+        mapping:
+          omitidaPorLogica: '#/components/schemas/MediosConocimientoOmitidaV1'
+          respondida: '#/components/schemas/MediosConocimientoRespondidaV1'
+
+    MediosConocimientoOmitidaV1:
+      title: Omitida por lógica del cuestionario
+      type: object
+      additionalProperties: false
+      required: [tipo]
+      properties:
+        tipo:
+          type: string
+          const: omitidaPorLogica
+
+    MediosConocimientoRespondidaV1:
+      title: Respondida
+      type: object
+      additionalProperties: false
+      required: [tipo, medios]
+      properties:
+        tipo:
+          type: string
+          const: respondida
+        medios:
+          type: array
+          minItems: 1
+          maxItems: 3
+          uniqueItems: true
+          items:
+            $ref: '#/components/schemas/MedioV1'
 
     # ── Bloques del cuestionario v3 ─────────────────────────────────────────
 
@@ -568,10 +579,12 @@ components:
           $ref: '#/components/schemas/CalificacionV3'
 
     # ── Bloques compartidos por las dos versiones ───────────────────────────
-    # Sin sufijo de versión a propósito: el cuestionario cambia, pero la
-    # ubicación y los metadatos del teléfono son los mismos en v1 y en v3.
+    # El cuestionario cambia, pero la ubicación y los metadatos del teléfono son
+    # los mismos en v1 y en v3. Conservan los nombres publicados en el spec
+    # 3.0.0 (el sufijo `V1` viene de la ruta `/api/v1/`, no del cuestionario):
+    # renombrarlos rompería cualquier cliente ya generado de ese spec.
 
-    Ubicacion:
+    UbicacionV1:
       description: |
         Bloque de ubicación, unión discriminada por `disponible`.
 
@@ -579,10 +592,10 @@ components:
         captura de GPS) y se persiste como `NULL`, que es distinto de
         `disponible: false`. Lo que **no** se acepta es `"ubicacion": null`.
       oneOf:
-        - $ref: '#/components/schemas/UbicacionDisponible'
-        - $ref: '#/components/schemas/UbicacionNoDisponible'
+        - $ref: '#/components/schemas/UbicacionDisponibleV1'
+        - $ref: '#/components/schemas/UbicacionNoDisponibleV1'
 
-    UbicacionDisponible:
+    UbicacionDisponibleV1:
       title: Ubicación capturada
       type: object
       additionalProperties: false
@@ -634,7 +647,7 @@ components:
           const: true
           description: Si hay coordenadas, el servicio de ubicación estaba encendido.
 
-    UbicacionNoDisponible:
+    UbicacionNoDisponibleV1:
       title: Ubicación no capturada
       type: object
       additionalProperties: false
@@ -668,7 +681,7 @@ components:
             - errorTemporal
             - omitidaPorEncuestador
 
-    DispositivoMeta:
+    DispositivoMetaV1:
       type: object
       additionalProperties: false
       required: [plataforma, modelo, versionSistema]
@@ -810,7 +823,9 @@ components:
 
     RespuestasNoElegibleV1:
       type: object
-      additionalProperties: false
+      # Sin `additionalProperties: false` a propósito: el servidor ESTRIPA lo que
+      # sobra y acepta con 201, así que un cliente generado con ese candado
+      # rechazaría un payload legítimo del teléfono.
       required: [credencialVigente, conocimientoPorPersona]
       description: |
         Solo P1. Las demás respuestas **no se declaran**: si el teléfono manda el
@@ -829,12 +844,15 @@ components:
 
     # ── Payload de la encuesta ──────────────────────────────────────────────
 
-    EncuestaBaseComun:
+    EncuestaBaseV3:
       type: object
       description: |
         Campos de la **raíz** que las dos versiones comparten. Cada versión añade
         encima su `versionCuestionario`, su `estado` y su bloque `respuestas` (y,
         en v1, la `elegibilidad`).
+
+        El nombre conserva el sufijo V3 del spec 3.0.0 aunque la base sea común a
+        las dos versiones: renombrarlo rompería los clientes ya generados.
       required:
         - idLocal
         - fechaHoraInicio
@@ -890,9 +908,9 @@ components:
             `fechaHoraFinalizacion − fechaHoraInicio` con una tolerancia de
             **±60 s**; fuera de ella es 422.
         ubicacion:
-          $ref: '#/components/schemas/Ubicacion'
+          $ref: '#/components/schemas/UbicacionV1'
         dispositivo:
-          $ref: '#/components/schemas/DispositivoMeta'
+          $ref: '#/components/schemas/DispositivoMetaV1'
         versionAplicacion:
           type: string
           minLength: 1
@@ -906,7 +924,7 @@ components:
         Payload de una encuesta v3. Todos los campos de respuesta son obligatorios
         y no hay ramas: `estado` solo puede ser `completada`.
       allOf:
-        - $ref: '#/components/schemas/EncuestaBaseComun'
+        - $ref: '#/components/schemas/EncuestaBaseV3'
         - type: object
           required: [versionCuestionario, estado, respuestas]
           properties:
@@ -931,7 +949,7 @@ components:
         El encuestado tiene credencial vigente y respondió P2–P8. Todas las
         respuestas son obligatorias en esta rama.
       allOf:
-        - $ref: '#/components/schemas/EncuestaBaseComun'
+        - $ref: '#/components/schemas/EncuestaBaseV3'
         - type: object
           required: [versionCuestionario, estado, elegibilidad, respuestas]
           properties:
@@ -953,7 +971,7 @@ components:
         El encuestado no tiene credencial vigente y la app corta el cuestionario en
         P1.
       allOf:
-        - $ref: '#/components/schemas/EncuestaBaseComun'
+        - $ref: '#/components/schemas/EncuestaBaseV3'
         - type: object
           required: [versionCuestionario, estado, elegibilidad, respuestas]
           properties:

@@ -74,15 +74,19 @@ const columns: ColumnDef<Encuesta, unknown>[] = [
     ),
   },
   {
-    accessorKey: 'preferenciaElectoral',
+    id: 'preferenciaElectoral',
     header: 'Preferencia electoral',
     // v3 manda preferenciaElectoral; una fila v1 trae su equivalente candidatoPreferido.
+    // El accessorFn fusiona ambos (como la columna 'dispositivo') para que el
+    // orden client-side no agrupe las filas v1 como vacías.
+    accessorFn: (row) => row.preferenciaElectoral ?? row.candidatoPreferido ?? '',
     cell: ({ row }) => row.original.preferenciaElectoral ?? row.original.candidatoPreferido ?? '—',
   },
   {
-    accessorKey: 'preferenciaPartido',
+    id: 'preferenciaPartido',
     header: 'Preferencia partido',
     // v3 manda preferenciaPartido; una fila v1 trae su equivalente partidoPreferido.
+    accessorFn: (row) => row.preferenciaPartido ?? row.partidoPreferido ?? '',
     cell: ({ row }) => row.original.preferenciaPartido ?? row.original.partidoPreferido ?? '—',
   },
   {
