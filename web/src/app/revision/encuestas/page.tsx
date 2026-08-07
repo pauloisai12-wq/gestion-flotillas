@@ -65,14 +65,25 @@ const columns: ColumnDef<Encuesta, unknown>[] = [
     cell: ({ row }) => row.original.encuestador ?? '—',
   },
   {
+    accessorKey: 'versionCuestionario',
+    header: 'Versión',
+    // Las dos versiones del cuestionario conviven en la tabla: sin esta columna
+    // no se sabe por qué unas filas traen unos campos y otras no.
+    cell: ({ row }) => (
+      <span className="font-mono text-sm">v{row.original.versionCuestionario}</span>
+    ),
+  },
+  {
     accessorKey: 'preferenciaElectoral',
     header: 'Preferencia electoral',
-    cell: ({ row }) => row.original.preferenciaElectoral ?? '—',
+    // v3 manda preferenciaElectoral; una fila v1 trae su equivalente candidatoPreferido.
+    cell: ({ row }) => row.original.preferenciaElectoral ?? row.original.candidatoPreferido ?? '—',
   },
   {
     accessorKey: 'preferenciaPartido',
     header: 'Preferencia partido',
-    cell: ({ row }) => row.original.preferenciaPartido ?? '—',
+    // v3 manda preferenciaPartido; una fila v1 trae su equivalente partidoPreferido.
+    cell: ({ row }) => row.original.preferenciaPartido ?? row.original.partidoPreferido ?? '—',
   },
   {
     accessorKey: 'conoceLalo',

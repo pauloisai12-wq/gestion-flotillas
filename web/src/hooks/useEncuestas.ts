@@ -21,6 +21,9 @@ export interface Encuesta {
   versionCuestionario: number;
   preferenciaElectoral: string | null;
   preferenciaPartido: string | null;
+  // Equivalentes v1 (cuestionario restaurado): null en filas v3.
+  partidoPreferido: string | null;
+  candidatoPreferido: string | null;
   conoceLalo: string | null;
   duracionSegundos: number;
   fechaHoraFinalizacion: string;
