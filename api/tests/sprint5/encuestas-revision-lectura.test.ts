@@ -8,7 +8,14 @@ import request from 'supertest';
 import { describe, expect, it, vi } from 'vitest';
 import type { UserRole } from '@prisma/client';
 
-vi.mock('../../src/lib/prisma', () => ({ default: {} }));
+// Doble de Prisma con los dos métodos que usa `list`. Casi todo el archivo
+// mockea el servicio, pero el último describe corre el `list` REAL contra este
+// doble: con `list` mockeado, afirmar que el DTO trae una columna sería
+// tautológico (la traería porque la puso la fixture, no el servicio).
+const prismaFalso = vi.hoisted(() => ({
+  encuesta: { findMany: vi.fn(), count: vi.fn() },
+}));
+vi.mock('../../src/lib/prisma', () => ({ default: prismaFalso }));
 
 const registrado = vi.hoisted(() => ({
   error: vi.fn(),
@@ -45,7 +52,7 @@ function crearApp(role?: UserRole) {
 
 const RUTA = '/api/encuestas';
 
-/** Las 12 claves del EncuestaDto del contrato v3: ni una más. */
+/** Las 14 claves del EncuestaDto (v3 + las dos preferencias v1): ni una más. */
 const CLAVES_DTO = [
   'id',
   'idRemoto',
@@ -55,6 +62,8 @@ const CLAVES_DTO = [
   'preferenciaElectoral',
   'preferenciaPartido',
   'conoceLalo',
+  'partidoPreferido',
+  'candidatoPreferido',
   'duracionSegundos',
   'fechaHoraFinalizacion',
   'recibidoEn',
@@ -72,6 +81,9 @@ function encuesta(overrides: Partial<EncuestaDto> = {}): EncuestaDto {
     preferenciaElectoral: 'lalo_ximenez',
     preferenciaPartido: 'morena',
     conoceLalo: 'si',
+    // Preferencias del contrato v1: NULL en una fila v3.
+    partidoPreferido: null,
+    candidatoPreferido: null,
     duracionSegundos: 400,
     fechaHoraFinalizacion: new Date('2026-07-30T10:06:40.000Z'),
     recibidoEn: new Date('2026-07-30T10:07:05.000Z'),
@@ -101,6 +113,8 @@ describe('GET /api/encuestas — listado', () => {
       preferenciaElectoral: 'lalo_ximenez',
       preferenciaPartido: 'morena',
       conoceLalo: 'si',
+      partidoPreferido: null,
+      candidatoPreferido: null,
       // Las fechas viajan serializadas en UTC.
       fechaHoraFinalizacion: '2026-07-30T10:06:40.000Z',
       dispositivo: { id: 3, identificador: 'encuestador-01' },
@@ -160,6 +174,43 @@ describe('GET /api/encuestas — listado', () => {
       dateFrom: '2026-07-01',
       dateTo: '2026-07-31',
     });
+  });
+});
+
+// Lo que el router no puede demostrar (lo tiene mockeado): que el servicio pide
+// a la BD las columnas de las DOS versiones y que su mapeo explícito las deja
+// pasar sin colar el body crudo del teléfono.
+describe('list — columnas que el servicio pide y devuelve', () => {
+  it('selecciona las preferencias de v1 y v3 y no expone el payload crudo', async () => {
+    const { list: listReal } = await vi.importActual<
+      typeof import('../../src/services/encuestasRevisionService')
+    >('../../src/services/encuestasRevisionService');
+
+    prismaFalso.encuesta.findMany.mockResolvedValue([
+      {
+        ...encuesta({
+          versionCuestionario: 1,
+          partidoPreferido: 'pri',
+          candidatoPreferido: 'irineo_molina',
+        }),
+        // Si el select volviera a `include`, la fila llegaría con esto dentro.
+        payloadRaw: '{"idLocal":"…"}',
+      },
+    ]);
+    prismaFalso.encuesta.count.mockResolvedValue(1);
+
+    const { data } = await listReal({});
+
+    const { select } = prismaFalso.encuesta.findMany.mock.calls[0][0];
+    expect(select.partidoPreferido).toBe(true);
+    expect(select.candidatoPreferido).toBe(true);
+    expect(select.payloadRaw).toBeUndefined();
+
+    // El mapeo explícito arma el DTO clave por clave: ni una de más (payloadRaw
+    // venía en la fila) ni una de menos.
+    expect(Object.keys(data[0]).sort()).toEqual([...CLAVES_DTO].sort());
+    expect(data[0]).toMatchObject({ partidoPreferido: 'pri', candidatoPreferido: 'irineo_molina' });
+    expect(data[0]).not.toHaveProperty('payloadRaw');
   });
 });
 

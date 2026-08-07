@@ -1,6 +1,8 @@
 // GET|HEAD /api/encuestas/export.csv: rango obligatorio, cabeceras, BOM y —lo
-// específico de este módulo— el pivoteo del JSONB de P5 a las 7 columnas fijas
-// del catálogo v1 y el aplanado de P6.
+// específico de este módulo— la UNIÓN de columnas de los dos cuestionarios: el
+// pivoteo del JSONB de aprobación por gobernante (v3), el de P5 a las 7 columnas
+// fijas del catálogo v1 y el aplanado de P6, con las columnas de la otra versión
+// vacías en cada fila.
 //
 // Solo se sustituye el iterador: ENCUESTAS_CSV_HEADERS, toCsvRow y csvEscape son
 // los reales, que es justo lo que se está comprobando que se emite. La BD no se
@@ -77,6 +79,8 @@ function encuestaCompletada(overrides: Partial<EncuestaExportRow> = {}): Encuest
     fechaHoraFinalizacion: new Date('2026-07-30T10:06:40.000Z'),
     duracionSegundos: 400,
     estado: 'completada',
+    // Las filas v3 no traen elegibilidad: la columna es del contrato v1.
+    elegibilidad: null,
     versionCuestionario: 3,
     sexo: 'mujer',
     rangoEdad: '30_44',
@@ -94,6 +98,14 @@ function encuestaCompletada(overrides: Partial<EncuestaExportRow> = {}): Encuest
       { gobernante: 'jara', calificacion: 'regular' },
       { gobernante: 'huerta', calificacion: 'debil' },
     ],
+    // Bloque v1: NULL en una fila v3, tal como lo persiste la ingesta.
+    credencialVigente: null,
+    genero: null,
+    partidoPreferido: null,
+    conocimientoPorPersona: null,
+    mediosConocimiento: null,
+    mayorPersonalidad: null,
+    candidatoPreferido: null,
     ubicacionDisponible: true,
     ubicacionLat: 19.432608,
     ubicacionLng: -99.133209,
@@ -112,8 +124,12 @@ function encuestaCompletada(overrides: Partial<EncuestaExportRow> = {}): Encuest
   };
 }
 
-/** En v3 una fila de residual v1 puede llegar con campos nulos. */
-function encuestaNoElegible(overrides: Partial<EncuestaExportRow> = {}): EncuestaExportRow {
+/**
+ * Fila del cuestionario v1: llena su bloque de columnas y deja en NULL las de
+ * v3, que es el reverso exacto de encuestaCompletada. `rangoEdad` es la única
+ * columna que comparten las dos versiones (catálogos disjuntos).
+ */
+function encuestaV1(overrides: Partial<EncuestaExportRow> = {}): EncuestaExportRow {
   return encuestaCompletada({
     id: 2,
     idRemoto: '7a1d9c22-1f4e-4f2a-9d3b-5c6e7f8a9b02',
@@ -121,9 +137,27 @@ function encuestaNoElegible(overrides: Partial<EncuestaExportRow> = {}): Encuest
     folioLocal: null,
     // Capturada por una app anterior al campo: la columna sale vacía.
     encuestador: null,
+    elegibilidad: 'elegible',
     versionCuestionario: 1,
+    credencialVigente: 'si',
+    genero: 'hombre',
+    partidoPreferido: 'pri',
+    // Desordenadas a propósito: el CSV las coloca por catálogo, no por el orden
+    // en que las mandó el teléfono.
+    conocimientoPorPersona: [
+      { persona: 'ernesto_montero', nivel: 'no_conoce' },
+      { persona: 'lalo_ximenez', nivel: 'bien' },
+      { persona: 'laura_estrada', nivel: 'algo' },
+      { persona: 'paco_nino', nivel: 'poco' },
+      { persona: 'gabriela_delgado', nivel: 'no_conoce' },
+      { persona: 'irineo_molina', nivel: 'bien' },
+      { persona: 'goyo_castaneda', nivel: 'poco' },
+    ],
+    mediosConocimiento: { tipo: 'respondida', medios: ['labor_social', 'redes_sociales'] },
+    mayorPersonalidad: 'lalo_ximenez',
+    candidatoPreferido: 'irineo_molina',
+    // Bloque v3: NULL en una fila v1.
     sexo: null,
-    rangoEdad: null,
     empresariosConocidos: null,
     politicosConocidos: null,
     conoceLalo: null,
@@ -178,6 +212,8 @@ describe('GET /api/encuestas/export.csv', () => {
     expect(response.headers['content-type']).toContain('text/csv');
     // El archivo es exactamente BOM + encabezados: ni una columna de más.
     expect(response.text).toBe(`\uFEFF${ENCABEZADOS}\r\n`);
+    // La unión de los dos cuestionarios: 36 columnas v3 + 15 v1.
+    expect(ENCUESTAS_CSV_HEADERS).toHaveLength(51);
     // Ni el body crudo ni su hash tienen columna en el CSV.
     expect(ENCUESTAS_CSV_HEADERS.some((h) => /payload|hash/i.test(h))).toBe(false);
   });
@@ -197,9 +233,9 @@ describe('GET /api/encuestas/export.csv', () => {
     });
   });
 
-  it('pivotea aprobación por gobernante y une listas de nombres, deja vacías las columnas de encuesta v1', async () => {
+  it('cada fila llena las columnas de SU versión y deja vacías las de la otra', async () => {
     iterateForExport.mockImplementation(async function* () {
-      yield [encuestaCompletada(), encuestaNoElegible()];
+      yield [encuestaCompletada(), encuestaV1()];
     });
 
     const response = await request(crearApp()).get(RUTA).query(FILTRO);
@@ -229,6 +265,17 @@ describe('GET /api/encuestas/export.csv', () => {
     expect(celda(lineas[1], 'Aprobación jara')).toBe('regular');
     expect(celda(lineas[1], 'Aprobación huerta')).toBe('debil');
 
+    // Y las columnas del contrato v1 salen vacías en una fila v3.
+    expect(celda(lineas[1], 'Elegibilidad')).toBe('');
+    expect(celda(lineas[1], 'Credencial vigente')).toBe('');
+    expect(celda(lineas[1], 'Género')).toBe('');
+    expect(celda(lineas[1], 'Partido preferido')).toBe('');
+    expect(celda(lineas[1], 'Conoce lalo_ximenez')).toBe('');
+    expect(celda(lineas[1], 'Medios (tipo)')).toBe('');
+    expect(celda(lineas[1], 'Medios')).toBe('');
+    expect(celda(lineas[1], 'Mayor personalidad')).toBe('');
+    expect(celda(lineas[1], 'Candidato preferido')).toBe('');
+
     // Fechas en UTC y booleanos como si/no.
     expect(celda(lineas[1], 'Recibido (UTC)')).toBe('2026-07-30T10:07:05.000Z');
     expect(celda(lineas[1], 'Finalización (UTC)')).toBe('2026-07-30T10:06:40.000Z');
@@ -238,14 +285,38 @@ describe('GET /api/encuestas/export.csv', () => {
     // Las coordenadas NO llevan apóstrofo: son números, no fórmulas.
     expect(celda(lineas[1], 'Longitud')).toBe('-99.133209');
 
-    // La encuesta v1 residual: campos nulos salen como celdas vacías.
+    // La fila v1: su bloque lleno…
+    expect(celda(lineas[2], 'Elegibilidad')).toBe('elegible');
+    expect(celda(lineas[2], 'Credencial vigente')).toBe('si');
+    expect(celda(lineas[2], 'Género')).toBe('hombre');
+    expect(celda(lineas[2], 'Partido preferido')).toBe('pri');
+    expect(celda(lineas[2], 'Mayor personalidad')).toBe('lalo_ximenez');
+    expect(celda(lineas[2], 'Candidato preferido')).toBe('irineo_molina');
+    // Cada nivel de P5 bajo la columna de SU persona, con el orden del catálogo v1.
+    expect(celda(lineas[2], 'Conoce lalo_ximenez')).toBe('bien');
+    expect(celda(lineas[2], 'Conoce laura_estrada')).toBe('algo');
+    expect(celda(lineas[2], 'Conoce paco_nino')).toBe('poco');
+    expect(celda(lineas[2], 'Conoce gabriela_delgado')).toBe('no_conoce');
+    expect(celda(lineas[2], 'Conoce irineo_molina')).toBe('bien');
+    expect(celda(lineas[2], 'Conoce goyo_castaneda')).toBe('poco');
+    expect(celda(lineas[2], 'Conoce ernesto_montero')).toBe('no_conoce');
+    // P6: el orden lo fija MEDIOS_V1, no el del teléfono (que los mandó al revés).
+    expect(celda(lineas[2], 'Medios (tipo)')).toBe('respondida');
+    expect(celda(lineas[2], 'Medios')).toBe('redes_sociales;labor_social');
+
+    // …y las columnas v3 vacías (celdas vacías, no la palabra "null").
     expect(celda(lineas[2], 'Encuestador')).toBe('');
+    expect(celda(lineas[2], 'Sexo')).toBe('');
     expect(celda(lineas[2], 'Empresarios conocidos')).toBe('');
     expect(celda(lineas[2], 'Políticos conocidos')).toBe('');
     expect(celda(lineas[2], 'Conoce Lalo')).toBe('');
+    expect(celda(lineas[2], 'Preferencia electoral')).toBe('');
+    expect(celda(lineas[2], 'Preferencia partido')).toBe('');
     expect(celda(lineas[2], 'Aprobación sheinbaum')).toBe('');
     expect(celda(lineas[2], 'Aprobación jara')).toBe('');
     expect(celda(lineas[2], 'Aprobación huerta')).toBe('');
+    // Compartida por las dos versiones: en v1 lleva su propio catálogo.
+    expect(celda(lineas[2], 'Rango edad')).toBe('30_44');
     expect(celda(lineas[2], 'Ubicación disponible')).toBe('no');
     // NULL no es "no": la lectura de GPS no existe, no es que fuera inválida.
     expect(celda(lineas[2], 'Ubicación válida')).toBe('');
