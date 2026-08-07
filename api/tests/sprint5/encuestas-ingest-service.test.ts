@@ -25,10 +25,15 @@ import {
   ingestEncuestaWithDeps,
   type IngestEncuestaInput,
 } from '../../src/services/encuestasIngestService';
-import { encuestaV3Schema } from '../../src/validators/encuestasIngestValidator';
-import { hashEncuestaV3 } from '../../src/lib/encuestasCanonical';
+import {
+  encuestaV1Schema,
+  encuestaV3Schema,
+} from '../../src/validators/encuestasIngestValidator';
+import { hashEncuestaV1, hashEncuestaV3 } from '../../src/lib/encuestasCanonical';
 import {
   encuestaCompletaValida,
+  encuestaV1CompletaValida,
+  encuestaV1NoElegibleValida,
   sinClaves,
   type PayloadEncuesta,
 } from './fixtures';
@@ -90,6 +95,21 @@ function entrada(
     parsed,
     dispositivoId: 1,
     payloadHash: hashEncuestaV3(parsed),
+    payloadRaw: JSON.stringify(payload),
+    ...overrides,
+  };
+}
+
+/** Lo mismo para el cuestionario v1: su schema y su hash, no los de la v3. */
+function entradaV1(
+  payload: PayloadEncuesta,
+  overrides: Partial<IngestEncuestaInput> = {},
+): IngestEncuestaInput {
+  const parsed = encuestaV1Schema.parse(payload);
+  return {
+    parsed,
+    dispositivoId: 1,
+    payloadHash: hashEncuestaV1(parsed),
     payloadRaw: JSON.stringify(payload),
     ...overrides,
   };
@@ -289,7 +309,10 @@ describe('ingestEncuestaWithDeps — aplanado a columnas', () => {
     // El crudo se guarda para auditoría, con los campos de sincronización que
     // el validador estripa.
     expect(String(datos.payloadRaw)).toContain('estadoSincronizacion');
-    expect(datos).not.toHaveProperty('elegibilidad');
+    // La elegibilidad es un concepto solo de la v1 (P1 corta la entrevista):
+    // desde que la tabla aloja las dos versiones, la v3 escribe la columna en
+    // NULL explícito en vez de omitirla.
+    expect(datos.elegibilidad).toBeNull();
   });
 
   it('la ubicación AUSENTE se guarda como NULL, distinta de "no disponible"', async () => {
@@ -340,5 +363,140 @@ describe('ingestEncuestaWithDeps — aplanado a columnas', () => {
       { gobernante: 'jara', calificacion: 'regular' },
       { gobernante: 'huerta', calificacion: 'mala' },
     ]);
+  });
+});
+
+describe('ingesta v1 (restaurada)', () => {
+  it('el alta v1 completada aplana P1–P8 y no toca ninguna columna v3', async () => {
+    // P5 y P6 llegan en el orden en que las serializó el teléfono, que NO es
+    // dato: la fila tiene que quedar reordenada al catálogo, igual que el hash.
+    const desordenada = conRespuestas(
+      {
+        conocimientoPorPersona: [
+          { persona: 'ernesto_montero', nivel: 'no_conoce' },
+          { persona: 'goyo_castaneda', nivel: 'no_conoce' },
+          { persona: 'irineo_molina', nivel: 'no_conoce' },
+          { persona: 'gabriela_delgado', nivel: 'no_conoce' },
+          { persona: 'paco_nino', nivel: 'poco' },
+          { persona: 'laura_estrada', nivel: 'algo' },
+          { persona: 'lalo_ximenez', nivel: 'bien' },
+        ],
+        mediosConocimiento: { tipo: 'respondida', medios: ['labor_social', 'redes_sociales'] },
+      },
+      encuestaV1CompletaValida(),
+    );
+    const { db, create } = fakeDbConMemoria();
+
+    await ingestEncuestaWithDeps(entradaV1(desordenada), { db });
+
+    const datos = datosDelCreate(create);
+    expect(datos).toMatchObject({
+      idLocal: '3f2504e0-4f89-41d3-9a0c-0305e82c3301',
+      versionCuestionario: 1,
+      folioLocal: 'LX-1042',
+      encuestador: 'María López',
+      estado: 'completada',
+      elegibilidad: 'elegible',
+      duracionSegundos: 400,
+      credencialVigente: 'si',
+      rangoEdad: '30_44',
+      genero: 'mujer',
+      partidoPreferido: 'morena',
+      conocimientoPorPersona: [
+        { persona: 'lalo_ximenez', nivel: 'bien' },
+        { persona: 'laura_estrada', nivel: 'algo' },
+        { persona: 'paco_nino', nivel: 'poco' },
+        { persona: 'gabriela_delgado', nivel: 'no_conoce' },
+        { persona: 'irineo_molina', nivel: 'no_conoce' },
+        { persona: 'goyo_castaneda', nivel: 'no_conoce' },
+        { persona: 'ernesto_montero', nivel: 'no_conoce' },
+      ],
+      mediosConocimiento: {
+        tipo: 'respondida',
+        medios: ['redes_sociales', 'labor_social'],
+      },
+      mayorPersonalidad: 'lalo_ximenez',
+      candidatoPreferido: 'laura_estrada',
+      ubicacionDisponible: true,
+      versionAplicacion: '1.0.3',
+    });
+    // Las dos versiones comparten tabla: el alta v1 no puede arrastrar columnas
+    // del cuestionario vigente, ni siquiera en NULL explícito.
+    for (const columnaV3 of [
+      'sexo',
+      'empresariosConocidos',
+      'politicosConocidos',
+      'conoceLalo',
+      'rolLalo',
+      'opinionLalo',
+      'preferenciaElectoral',
+      'preferenciaPartido',
+      'aprobacionPorGobernante',
+    ]) {
+      expect(datos).not.toHaveProperty(columnaV3);
+    }
+  });
+
+  it('la v1 noElegible deja P2–P8 en NULL y las dos JSONB en DbNull', async () => {
+    const { db, create } = fakeDbConMemoria();
+
+    await ingestEncuestaWithDeps(entradaV1(encuestaV1NoElegibleValida()), { db });
+
+    const datos = datosDelCreate(create);
+    expect(datos).toMatchObject({
+      versionCuestionario: 1,
+      estado: 'noElegible',
+      elegibilidad: 'noElegible',
+      credencialVigente: 'no',
+      rangoEdad: null,
+      genero: null,
+      partidoPreferido: null,
+      mayorPersonalidad: null,
+      candidatoPreferido: null,
+      // La rama `disponible:false` sí conserva el porqué; lo que no existe son
+      // las coordenadas.
+      ubicacionDisponible: false,
+      ubicacionLat: null,
+      ubicacionLng: null,
+      ubicacionPermiso: 'denegado',
+      ubicacionMotivoNoDisponible: 'permisoDenegado',
+    });
+    // En un `Json?` Prisma exige DbNull para escribir el NULL de la columna:
+    // `null` a secas es el valor JSON null, que no es lo mismo.
+    expect(datos.conocimientoPorPersona).toBe(Prisma.DbNull);
+    expect(datos.mediosConocimiento).toBe(Prisma.DbNull);
+  });
+
+  it('el reenvío v1 idéntico devuelve el MISMO idRemoto sin duplicar la fila', async () => {
+    const { db, filas } = fakeDbConMemoria();
+
+    const primera = await ingestEncuestaWithDeps(entradaV1(encuestaV1CompletaValida()), { db });
+    const reenvio = await ingestEncuestaWithDeps(entradaV1(encuestaV1CompletaValida()), { db });
+
+    expect(primera.created).toBe(true);
+    expect(reenvio).toEqual({ idRemoto: primera.idRemoto, created: false });
+    expect(filas.size).toBe(1);
+  });
+
+  it('el mismo idLocal v1 con otro contenido es 409 y la fila original queda intacta', async () => {
+    const { db, filas } = fakeDbConMemoria();
+
+    const original = await ingestEncuestaWithDeps(entradaV1(encuestaV1CompletaValida()), { db });
+
+    await expect(
+      ingestEncuestaWithDeps(
+        entradaV1(conRespuestas({ partidoPreferido: 'pri' }, encuestaV1CompletaValida())),
+        { db },
+      ),
+    ).rejects.toMatchObject({
+      name: 'AppError',
+      statusCode: 409,
+      code: 'CONFLICT',
+    });
+
+    expect(filas.size).toBe(1);
+    const fila = filas.get(encuestaV1CompletaValida().idLocal as string)!;
+    expect(fila.idRemoto).toBe(original.idRemoto);
+    expect(fila.partidoPreferido).toBe('morena');
   });
 });

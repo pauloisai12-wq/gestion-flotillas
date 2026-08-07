@@ -1,7 +1,9 @@
-// Alta de una encuesta v3 ya validada. El contrato con la app móvil es
-// idempotente por `idLocal` (el UUID que genera el teléfono): el mismo id
-// reenviado devuelve SIEMPRE el mismo `idRemoto`, y el mismo id con contenido
-// sustantivo distinto es un 409 que no sobrescribe nada.
+// Alta de una encuesta ya validada, de CUALQUIERA de los dos cuestionarios
+// vivos (v1 restaurada y v3 vigente): el bloque de respuestas se aplana a las
+// columnas de su versión y el resto de la fila es común. El contrato con la app
+// móvil es idempotente por `idLocal` (el UUID que genera el teléfono): el mismo
+// id reenviado devuelve SIEMPRE el mismo `idRemoto`, y el mismo id con
+// contenido sustantivo distinto es un 409 que no sobrescribe nada.
 //
 // Flujo (sin transacción, a propósito):
 //   create → 201 {idRemoto, created:true}
@@ -14,13 +16,14 @@
 //   cualquier otro error → propaga (500)
 //
 // Por qué NO hay `$transaction`: la escritura es UN SOLO INSERT. Las listas de
-// texto libre y la aprobación por gobernante viven en columnas JSONB en vez de
-// una tabla hija justamente para eso (schema.prisma, modelo Encuesta), así que
-// el escenario "un error de BD deja escrituras parciales" no existe por
-// construcción, no por disciplina de código: o entra la fila entera o no entra
-// nada. El `findUnique` del catch es una LECTURA, y leer fuera de transacción
-// tras un UNIQUE violado es exactamente lo que se quiere: ve la fila que ganó
-// la carrera, que es la que hay que devolver.
+// texto libre y la aprobación por gobernante de la v3 —y P5/P6 de la v1— viven
+// en columnas JSONB en vez de una tabla hija justamente para eso
+// (schema.prisma, modelo Encuesta), así que el escenario "un error de BD deja
+// escrituras parciales" no existe por construcción, no por disciplina de
+// código: o entra la fila entera o no entra nada. El `findUnique` del catch es
+// una LECTURA, y leer fuera de transacción tras un UNIQUE violado es
+// exactamente lo que se quiere: ve la fila que ganó la carrera, que es la que
+// hay que devolver.
 //
 // La comparación de contenido va por `payloadHash` (lib/encuestasCanonical.ts),
 // no campo a campo: el hash ya ignora lo que no es sustantivo (los campos de la
@@ -31,12 +34,15 @@ import prisma from '../lib/prisma';
 import { Conflict, isPrismaKnownError } from '../middlewares/errorHandler';
 import {
   GOBERNANTES_V3,
+  MEDIOS_V1,
+  PERSONAS_V1,
+  type EncuestaV1,
   type EncuestaV3,
 } from '../validators/encuestasIngestValidator';
 
 export interface IngestEncuestaInput {
-  /** Salida de `encuestaV3Schema`: lo ÚNICO que se aplana a columnas. */
-  parsed: EncuestaV3;
+  /** Salida de `encuestaV1Schema` o `encuestaV3Schema`: lo ÚNICO que se aplana a columnas. */
+  parsed: EncuestaV1 | EncuestaV3;
   /** Estampado server-side desde la API key autenticada; el cliente no lo envía. */
   dispositivoId: number;
   payloadHash: string;
@@ -57,7 +63,19 @@ interface IngestEncuestaDeps {
   db: { encuesta: Pick<typeof prisma.encuesta, 'create' | 'findUnique'> };
 }
 
-type RespuestasRow = Pick<
+type RespuestasV1Row = Pick<
+  Prisma.EncuestaUncheckedCreateInput,
+  | 'credencialVigente'
+  | 'rangoEdad'
+  | 'genero'
+  | 'partidoPreferido'
+  | 'conocimientoPorPersona'
+  | 'mediosConocimiento'
+  | 'mayorPersonalidad'
+  | 'candidatoPreferido'
+>;
+
+type RespuestasV3Row = Pick<
   Prisma.EncuestaUncheckedCreateInput,
   | 'sexo'
   | 'rangoEdad'
@@ -84,7 +102,54 @@ type UbicacionRow = Pick<
   | 'ubicacionMotivoNoDisponible'
 >;
 
-function respuestasRow(d: EncuestaV3): RespuestasRow {
+function respuestasRowV1(d: EncuestaV1): RespuestasV1Row {
+  if (d.estado === 'noElegible') {
+    // La encuesta se cortó en P1: P2–P8 no se almacenan (el validador ya las
+    // estripó del payload). Las dos columnas JSON van con `Prisma.DbNull` y no
+    // con `null`: en un `Json?` Prisma exige distinguir el NULL de la columna
+    // del valor JSON `null`, y solo acepta `null` literal en los escalares.
+    return {
+      credencialVigente: d.respuestas.credencialVigente,
+      rangoEdad: null,
+      genero: null,
+      partidoPreferido: null,
+      conocimientoPorPersona: Prisma.DbNull,
+      mediosConocimiento: Prisma.DbNull,
+      mayorPersonalidad: null,
+      candidatoPreferido: null,
+    };
+  }
+
+  const r = d.respuestas;
+  // Se guarda la MISMA normalización que entra al hash (encuestasCanonical.ts):
+  // P5 reordenada al orden de PERSONAS_V1 y los medios al de MEDIOS_V1. El orden
+  // en que el teléfono serializa esos arrays no es dato, y fijarlo en la columna
+  // es lo que permite que el pivoteo del CSV sea determinista sin ordenar al
+  // exportar. El validador garantiza las 7 personas sin repetir, así que el
+  // índice es total y el `.get()` nunca queda en undefined.
+  const nivelPorPersona = new Map(
+    r.conocimientoPorPersona.map((fila) => [fila.persona, fila.nivel] as const),
+  );
+  const medios = r.mediosConocimiento;
+  return {
+    credencialVigente: r.credencialVigente,
+    rangoEdad: r.rangoEdad,
+    genero: r.genero,
+    partidoPreferido: r.partidoPreferido,
+    conocimientoPorPersona: PERSONAS_V1.map((persona) => ({
+      persona,
+      nivel: nivelPorPersona.get(persona)!,
+    })),
+    mediosConocimiento:
+      medios.tipo === 'respondida'
+        ? { tipo: medios.tipo, medios: MEDIOS_V1.filter((m) => medios.medios.includes(m)) }
+        : { tipo: medios.tipo },
+    mayorPersonalidad: r.mayorPersonalidad,
+    candidatoPreferido: r.candidatoPreferido,
+  };
+}
+
+function respuestasRowV3(d: EncuestaV3): RespuestasV3Row {
   const r = d.respuestas;
   // Se guarda la MISMA normalización que entra al hash (encuestasCanonical.ts):
   // la aprobación reordenada al catálogo de GOBERNANTES_V3; las listas de texto
@@ -110,7 +175,9 @@ function respuestasRow(d: EncuestaV3): RespuestasRow {
   };
 }
 
-function ubicacionRow(u: EncuestaV3['ubicacion']): UbicacionRow {
+// El bloque de ubicación es el MISMO en los dos cuestionarios (comparten el
+// schema), así que una sola función cubre ambas versiones.
+function ubicacionRow(u: EncuestaV1['ubicacion'] | EncuestaV3['ubicacion']): UbicacionRow {
   if (!u) {
     // Bloque AUSENTE (app vieja sin GPS): `ubicacionDisponible` queda en NULL,
     // que es distinto de `false` ("el teléfono no la pudo capturar"). El
@@ -155,9 +222,15 @@ function ubicacionRow(u: EncuestaV3['ubicacion']): UbicacionRow {
   };
 }
 
-/** Aplana la encuesta validada a las columnas del modelo `Encuesta`. */
+/**
+ * Aplana la encuesta validada a las columnas del modelo `Encuesta`, despachando
+ * por `versionCuestionario`: la cabecera y la ubicación son comunes, el bloque
+ * de respuestas es el de su versión y el de la otra ni siquiera se menciona
+ * (las columnas ajenas quedan en el NULL del modelo).
+ */
 function mapEncuestaToRow(input: IngestEncuestaInput): Prisma.EncuestaUncheckedCreateInput {
   const d = input.parsed;
+  const esV1 = d.versionCuestionario === 1;
   return {
     idLocal: d.idLocal,
     dispositivoId: input.dispositivoId,
@@ -168,10 +241,13 @@ function mapEncuestaToRow(input: IngestEncuestaInput): Prisma.EncuestaUncheckedC
     // Ausente ≡ NULL: lo mandan las versiones de la app que ya lo capturan.
     encuestador: d.encuestador ?? null,
     estado: d.estado,
+    // v1 la manda explícita (atada al estado por el validador); en v3 el
+    // concepto no existe y la columna queda NULL.
+    elegibilidad: esV1 ? d.elegibilidad : null,
     fechaHoraInicio: d.fechaHoraInicio,
     fechaHoraFinalizacion: d.fechaHoraFinalizacion,
     duracionSegundos: d.duracionSegundos,
-    ...respuestasRow(d),
+    ...(esV1 ? respuestasRowV1(d) : respuestasRowV3(d)),
     ...ubicacionRow(d.ubicacion),
     dispositivoPlataforma: d.dispositivo.plataforma,
     dispositivoModelo: d.dispositivo.modelo,
