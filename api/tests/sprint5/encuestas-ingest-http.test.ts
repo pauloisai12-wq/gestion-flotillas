@@ -85,6 +85,8 @@ import encuestasIngestRouter from '../../src/routes/encuestasIngestRouter';
 import { errorHandler } from '../../src/middlewares/errorHandler';
 import {
   encuestaCompletaValida,
+  encuestaV1CompletaValida,
+  encuestaV1NoElegibleValida,
   type PayloadEncuesta,
 } from './fixtures';
 
@@ -175,18 +177,67 @@ describe('POST /api/v1/encuestas — alta', () => {
   });
 });
 
-describe('POST /api/v1/encuestas — rechazos', () => {
-  it('una versión de cuestionario que el servidor no conoce responde 422 UNSUPPORTED_VERSION (v1)', async () => {
-    const response = await request(crearApp())
-      .post(RUTA)
-      .send(encuestaCompletaValida({ versionCuestionario: 1 }));
+// El cuestionario v1 (el del PDF "ENCUESTAS LX") vuelve a entrar por el MISMO
+// endpoint: lo que cambia según `versionCuestionario` es el schema y el canónico
+// del hash, no el contrato de respuesta. Estos casos son los de la v3 repetidos
+// con payload v1, precisamente para fijar que no hay dos contratos.
+describe('ingesta HTTP v1 (restaurada)', () => {
+  it('una encuesta v1 completada válida responde 201 con el idRemoto y nada más', async () => {
+    const response = await request(crearApp()).post(RUTA).send(encuestaV1CompletaValida());
 
-    expect(response.status).toBe(422);
-    expect(response.body.code).toBe('UNSUPPORTED_VERSION');
-    expect(response.body.details).toEqual({ versionCuestionario: 1 });
-    expect(almacen.filas.size).toBe(0);
+    expect(response.status).toBe(201);
+    expect(Object.keys(response.body)).toEqual(['idRemoto']);
+    expect(typeof response.body.idRemoto).toBe('string');
+    expect(response.body.idRemoto.length).toBeGreaterThan(0);
+    expect(almacen.filas.size).toBe(1);
   });
 
+  it('una encuesta v1 noElegible válida también responde 201', async () => {
+    const response = await request(crearApp()).post(RUTA).send(encuestaV1NoElegibleValida());
+
+    expect(response.status).toBe(201);
+    expect(typeof response.body.idRemoto).toBe('string');
+  });
+
+  it('el reenvío v1 idéntico responde 200 con el MISMO idRemoto y no duplica', async () => {
+    const app = crearApp();
+
+    const primera = await request(app).post(RUTA).send(encuestaV1CompletaValida());
+    const reenvio = await request(app).post(RUTA).send(encuestaV1CompletaValida());
+
+    expect(primera.status).toBe(201);
+    expect(reenvio.status).toBe(200);
+    expect(reenvio.body.idRemoto).toBe(primera.body.idRemoto);
+    expect(almacen.filas.size).toBe(1);
+  });
+
+  it('el mismo idLocal v1 con otro contenido responde 409', async () => {
+    const app = crearApp();
+
+    await request(app).post(RUTA).send(encuestaV1CompletaValida());
+    const response = await request(app)
+      .post(RUTA)
+      .send(conRespuestas({ partidoPreferido: 'pri' }, encuestaV1CompletaValida()));
+
+    expect(response.status).toBe(409);
+    expect(response.body.code).toBe('CONFLICT');
+    expect(almacen.filas.size).toBe(1);
+  });
+
+  it('un valor fuera del catálogo v1 responde 422 con las issues, nunca 400', async () => {
+    const response = await request(crearApp())
+      .post(RUTA)
+      .send(conRespuestas({ partidoPreferido: 'verde' }, encuestaV1CompletaValida()));
+
+    expect(response.status).toBe(422);
+    expect(response.body.code).toBe('VALIDATION_ERROR');
+    expect(response.body.issues.length).toBeGreaterThan(0);
+    expect(response.body.issues[0].field).toContain('respuestas');
+    expect(almacen.filas.size).toBe(0);
+  });
+});
+
+describe('POST /api/v1/encuestas — rechazos', () => {
   it('una versión de cuestionario que el servidor no conoce responde 422 UNSUPPORTED_VERSION (v2)', async () => {
     const response = await request(crearApp())
       .post(RUTA)
