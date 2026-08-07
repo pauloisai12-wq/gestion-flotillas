@@ -82,3 +82,86 @@ export function encuestaCompletaValida(overrides: PayloadEncuesta = {}): Payload
     ...overrides,
   };
 }
+
+/**
+ * Encuesta v1 completada y elegible: inicio 10:00:00Z, fin 10:06:40Z ⇒ 400 s, que
+ * es justo lo que declara duracionSegundos (dentro de la tolerancia).
+ * P5 tiene tres personas conocidas, así que P6 va respondida.
+ */
+export function encuestaV1CompletaValida(overrides: PayloadEncuesta = {}): PayloadEncuesta {
+  return {
+    idLocal: '3f2504e0-4f89-41d3-9a0c-0305e82c3301',
+    folioLocal: 'LX-1042',
+    encuestador: 'María López',
+    versionCuestionario: 1,
+    estado: 'completada',
+    elegibilidad: 'elegible',
+    fechaHoraInicio: '2026-07-30T10:00:00.000Z',
+    fechaHoraFinalizacion: '2026-07-30T10:06:40.000Z',
+    duracionSegundos: 400,
+    respuestas: {
+      credencialVigente: 'si',
+      rangoEdad: '30_44',
+      genero: 'mujer',
+      partidoPreferido: 'morena',
+      conocimientoPorPersona: [
+        { persona: 'lalo_ximenez', nivel: 'bien' },
+        { persona: 'laura_estrada', nivel: 'algo' },
+        { persona: 'paco_nino', nivel: 'poco' },
+        { persona: 'gabriela_delgado', nivel: 'no_conoce' },
+        { persona: 'irineo_molina', nivel: 'no_conoce' },
+        { persona: 'goyo_castaneda', nivel: 'no_conoce' },
+        { persona: 'ernesto_montero', nivel: 'no_conoce' },
+      ],
+      mediosConocimiento: { tipo: 'respondida', medios: ['redes_sociales', 'labor_social'] },
+      mayorPersonalidad: 'lalo_ximenez',
+      candidatoPreferido: 'laura_estrada',
+    },
+    ubicacion: {
+      disponible: true,
+      latitud: 19.432608,
+      longitud: -99.133209,
+      precisionMetros: 12.5,
+      fechaHoraCaptura: '2026-07-30T10:05:00.000Z',
+      permiso: 'concedido',
+      servicioActivo: true,
+      esValida: true,
+    },
+    dispositivo: { ...DISPOSITIVO },
+    versionAplicacion: '1.0.3',
+    ...SINCRONIZACION,
+    ...overrides,
+  };
+}
+
+/**
+ * Encuesta v1 cortada en P1 (credencial no vigente): sin P2–P8, con la ubicación
+ * declarada como NO disponible por permiso denegado. Dura 22 s.
+ */
+export function encuestaV1NoElegibleValida(overrides: PayloadEncuesta = {}): PayloadEncuesta {
+  return {
+    idLocal: '7c9e6679-7425-40de-944b-e07fc1f90ae7',
+    folioLocal: 'LX-1043',
+    encuestador: 'María López',
+    versionCuestionario: 1,
+    estado: 'noElegible',
+    elegibilidad: 'noElegible',
+    fechaHoraInicio: '2026-07-30T11:00:00.000Z',
+    fechaHoraFinalizacion: '2026-07-30T11:00:22.000Z',
+    duracionSegundos: 22,
+    respuestas: {
+      credencialVigente: 'no',
+      conocimientoPorPersona: [],
+    },
+    ubicacion: {
+      disponible: false,
+      permiso: 'denegado',
+      servicioActivo: true,
+      motivoNoDisponible: 'permisoDenegado',
+    },
+    dispositivo: { ...DISPOSITIVO },
+    versionAplicacion: '1.0.3',
+    ...SINCRONIZACION,
+    ...overrides,
+  };
+}

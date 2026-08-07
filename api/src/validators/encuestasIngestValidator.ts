@@ -19,9 +19,14 @@
 // no pueden alterar el hash de idempotencia ni acabar en columnas. El body tal
 // como llegó se conserva aparte, en payloadRaw.
 //
+// Aquí conviven los DOS cuestionarios que el servidor sabe recibir: el v3
+// vigente y el v1 restaurado (la app móvil sigue mandando ambos). Cada uno tiene
+// su schema y sus catálogos; nada se comparte salvo los helpers, la ubicación y
+// la coherencia de fechas/duración, que son idénticos entre versiones.
+//
 // Dos cosas que a propósito NO viven aquí:
-//  - el dispatch por versión de cuestionario: una versión ≠ 3 se responde 422
-//    UNSUPPORTED_VERSION en el router, antes de tocar este schema;
+//  - el dispatch por versión de cuestionario: una versión ∉ {1, 3} se responde
+//    422 UNSUPPORTED_VERSION en el router, antes de tocar estos schemas;
 //  - la forma del error: el router responde 422 inline con las issues y nunca
 //    relanza el ZodError (el handler global lo convertiría en 400).
 //
@@ -63,6 +68,42 @@ export const PARTIDOS_V3 = [
 ] as const;
 export const GOBERNANTES_V3 = ['sheinbaum', 'jara', 'huerta'] as const;
 export const CALIFICACIONES_V3 = ['muy_buena', 'buena', 'regular', 'mala', 'muy_mala'] as const;
+
+// Catálogos de la versión 1 del cuestionario. Viven en la app (TEXT validado
+// aquí, no enums de Postgres) igual que los de la v3. Los valores son EXACTOS a
+// los del histórico: la app móvil ya los habla y los hashes ya guardados tienen
+// que seguir coincidiendo. Son disjuntos de los de la v3 salvo por coincidencias
+// inocuas (`morena`, `hombre`), y `versionCuestionario` desambigua la fila.
+export const PERSONAS_V1 = [
+  'lalo_ximenez',
+  'laura_estrada',
+  'paco_nino',
+  'gabriela_delgado',
+  'irineo_molina',
+  'goyo_castaneda',
+  'ernesto_montero',
+] as const;
+
+export const NIVELES_CONOCIMIENTO_V1 = ['no_conoce', 'poco', 'algo', 'bien'] as const;
+
+export const MEDIOS_V1 = ['redes_sociales', 'otras_personas', 'labor_social'] as const;
+
+export const PARTIDOS_V1 = [
+  'morena',
+  'pri',
+  'ninguno_no_sabe',
+  'prd',
+  'mc',
+  'pvem',
+  'pt',
+  'independiente',
+  'panal',
+  'pan',
+] as const;
+
+export const RANGOS_EDAD_V1 = ['18_29', '30_44', '45_59', '60_mas'] as const;
+
+export const GENEROS_V1 = ['hombre', 'mujer', 'otro'] as const;
 
 /**
  * Desfase máximo tolerado entre `duracionSegundos` (cronómetro de la app) y el
@@ -247,6 +288,51 @@ const ubicacionSchema = z.discriminatedUnion('disponible', [
 ]);
 
 // ---------------------------------------------------------------------------
+// Coherencia fechas/duración (idéntica en v1 y v3)
+// ---------------------------------------------------------------------------
+
+/**
+ * Refinamiento compartido por los dos cuestionarios: la finalización no puede
+ * ser anterior al inicio y `duracionSegundos` tiene que concordar con el
+ * intervalo dentro de la tolerancia. Los campos se tipan `unknown` porque el
+ * check corre aunque el parseo previo haya fallado (y entonces una fecha sigue
+ * siendo string): se valida la forma antes de operar.
+ */
+function coherenciaFechasDuracion(
+  d: { fechaHoraInicio: unknown; fechaHoraFinalizacion: unknown; duracionSegundos: unknown },
+  ctx: z.core.$RefinementCtx,
+): void {
+  const inicio = d.fechaHoraInicio;
+  const fin = d.fechaHoraFinalizacion;
+  if (
+    !(inicio instanceof Date) ||
+    !(fin instanceof Date) ||
+    Number.isNaN(inicio.getTime()) ||
+    Number.isNaN(fin.getTime())
+  ) {
+    return;
+  }
+  if (fin.getTime() < inicio.getTime()) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['fechaHoraFinalizacion'],
+      message: 'fechaHoraFinalizacion no puede ser anterior a fechaHoraInicio',
+    });
+    // Sin intervalo válido la comprobación de duración no aporta información.
+    return;
+  }
+  if (typeof d.duracionSegundos !== 'number' || !Number.isFinite(d.duracionSegundos)) return;
+  const intervaloSeg = (fin.getTime() - inicio.getTime()) / 1000;
+  if (Math.abs(d.duracionSegundos - intervaloSeg) > TOLERANCIA_DURACION_SEG) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['duracionSegundos'],
+      message: `duracionSegundos no concuerda con el intervalo de la encuesta (tolerancia ${TOLERANCIA_DURACION_SEG} s)`,
+    });
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Encuesta v3
 // ---------------------------------------------------------------------------
 
@@ -267,6 +353,8 @@ const camposComunes = {
     .min(1, 'encuestador no puede ir vacío: si no se conoce, omite la clave')
     .max(120, 'encuestador no puede exceder 120 caracteres')
     .optional(),
+  // El bloque lo comparten las dos versiones, así que las ramas v1 sobrescriben
+  // esta clave con su literal(1) después del spread.
   versionCuestionario: z.literal(3),
   fechaHoraInicio: fechaIso('fechaHoraInicio'),
   fechaHoraFinalizacion: fechaIso('fechaHoraFinalizacion'),
@@ -292,38 +380,150 @@ export const encuestaV3Schema = z
     estado: z.literal('completada'),
     respuestas: respuestasV3Schema,
   })
-  .superRefine((d, ctx) => {
-    // Igual que en los arrays: el check corre aunque una fecha haya fallado su
-    // refine (y entonces sigue siendo string), así que se valida la forma antes
-    // de operar para no convertir un 422 en un 500.
-    const inicio = d.fechaHoraInicio;
-    const fin = d.fechaHoraFinalizacion;
-    if (
-      !(inicio instanceof Date) ||
-      !(fin instanceof Date) ||
-      Number.isNaN(inicio.getTime()) ||
-      Number.isNaN(fin.getTime())
-    ) {
-      return;
-    }
-    if (fin.getTime() < inicio.getTime()) {
+  .superRefine(coherenciaFechasDuracion);
+
+export type EncuestaV3 = z.infer<typeof encuestaV3Schema>;
+
+// ---------------------------------------------------------------------------
+// Cuestionario v1 (restaurado)
+// ---------------------------------------------------------------------------
+// Contrato EXACTO al histórico: mismos nombres de campos, catálogos y mensajes,
+// porque la app móvil ya lo habla y los registros v1 ya hasheados tienen que
+// seguir dando el mismo hash. Lo único que NO se restauró es su copia de la
+// ubicación y de los helpers: se reutilizan los compartidos de arriba, que son
+// idénticos carácter por carácter a los del v1 original.
+
+const personaV1 = z.enum(PERSONAS_V1, {
+  error: 'persona fuera del catálogo de la versión 1',
+});
+
+// ---------------------------------------------------------------------------
+// P5 — conocimiento por persona
+// ---------------------------------------------------------------------------
+
+const conocimientoPorPersonaSchema = z
+  .array(
+    z.object({
+      persona: personaV1,
+      nivel: z.enum(NIVELES_CONOCIMIENTO_V1, {
+        error: 'nivel de conocimiento fuera del catálogo de la versión 1',
+      }),
+    }),
+  )
+  .length(7, 'conocimientoPorPersona debe traer las 7 personas del catálogo v1')
+  .superRefine((filas, ctx) => {
+    // Los checks corren aunque el parseo previo haya fallado, así que se
+    // comprueba la forma antes de recorrer (un `"x"` en vez de un array haría
+    // estallar safeParse en lugar de devolver el 422).
+    if (!Array.isArray(filas)) return;
+    // El enum ya descarta personas desconocidas y .length(7) fija el tamaño: si
+    // además no hay repetidas, las 7 son exactamente las 7 del catálogo.
+    const distintas = new Set(filas.map((f) => f.persona));
+    if (distintas.size !== filas.length) {
       ctx.addIssue({
         code: 'custom',
-        path: ['fechaHoraFinalizacion'],
-        message: 'fechaHoraFinalizacion no puede ser anterior a fechaHoraInicio',
-      });
-      // Sin intervalo válido la comprobación de duración no aporta información.
-      return;
-    }
-    if (typeof d.duracionSegundos !== 'number' || !Number.isFinite(d.duracionSegundos)) return;
-    const intervaloSeg = (fin.getTime() - inicio.getTime()) / 1000;
-    if (Math.abs(d.duracionSegundos - intervaloSeg) > TOLERANCIA_DURACION_SEG) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['duracionSegundos'],
-        message: `duracionSegundos no concuerda con el intervalo de la encuesta (tolerancia ${TOLERANCIA_DURACION_SEG} s)`,
+        message: 'conocimientoPorPersona no puede repetir personas',
       });
     }
   });
 
-export type EncuestaV3 = z.infer<typeof encuestaV3Schema>;
+// ---------------------------------------------------------------------------
+// P6 — medios por los que las conoce
+// ---------------------------------------------------------------------------
+
+const mediosConocimientoSchema = z.discriminatedUnion('tipo', [
+  // La app salta P6 cuando P5 dice que no conoce a nadie; el registro lo declara
+  // en vez de mandar una lista vacía, que sería ambigua.
+  z.object({ tipo: z.literal('omitidaPorLogica') }),
+  z.object({
+    tipo: z.literal('respondida'),
+    medios: z
+      .array(z.enum(MEDIOS_V1, { error: 'medio fuera del catálogo de la versión 1' }))
+      .min(1, 'medios debe traer al menos un medio')
+      .max(MEDIOS_V1.length, `medios no puede traer más de ${MEDIOS_V1.length} entradas`)
+      .superRefine((medios, ctx) => {
+        if (!Array.isArray(medios)) return;
+        if (new Set(medios).size !== medios.length) {
+          ctx.addIssue({ code: 'custom', message: 'medios no puede repetir valores' });
+        }
+      }),
+  }),
+]);
+
+// ---------------------------------------------------------------------------
+// Bloque de respuestas v1 por rama
+// ---------------------------------------------------------------------------
+
+const respuestasCompletadaV1Schema = z
+  .object({
+    credencialVigente: z.literal('si'),
+    rangoEdad: z.enum(RANGOS_EDAD_V1, { error: 'rangoEdad fuera del catálogo de la versión 1' }),
+    genero: z.enum(GENEROS_V1, { error: 'genero fuera del catálogo de la versión 1' }),
+    partidoPreferido: z.enum(PARTIDOS_V1, {
+      error: 'partidoPreferido fuera del catálogo de la versión 1',
+    }),
+    conocimientoPorPersona: conocimientoPorPersonaSchema,
+    mediosConocimiento: mediosConocimientoSchema,
+    mayorPersonalidad: personaV1,
+    candidatoPreferido: personaV1,
+  })
+  .superRefine((r, ctx) => {
+    // P6 solo se pregunta si el encuestado conoce a alguien. Las DOS direcciones
+    // son rechazo: con medios respondidos sobre gente que dijo no conocer, o con
+    // P6 omitida cuando sí conoce a alguien, el registro contradice su propia
+    // lógica de captura y ya no es analizable.
+    if (!Array.isArray(r.conocimientoPorPersona) || !r.mediosConocimiento) return;
+    const conoceAAlguien = r.conocimientoPorPersona.some((f) => f.nivel !== 'no_conoce');
+    const tipo = r.mediosConocimiento.tipo;
+    if (conoceAAlguien && tipo !== 'respondida') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['mediosConocimiento', 'tipo'],
+        message: 'mediosConocimiento debe venir respondida si conoce al menos a una persona',
+      });
+    }
+    if (!conoceAAlguien && tipo !== 'omitidaPorLogica') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['mediosConocimiento', 'tipo'],
+        message: 'mediosConocimiento debe venir omitidaPorLogica si no conoce a ninguna persona',
+      });
+    }
+  });
+
+const respuestasNoElegibleV1Schema = z.object({
+  credencialVigente: z.literal('no'),
+  // P2–P8 no se declaran: si el teléfono manda el borrador previo al "no" de P1,
+  // zod lo estripa y esas respuestas no se hashean ni se guardan.
+  conocimientoPorPersona: z
+    .array(z.never())
+    .length(0, 'conocimientoPorPersona debe ir vacío cuando la credencial no está vigente'),
+});
+
+// ---------------------------------------------------------------------------
+// Encuesta v1
+// ---------------------------------------------------------------------------
+
+// `versionCuestionario` va DESPUÉS del spread a propósito: camposComunes trae el
+// literal(3) del cuestionario vigente y aquí se sobrescribe con el 1.
+const ramaCompletadaV1 = z.object({
+  ...camposComunes,
+  versionCuestionario: z.literal(1),
+  estado: z.literal('completada'),
+  elegibilidad: z.literal('elegible'),
+  respuestas: respuestasCompletadaV1Schema,
+});
+
+const ramaNoElegibleV1 = z.object({
+  ...camposComunes,
+  versionCuestionario: z.literal(1),
+  estado: z.literal('noElegible'),
+  elegibilidad: z.literal('noElegible'),
+  respuestas: respuestasNoElegibleV1Schema,
+});
+
+export const encuestaV1Schema = z
+  .discriminatedUnion('estado', [ramaCompletadaV1, ramaNoElegibleV1])
+  .superRefine(coherenciaFechasDuracion);
+
+export type EncuestaV1 = z.infer<typeof encuestaV1Schema>;

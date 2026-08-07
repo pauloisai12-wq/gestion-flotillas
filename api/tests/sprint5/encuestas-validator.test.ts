@@ -1,10 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import {
+  encuestaV1Schema,
   encuestaV3Schema,
   GOBERNANTES_V3,
   TOLERANCIA_DURACION_SEG,
 } from '../../src/validators/encuestasIngestValidator';
-import { encuestaCompletaValida, sinClaves, type PayloadEncuesta } from './fixtures';
+import {
+  encuestaCompletaValida,
+  encuestaV1CompletaValida,
+  encuestaV1NoElegibleValida,
+  sinClaves,
+  type PayloadEncuesta,
+} from './fixtures';
 
 /** Payload con el sub-objeto respuestas parcheado (el merge del fixture es superficial). */
 function conRespuestas(cambios: Record<string, unknown>): PayloadEncuesta {
@@ -374,5 +381,296 @@ describe('encuestaV3Schema — strip de lo que no es la encuesta', () => {
       expect(data).not.toHaveProperty('fechaSincronizacion');
       expect(data).not.toHaveProperty('idRemoto');
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Cuestionario v1 (restaurado)
+// ---------------------------------------------------------------------------
+// El servidor vuelve a aceptar el v1 JUNTO al v3, así que los dos schemas
+// conviven en este archivo. Lo que NO se re-prueba aquí es la ubicación: v1
+// reutiliza el MISMO ubicacionSchema que los describe de arriba ya ejercitan.
+
+describe('encuestaV1Schema (cuestionario restaurado)', () => {
+  function aceptaV1(payload: PayloadEncuesta): boolean {
+    return encuestaV1Schema.safeParse(payload).success;
+  }
+
+  /** Reemplaza campos DENTRO de `respuestas` conservando el resto del bloque. */
+  function conRespuestasV1(
+    sobre: PayloadEncuesta,
+    base: PayloadEncuesta = encuestaV1CompletaValida(),
+  ): PayloadEncuesta {
+    return { ...base, respuestas: { ...(base.respuestas as PayloadEncuesta), ...sobre } };
+  }
+
+  type Conocimiento = { persona: string; nivel: string };
+
+  const CONOCIMIENTO_BASE = (encuestaV1CompletaValida().respuestas as PayloadEncuesta)
+    .conocimientoPorPersona as Conocimiento[];
+
+  const TODAS_NO_CONOCE: Conocimiento[] = CONOCIMIENTO_BASE.map((f) => ({
+    persona: f.persona,
+    nivel: 'no_conoce',
+  }));
+
+  describe('payloads que deben pasar', () => {
+    it('acepta una encuesta completada con ubicación disponible', () => {
+      const parsed = encuestaV1Schema.safeParse(encuestaV1CompletaValida());
+      expect(parsed.success).toBe(true);
+      if (parsed.success) {
+        // Las fechas salen como Date; el resto del pipeline (hash, Prisma) cuenta
+        // con eso.
+        expect(parsed.data.fechaHoraInicio).toBeInstanceOf(Date);
+        expect(parsed.data.fechaHoraFinalizacion.toISOString()).toBe('2026-07-30T10:06:40.000Z');
+        expect(parsed.data.estado).toBe('completada');
+      }
+    });
+
+    it('acepta una encuesta noElegible', () => {
+      expect(aceptaV1(encuestaV1NoElegibleValida())).toBe(true);
+    });
+
+    it('acepta P6 omitida por lógica cuando P5 dice que no conoce a nadie', () => {
+      expect(
+        aceptaV1(
+          conRespuestasV1({
+            conocimientoPorPersona: TODAS_NO_CONOCE,
+            mediosConocimiento: { tipo: 'omitidaPorLogica' },
+          }),
+        ),
+      ).toBe(true);
+    });
+  });
+
+  describe('catálogos de la versión 1', () => {
+    it.each([
+      ['partidoPreferido', 'verde_ecologista'],
+      ['rangoEdad', '12_17'],
+      ['genero', 'no_binario'],
+      ['mayorPersonalidad', 'juan_perez'],
+      ['candidatoPreferido', 'juan_perez'],
+    ])('rechaza %s fuera de catálogo: %s', (campo, valor) => {
+      expect(aceptaV1(conRespuestasV1({ [campo]: valor }))).toBe(false);
+    });
+
+    it('rechaza el rangoEdad de la v3: los catálogos son disjuntos', () => {
+      expect(aceptaV1(conRespuestasV1({ rangoEdad: '31_45' }))).toBe(false);
+    });
+
+    it('rechaza un nivel de conocimiento fuera de catálogo', () => {
+      const conocimiento = [
+        { persona: 'lalo_ximenez', nivel: 'muchisimo' },
+        ...CONOCIMIENTO_BASE.slice(1),
+      ];
+      expect(aceptaV1(conRespuestasV1({ conocimientoPorPersona: conocimiento }))).toBe(false);
+    });
+
+    it('rechaza un medio fuera de catálogo', () => {
+      expect(
+        aceptaV1(
+          conRespuestasV1({ mediosConocimiento: { tipo: 'respondida', medios: ['television'] } }),
+        ),
+      ).toBe(false);
+    });
+
+    it('rechaza un estado que no es completada ni noElegible', () => {
+      expect(aceptaV1(encuestaV1CompletaValida({ estado: 'borrador' }))).toBe(false);
+    });
+
+    it('rechaza una versión de cuestionario distinta de 1', () => {
+      // El router corta antes con UNSUPPORTED_VERSION; el schema es la segunda
+      // barrera por si alguien lo usa fuera de esa ruta. El 3 importa aparte: es
+      // el literal que trae camposComunes y que las ramas v1 sobrescriben.
+      expect(aceptaV1(encuestaV1CompletaValida({ versionCuestionario: 2 }))).toBe(false);
+      expect(aceptaV1(encuestaV1CompletaValida({ versionCuestionario: 3 }))).toBe(false);
+    });
+  });
+
+  describe('P5: las 7 personas', () => {
+    it('rechaza que falte una persona (llegan 6)', () => {
+      expect(
+        aceptaV1(conRespuestasV1({ conocimientoPorPersona: CONOCIMIENTO_BASE.slice(0, 6) })),
+      ).toBe(false);
+    });
+
+    it('rechaza 7 filas con una persona repetida', () => {
+      const conRepetida = [
+        ...CONOCIMIENTO_BASE.slice(0, 6),
+        { persona: CONOCIMIENTO_BASE[0].persona, nivel: 'poco' },
+      ];
+      expect(conRepetida).toHaveLength(7); // el .length(7) no es quien rechaza aquí
+      expect(aceptaV1(conRespuestasV1({ conocimientoPorPersona: conRepetida }))).toBe(false);
+    });
+
+    it('rechaza una persona desconocida aunque sean 7 filas', () => {
+      const conIntrusa = [
+        ...CONOCIMIENTO_BASE.slice(0, 6),
+        { persona: 'juan_perez', nivel: 'bien' },
+      ];
+      expect(aceptaV1(conRespuestasV1({ conocimientoPorPersona: conIntrusa }))).toBe(false);
+    });
+  });
+
+  describe('coherencia P5 ↔ P6 (en los dos sentidos)', () => {
+    it('rechaza medios respondidos cuando P5 dice que no conoce a nadie', () => {
+      const parsed = encuestaV1Schema.safeParse(
+        conRespuestasV1({
+          conocimientoPorPersona: TODAS_NO_CONOCE,
+          mediosConocimiento: { tipo: 'respondida', medios: ['redes_sociales'] },
+        }),
+      );
+      expect(parsed.success).toBe(false);
+      if (!parsed.success) {
+        expect(
+          parsed.error.issues.some(
+            (i) => i.path.join('.') === 'respuestas.mediosConocimiento.tipo',
+          ),
+        ).toBe(true);
+      }
+    });
+
+    it('rechaza P6 omitida por lógica cuando P5 sí conoce a alguien', () => {
+      expect(aceptaV1(conRespuestasV1({ mediosConocimiento: { tipo: 'omitidaPorLogica' } }))).toBe(
+        false,
+      );
+    });
+
+    it('rechaza medios repetidos', () => {
+      expect(
+        aceptaV1(
+          conRespuestasV1({
+            mediosConocimiento: {
+              tipo: 'respondida',
+              medios: ['redes_sociales', 'redes_sociales'],
+            },
+          }),
+        ),
+      ).toBe(false);
+    });
+
+    it('rechaza la lista de medios vacía: para eso está omitidaPorLogica', () => {
+      expect(
+        aceptaV1(conRespuestasV1({ mediosConocimiento: { tipo: 'respondida', medios: [] } })),
+      ).toBe(false);
+    });
+  });
+
+  describe('reglas cruzadas entre ramas', () => {
+    it('rechaza completada con elegibilidad noElegible', () => {
+      expect(aceptaV1(encuestaV1CompletaValida({ elegibilidad: 'noElegible' }))).toBe(false);
+    });
+
+    it('rechaza noElegible con elegibilidad elegible', () => {
+      expect(aceptaV1(encuestaV1NoElegibleValida({ elegibilidad: 'elegible' }))).toBe(false);
+    });
+
+    it('rechaza completada con la credencial en "no"', () => {
+      expect(aceptaV1(conRespuestasV1({ credencialVigente: 'no' }))).toBe(false);
+    });
+
+    it('rechaza noElegible con la credencial en "si"', () => {
+      expect(
+        aceptaV1(
+          conRespuestasV1(
+            { credencialVigente: 'si', conocimientoPorPersona: [] },
+            encuestaV1NoElegibleValida(),
+          ),
+        ),
+      ).toBe(false);
+    });
+
+    it('rechaza noElegible con conocimientoPorPersona no vacío', () => {
+      expect(
+        aceptaV1(
+          conRespuestasV1(
+            { conocimientoPorPersona: CONOCIMIENTO_BASE },
+            encuestaV1NoElegibleValida(),
+          ),
+        ),
+      ).toBe(false);
+    });
+  });
+
+  describe('fechas y duración', () => {
+    it('rechaza que la finalización sea anterior al inicio', () => {
+      const parsed = encuestaV1Schema.safeParse(
+        encuestaV1CompletaValida({
+          fechaHoraInicio: '2026-07-30T10:06:40.000Z',
+          fechaHoraFinalizacion: '2026-07-30T10:00:00.000Z',
+          duracionSegundos: 400,
+        }),
+      );
+      expect(parsed.success).toBe(false);
+      if (!parsed.success) {
+        expect(parsed.error.issues.some((i) => i.path.join('.') === 'fechaHoraFinalizacion')).toBe(
+          true,
+        );
+      }
+    });
+
+    it.each([
+      ['negativa', -1],
+      ['no entera', 400.5],
+      ['en texto', '400'],
+      ['null', null],
+    ])('rechaza duracionSegundos %s', (_etiqueta, valor) => {
+      expect(aceptaV1(encuestaV1CompletaValida({ duracionSegundos: valor }))).toBe(false);
+    });
+
+    it('rechaza una duración que no concuerda con el intervalo real', () => {
+      // El intervalo del fixture es de 400 s; 500 se pasa de la tolerancia.
+      const parsed = encuestaV1Schema.safeParse(
+        encuestaV1CompletaValida({ duracionSegundos: 500 }),
+      );
+      expect(parsed.success).toBe(false);
+      if (!parsed.success) {
+        expect(parsed.error.issues.some((i) => i.path.join('.') === 'duracionSegundos')).toBe(true);
+      }
+    });
+
+    it('acepta el desfase justo en la tolerancia y rechaza uno más', () => {
+      expect(
+        aceptaV1(encuestaV1CompletaValida({ duracionSegundos: 400 + TOLERANCIA_DURACION_SEG })),
+      ).toBe(true);
+      expect(
+        aceptaV1(encuestaV1CompletaValida({ duracionSegundos: 400 + TOLERANCIA_DURACION_SEG + 1 })),
+      ).toBe(false);
+      expect(
+        aceptaV1(encuestaV1CompletaValida({ duracionSegundos: 400 - TOLERANCIA_DURACION_SEG })),
+      ).toBe(true);
+    });
+
+    it('rechaza una fecha que no es ISO-8601 sin reventar el safeParse', () => {
+      expect(aceptaV1(encuestaV1CompletaValida({ fechaHoraInicio: 'ayer' }))).toBe(false);
+      expect(aceptaV1(encuestaV1CompletaValida({ fechaHoraFinalizacion: 1_753_000_000_000 }))).toBe(
+        false,
+      );
+    });
+  });
+
+  describe('strip de lo que no es la encuesta', () => {
+    it('descarta P2–P8 en la rama noElegible aunque el teléfono las mande', () => {
+      const parsed = encuestaV1Schema.safeParse(
+        conRespuestasV1(
+          {
+            rangoEdad: '30_44',
+            genero: 'mujer',
+            partidoPreferido: 'morena',
+            mediosConocimiento: { tipo: 'respondida', medios: ['redes_sociales'] },
+            mayorPersonalidad: 'lalo_ximenez',
+            candidatoPreferido: 'laura_estrada',
+          },
+          encuestaV1NoElegibleValida(),
+        ),
+      );
+      expect(parsed.success).toBe(true);
+      if (parsed.success) {
+        expect(Object.keys(parsed.data.respuestas).sort()).toEqual([
+          'conocimientoPorPersona',
+          'credencialVigente',
+        ]);
+      }
+    });
   });
 });
