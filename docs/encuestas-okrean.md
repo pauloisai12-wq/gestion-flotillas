@@ -65,7 +65,7 @@ esperaba JSON, casi siempre falta el `/api`.
 
 > El `405` de `GET /api/v1/encuestas` existe por el mismo motivo que en GeoCampo
 > (`api/src/routes/qaExternaRouter.ts:193-200`): sin él la petición sale del router y la atrapan los
-> montajes comodín `app.use('/api', authMiddleware, …)` (`api/src/index.ts:269,274`), cuyo
+> montajes comodín `app.use('/api', authMiddleware, …)` (`api/src/index.ts:300,305`), cuyo
 > `authMiddleware` de JWT responde **401** — y el móvil lee ese 401 como "API key inválida" y
 > dispara una reconfiguración innecesaria. El 405 dice lo que de verdad pasa: la key sirve, el
 > método no.
@@ -104,7 +104,7 @@ Sin sesión → `401`; con sesión de otro rol → `403`.
 
 El contrato de la cara de dispositivo está además en formato máquina:
 **`docs/encuestas-okrean-openapi.yaml`** (OpenAPI 3.1). Se mantiene a mano porque el generador
-runtime (`/api/docs`) está apagado en producción (`api/src/index.ts:224-226`).
+runtime (`/api/docs`) está apagado en producción (`api/src/index.ts:232-236`).
 
 ---
 

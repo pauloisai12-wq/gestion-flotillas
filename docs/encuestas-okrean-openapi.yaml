@@ -2,7 +2,7 @@
 #
 # Este archivo es ESTÁTICO y se mantiene a mano. El generador runtime
 # (`/api/docs`, `docsRouter`) está apagado en producción por decisión explícita
-# —`api/src/index.ts:224-226` solo lo monta si `NODE_ENV !== 'production'`, para
+# —`api/src/index.ts:232-236` solo lo monta si `NODE_ENV !== 'production'`, para
 # no publicar el mapa completo de endpoints en internet—, así que el contrato que
 # consume el equipo móvil no puede depender de él.
 #
