@@ -1,7 +1,21 @@
 import { describe, expect, it } from 'vitest';
-import { canonicalizarEncuestaV3, hashEncuestaV3 } from '../../src/lib/encuestasCanonical';
-import { encuestaV3Schema } from '../../src/validators/encuestasIngestValidator';
-import { encuestaCompletaValida, type PayloadEncuesta } from './fixtures';
+import {
+  canonicalizarEncuestaV1,
+  canonicalizarEncuestaV3,
+  hashEncuestaV1,
+  hashEncuestaV3,
+} from '../../src/lib/encuestasCanonical';
+import {
+  encuestaV1Schema,
+  encuestaV3Schema,
+} from '../../src/validators/encuestasIngestValidator';
+import {
+  encuestaCompletaValida,
+  encuestaV1CompletaValida,
+  encuestaV1NoElegibleValida,
+  sinClaves,
+  type PayloadEncuesta,
+} from './fixtures';
 
 function hashDe(payload: PayloadEncuesta): string {
   const r = encuestaV3Schema.safeParse(payload);
@@ -125,5 +139,96 @@ describe('hashEncuestaV3', () => {
 
   it('declara la versión 2 del algoritmo canónico', () => {
     expect(canonicalizarEncuestaV3(encuestaV3Schema.parse(encuestaCompletaValida()))).toContain('"v":2');
+  });
+});
+
+// El v1 convive con el v3: los registros v1 ya guardados tienen que seguir dando
+// el MISMO payloadHash que antes del reemplazo, así que su canónico conserva su
+// propia versión (`v:1`) y su propio orden de claves. Cada canonicalizador es
+// independiente del otro.
+
+/** Recorre el camino real del v1: validar (que estripa) y luego hashear. */
+function hashV1De(payload: PayloadEncuesta): string {
+  const r = encuestaV1Schema.safeParse(payload);
+  if (!r.success) throw new Error('fixture v1 inválido: ' + JSON.stringify(r.error.issues));
+  return hashEncuestaV1(r.data);
+}
+
+function canonicoV1(payload: PayloadEncuesta): string {
+  return canonicalizarEncuestaV1(encuestaV1Schema.parse(payload));
+}
+
+function conRespuestasV1(cambios: Record<string, unknown>): PayloadEncuesta {
+  const base = encuestaV1CompletaValida();
+  return { ...base, respuestas: { ...(base.respuestas as Record<string, unknown>), ...cambios } };
+}
+
+const CLAVES_SINCRONIZACION = [
+  'estadoSincronizacion',
+  'numeroIntentosSincronizacion',
+  'fechaUltimoIntento',
+  'fechaSincronizacion',
+];
+
+describe('canonicalización v1 (restaurada)', () => {
+  it('da el mismo hash para el mismo contenido', () => {
+    expect(hashV1De(encuestaV1CompletaValida())).toBe(hashV1De(encuestaV1CompletaValida()));
+    expect(hashV1De(encuestaV1CompletaValida())).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('ignora el orden de conocimientoPorPersona (es un conjunto)', () => {
+    const base = encuestaV1CompletaValida();
+    const invertido = [
+      ...((base.respuestas as Record<string, unknown>).conocimientoPorPersona as unknown[]),
+    ].reverse();
+    expect(hashV1De(conRespuestasV1({ conocimientoPorPersona: invertido }))).toBe(hashV1De(base));
+  });
+
+  it('ignora el orden de los medios (también es un conjunto)', () => {
+    const reordenados = conRespuestasV1({
+      mediosConocimiento: { tipo: 'respondida', medios: ['labor_social', 'redes_sociales'] },
+    });
+    expect(hashV1De(reordenados)).toBe(hashV1De(encuestaV1CompletaValida()));
+  });
+
+  it('cambia si cambia una respuesta sustantiva', () => {
+    expect(hashV1De(conRespuestasV1({ partidoPreferido: 'pri' }))).not.toBe(
+      hashV1De(encuestaV1CompletaValida()),
+    );
+  });
+
+  it('ignora los campos de sincronización y el idRemoto del teléfono', () => {
+    // Escenario real: el primer POST se pierde por red, el teléfono reintenta con
+    // otro contador de intentos y ya con el idRemoto que guardó. Debe dar 200,
+    // no 409.
+    const primerEnvio = sinClaves(encuestaV1CompletaValida(), ...CLAVES_SINCRONIZACION);
+    const reintento = encuestaV1CompletaValida({
+      idRemoto: '9f1b3c2d-4e5f-4a6b-8c9d-0e1f2a3b4c5d',
+      estadoSincronizacion: 'sincronizada',
+      numeroIntentosSincronizacion: 4,
+      fechaUltimoIntento: '2026-07-30T10:09:00.000Z',
+      fechaSincronizacion: '2026-07-30T10:10:00.000Z',
+    });
+    expect(hashV1De(reintento)).toBe(hashV1De(primerEnvio));
+    const texto = canonicoV1(reintento);
+    for (const clave of [...CLAVES_SINCRONIZACION, 'idRemoto']) {
+      expect(texto).not.toContain(clave);
+    }
+  });
+
+  it('lleva su propia versión canónica: v1 emite "v":1 y v3 sigue emitiendo "v":2', () => {
+    const objeto = JSON.parse(canonicoV1(encuestaV1CompletaValida())) as Record<string, unknown>;
+    expect(objeto.v).toBe(1);
+    const objetoV3 = JSON.parse(
+      canonicalizarEncuestaV3(encuestaV3Schema.parse(encuestaCompletaValida())),
+    ) as Record<string, unknown>;
+    expect(objetoV3.v).toBe(2);
+  });
+
+  it('deja el bloque de respuestas de noElegible reducido a P1', () => {
+    const objeto = JSON.parse(canonicoV1(encuestaV1NoElegibleValida())) as {
+      respuestas: Record<string, unknown>;
+    };
+    expect(objeto.respuestas).toEqual({ credencialVigente: 'no', conocimientoPorPersona: [] });
   });
 });

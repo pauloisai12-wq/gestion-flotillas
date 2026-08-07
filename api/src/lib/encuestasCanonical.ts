@@ -1,7 +1,7 @@
-// Canonicalización y hash del contenido de una encuesta v3. El hash es la mitad
-// sustantiva de la idempotencia: el UNIQUE de idLocal decide si la fila ya
-// existe, y este hash decide si el reenvío trae el MISMO contenido (200 con el
-// idRemoto original) o uno distinto (409, sin sobrescribir).
+// Canonicalización y hash del contenido de una encuesta ya validada, v3 y v1. El
+// hash es la mitad sustantiva de la idempotencia: el UNIQUE de idLocal decide si
+// la fila ya existe, y este hash decide si el reenvío trae el MISMO contenido
+// (200 con el idRemoto original) o uno distinto (409, sin sobrescribir).
 //
 // Qué entra al hash: todo lo que el validador dejó pasar — identidad (idLocal,
 // folioLocal, encuestador), versión del cuestionario, estado, fechas, duración,
@@ -32,14 +32,28 @@
 // `v` es la versión del ALGORITMO de canonicalización, no la del cuestionario:
 // si algún día cambia una de estas reglas, subirla evita comparar hashes viejos
 // contra nuevos como si fueran del mismo esquema.
+//
+// Aquí conviven los DOS cuestionarios que el servidor sabe recibir: el v3
+// vigente y el v1 restaurado. Cada uno reconstruye su propio objeto literal —
+// las reglas de arriba valen para ambos, pero el bloque de respuestas y el orden
+// de claves son de cada versión. Lo único compartido es `ubicacionCanonica`, que
+// es idéntica entre versiones. Salvo eso, tocar uno no puede mover el hash del
+// otro.
 
 import { createHash } from 'crypto';
 import {
   GOBERNANTES_V3,
+  MEDIOS_V1,
+  PERSONAS_V1,
+  type EncuestaV1,
   type EncuestaV3,
 } from '../validators/encuestasIngestValidator';
 
+// La versión canónica es POR CUESTIONARIO, no del archivo: el v1 se quedó en 1
+// porque los payloadHash de los registros v1 guardados antes del reemplazo
+// tienen que seguir coincidiendo. Subir la del v3 nunca debe arrastrar la del v1.
 const VERSION_CANONICA = 2;
+const VERSION_CANONICA_V1 = 1;
 
 function respuestasCanonicas(d: EncuestaV3) {
   const r = d.respuestas;
@@ -68,7 +82,10 @@ function respuestasCanonicas(d: EncuestaV3) {
   };
 }
 
-function ubicacionCanonica(u: EncuestaV3['ubicacion']) {
+// Compartida por las dos versiones: la forma de `ubicacion` es la misma en el v3
+// y en el v1 (el schema la declara una sola vez), así que el union de tipos es
+// una formalidad para TS, no dos formas distintas.
+function ubicacionCanonica(u: EncuestaV1['ubicacion'] | EncuestaV3['ubicacion']) {
   if (!u) return null;
   if (u.disponible) {
     return {
@@ -125,4 +142,77 @@ export function canonicalizarEncuestaV3(d: EncuestaV3): string {
  */
 export function hashEncuestaV3(d: EncuestaV3): string {
   return createHash('sha256').update(canonicalizarEncuestaV3(d), 'utf8').digest('hex');
+}
+
+// ---------------------------------------------------------------------------
+// Cuestionario v1 (restaurado)
+// ---------------------------------------------------------------------------
+// Textual al histórico, porque cualquier variación cambiaría el payloadHash de
+// los registros v1 ya guardados y convertiría cada reenvío en un 409. Sus dos
+// diferencias con el v3: `elegibilidad` entra al canónico (el v1 la trae como
+// campo propio) y los conjuntos que se reordenan son conocimientoPorPersona (al
+// orden de PERSONAS_V1) y los medios (al de MEDIOS_V1).
+
+function respuestasCanonicasV1(d: EncuestaV1) {
+  if (d.estado === 'noElegible') {
+    // P2–P8 no existen en esta rama: el bloque es fijo y siempre el mismo.
+    return {
+      credencialVigente: d.respuestas.credencialVigente,
+      conocimientoPorPersona: [] as const,
+    };
+  }
+  const r = d.respuestas;
+  // El validador garantiza las 7 personas del catálogo sin repetir, así que este
+  // índice es total y el .get() de abajo nunca queda en undefined.
+  const nivelPorPersona = new Map(
+    r.conocimientoPorPersona.map((fila) => [fila.persona, fila.nivel] as const),
+  );
+  const medios = r.mediosConocimiento;
+  return {
+    credencialVigente: r.credencialVigente,
+    rangoEdad: r.rangoEdad,
+    genero: r.genero,
+    partidoPreferido: r.partidoPreferido,
+    conocimientoPorPersona: PERSONAS_V1.map((persona) => ({
+      persona,
+      nivel: nivelPorPersona.get(persona)!,
+    })),
+    mediosConocimiento:
+      medios.tipo === 'respondida'
+        ? { tipo: medios.tipo, medios: MEDIOS_V1.filter((m) => medios.medios.includes(m)) }
+        : { tipo: medios.tipo },
+    mayorPersonalidad: r.mayorPersonalidad,
+    candidatoPreferido: r.candidatoPreferido,
+  };
+}
+
+/** Representación estable del contenido sustantivo de una encuesta ya validada. */
+export function canonicalizarEncuestaV1(d: EncuestaV1): string {
+  return JSON.stringify({
+    v: VERSION_CANONICA_V1,
+    idLocal: d.idLocal,
+    folioLocal: d.folioLocal ?? null,
+    // Se sumó SIN subir `v`: el campo entró antes de cualquier despliegue, así
+    // que no existe ni un payloadHash guardado con el que pudiera chocar.
+    encuestador: d.encuestador ?? null,
+    versionCuestionario: d.versionCuestionario,
+    estado: d.estado,
+    elegibilidad: d.elegibilidad,
+    fechaHoraInicio: d.fechaHoraInicio.toISOString(),
+    fechaHoraFinalizacion: d.fechaHoraFinalizacion.toISOString(),
+    duracionSegundos: d.duracionSegundos,
+    respuestas: respuestasCanonicasV1(d),
+    ubicacion: ubicacionCanonica(d.ubicacion),
+    dispositivo: {
+      plataforma: d.dispositivo.plataforma,
+      modelo: d.dispositivo.modelo,
+      versionSistema: d.dispositivo.versionSistema,
+    },
+    versionAplicacion: d.versionAplicacion,
+  });
+}
+
+/** sha256 hex de la forma canónica. Es lo que se guarda en `payloadHash`. */
+export function hashEncuestaV1(d: EncuestaV1): string {
+  return createHash('sha256').update(canonicalizarEncuestaV1(d), 'utf8').digest('hex');
 }
