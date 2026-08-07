@@ -171,6 +171,29 @@ const CLAVES_SINCRONIZACION = [
 ];
 
 describe('canonicalización v1 (restaurada)', () => {
+  it('emite las claves en un orden fijo por construcción', () => {
+    // Si alguien reordena el objeto literal, todos los payloadHash guardados
+    // dejan de coincidir y cada reenvío pasaría a ser un 409.
+    const objeto = JSON.parse(canonicoV1(encuestaV1CompletaValida())) as Record<string, unknown>;
+    expect(Object.keys(objeto)).toEqual([
+      'v',
+      'idLocal',
+      'folioLocal',
+      'encuestador',
+      'versionCuestionario',
+      'estado',
+      'elegibilidad',
+      'fechaHoraInicio',
+      'fechaHoraFinalizacion',
+      'duracionSegundos',
+      'respuestas',
+      'ubicacion',
+      'dispositivo',
+      'versionAplicacion',
+    ]);
+    expect(objeto.v).toBe(1);
+  });
+
   it('da el mismo hash para el mismo contenido', () => {
     expect(hashV1De(encuestaV1CompletaValida())).toBe(hashV1De(encuestaV1CompletaValida()));
     expect(hashV1De(encuestaV1CompletaValida())).toMatch(/^[0-9a-f]{64}$/);
@@ -230,5 +253,80 @@ describe('canonicalización v1 (restaurada)', () => {
       respuestas: Record<string, unknown>;
     };
     expect(objeto.respuestas).toEqual({ credencialVigente: 'no', conocimientoPorPersona: [] });
+  });
+});
+
+describe('hashEncuestaV1 — lo que SÍ debe cambiar el hash', () => {
+  it.each<[string, PayloadEncuesta]>([
+    ['folioLocal', { folioLocal: 'LX-9999' }],
+    // Quién levantó la encuesta es contenido, no transporte: por eso hay que
+    // capturarlo con el registro y no estamparlo al enviar.
+    ['encuestador', { encuestador: 'Juan Pérez' }],
+    // 420 s sigue dentro de la tolerancia contra el intervalo real (400 s), así
+    // que el payload es válido: lo que cambia es el contenido, no su validez.
+    ['duracionSegundos', { duracionSegundos: 420 }],
+    ['idLocal', { idLocal: '7c9e6679-7425-40de-944b-e07fc1f90ae7' }],
+  ])('cambia si cambia %s', (_etiqueta, sobre) => {
+    expect(hashV1De(encuestaV1CompletaValida(sobre))).not.toBe(
+      hashV1De(encuestaV1CompletaValida()),
+    );
+  });
+
+  it('cambia si cambia la ubicación, y ausente ≠ presente', () => {
+    const base = encuestaV1CompletaValida();
+    const otraUbicacion = encuestaV1CompletaValida({
+      ubicacion: { ...(base.ubicacion as Record<string, unknown>), precisionMetros: 30 },
+    });
+    expect(hashV1De(otraUbicacion)).not.toBe(hashV1De(base));
+    expect(hashV1De(sinClaves(base, 'ubicacion'))).not.toBe(hashV1De(base));
+  });
+
+  it('cambia entre completada y noElegible', () => {
+    expect(hashV1De(encuestaV1NoElegibleValida())).not.toBe(hashV1De(encuestaV1CompletaValida()));
+  });
+
+  it('cambia con los metadatos del dispositivo y la versión de la app', () => {
+    // Documentado en el plan como riesgo abierto: si la app estampa estos datos
+    // al ENVIAR y no al capturar, un reintento tras actualizarse daría 409 y
+    // habría que sacarlos del canónico.
+    expect(hashV1De(encuestaV1CompletaValida({ versionAplicacion: '1.0.4' }))).not.toBe(
+      hashV1De(encuestaV1CompletaValida()),
+    );
+    expect(
+      hashV1De(
+        encuestaV1CompletaValida({
+          dispositivo: {
+            ...(encuestaV1CompletaValida().dispositivo as Record<string, unknown>),
+            modelo: 'Moto G84',
+          },
+        }),
+      ),
+    ).not.toBe(hashV1De(encuestaV1CompletaValida()));
+  });
+});
+
+// Estos hashes protegen la compatibilidad de los payloadHash PERSISTIDOS: son
+// los sha256 reales que el algoritmo vigente produce para las tres fixtures
+// deterministas. Si este test falla, tu cambio rompe la idempotencia de los
+// reenvíos (los registros ya guardados dejarían de reconocer su reenvío y cada
+// uno daría 409) y NO debe ajustarse la constante a la ligera: solo con una
+// migración consciente de los hashes ya persistidos.
+describe('golden hashes — compatibilidad con los payloadHash persistidos', () => {
+  it('v1 completada conserva su hash', () => {
+    expect(hashV1De(encuestaV1CompletaValida())).toBe(
+      '7765fb8b8b0f34b59d1707264e39882736fdb6477aee7d9522dbaeec82df28db',
+    );
+  });
+
+  it('v1 noElegible conserva su hash', () => {
+    expect(hashV1De(encuestaV1NoElegibleValida())).toBe(
+      '38c9636a21704cb6017bbe68dfb44e422cb26d397d355c6f1d27622c3083e376',
+    );
+  });
+
+  it('v3 completada conserva su hash', () => {
+    expect(hashDe(encuestaCompletaValida())).toBe(
+      '684fb294d27cc70b6cba6c9c630bc88ac350117ca05ddd49f8a08703dc06d291',
+    );
   });
 });

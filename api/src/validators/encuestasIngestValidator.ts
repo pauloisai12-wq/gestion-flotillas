@@ -418,7 +418,7 @@ const conocimientoPorPersonaSchema = z
     if (!Array.isArray(filas)) return;
     // El enum ya descarta personas desconocidas y .length(7) fija el tamaño: si
     // además no hay repetidas, las 7 son exactamente las 7 del catálogo.
-    const distintas = new Set(filas.map((f) => f.persona));
+    const distintas = new Set(filas.map((f) => f?.persona));
     if (distintas.size !== filas.length) {
       ctx.addIssue({
         code: 'custom',
@@ -473,7 +473,7 @@ const respuestasCompletadaV1Schema = z
     // P6 omitida cuando sí conoce a alguien, el registro contradice su propia
     // lógica de captura y ya no es analizable.
     if (!Array.isArray(r.conocimientoPorPersona) || !r.mediosConocimiento) return;
-    const conoceAAlguien = r.conocimientoPorPersona.some((f) => f.nivel !== 'no_conoce');
+    const conoceAAlguien = r.conocimientoPorPersona.some((f) => f?.nivel !== 'no_conoce');
     const tipo = r.mediosConocimiento.tipo;
     if (conoceAAlguien && tipo !== 'respondida') {
       ctx.addIssue({

@@ -52,7 +52,7 @@ function crearApp(role?: UserRole) {
 
 const RUTA = '/api/encuestas';
 
-/** Las 14 claves del EncuestaDto (v3 + las dos preferencias v1): ni una más. */
+/** Las 15 claves del EncuestaDto (v3 + las dos preferencias v1): ni una más. */
 const CLAVES_DTO = [
   'id',
   'idRemoto',
