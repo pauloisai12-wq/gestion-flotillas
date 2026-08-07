@@ -975,6 +975,14 @@ model QaExternaPersona {
 // validado en la app para poder publicar una v4 sin ALTER TYPE.
 enum EncuestaEstado {
   completada
+  noElegible
+}
+
+// Solo v1: la rama noElegible del cuestionario restaurado. El v3 no la usa
+// (todas sus filas quedan con `elegibilidad` en NULL).
+enum EncuestaElegibilidad {
+  elegible
+  noElegible
 }
 
 // Espejo de QaExternaDispositivo, sin `programa`: la separación entre módulos
@@ -1017,12 +1025,14 @@ model Encuesta {
   /// versión de la app anterior al campo (es opcional en el contrato).
   encuestador                 String?
   estado                      EncuestaEstado
+  /// v1: la app la manda explícita, atada al estado. NULL = fila v3.
+  elegibilidad                EncuestaElegibilidad?
   fechaHoraInicio             DateTime             @map("fecha_hora_inicio")
   fechaHoraFinalizacion       DateTime             @map("fecha_hora_finalizacion")
   duracionSegundos            Int                  @map("duracion_segundos")
   /// Respuestas v3. NULLABLES en BD aunque el contrato las exige todas: la
   /// obligatoriedad la sella el validador y el servicio siempre escribe valor.
-  /// NULL = fila v1 residual de una BD de dev (version_cuestionario = 1).
+  /// NULL = fila v1 (version_cuestionario = 1), que llena el bloque de abajo.
   sexo                        String?
   rangoEdad                   String?              @map("rango_edad")
   empresariosConocidos        Json?                @map("empresarios_conocidos")
@@ -1033,6 +1043,17 @@ model Encuesta {
   preferenciaElectoral        String?              @map("preferencia_electoral")
   preferenciaPartido          String?              @map("preferencia_partido")
   aprobacionPorGobernante     Json?                @map("aprobacion_por_gobernante")
+  /// Respuestas v1 (cuestionario restaurado). NULL = fila v3. En la rama
+  /// noElegible solo se llena credencialVigente (P2–P8 no se almacenan).
+  /// rangoEdad NO se duplica: la columna se comparte con v3 (catálogos
+  /// disjuntos; versionCuestionario desambigua).
+  credencialVigente           String?              @map("credencial_vigente")
+  genero                      String?
+  partidoPreferido            String?              @map("partido_preferido")
+  conocimientoPorPersona      Json?                @map("conocimiento_por_persona")
+  mediosConocimiento          Json?                @map("medios_conocimiento")
+  mayorPersonalidad           String?              @map("mayor_personalidad")
+  candidatoPreferido          String?              @map("candidato_preferido")
   /// NULL = el payload no traía bloque de ubicación (registro antiguo);
   /// distinto de `false`, que significa "el teléfono no pudo capturarla".
   ubicacionDisponible         Boolean?             @map("ubicacion_disponible")
