@@ -192,7 +192,7 @@ const parseFlexibleBody: RequestHandler = (req, res, next) => {
 
 // Misma red de seguridad que en /ingest: si la app equivoca el método, el 401
 // que devolverían los comodines `app.use('/api', authMiddleware, …)`
-// (index.ts:269,274) al no encontrar aquí un GET /personas se lee en el móvil como
+// (index.ts:300,305) al no encontrar aquí un GET /personas se lee en el móvil como
 // "API key inválida" y dispara una reconfiguración innecesaria. Un 405 dice lo
 // que realmente pasa: la key sirve, el método no.
 router.get('/personas', (_req: Request, res: Response) => {

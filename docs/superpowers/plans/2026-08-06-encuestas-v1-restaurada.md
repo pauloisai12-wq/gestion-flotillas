@@ -19,7 +19,7 @@
 - **No tocar** los catálogos v3, `qa_externa`, ni relajar validaciones existentes.
 - **El contrato v1 es EXACTO al histórico**: mismos nombres de campos, catálogos y mensajes; la app móvil ya lo habla.
 - Comentarios en español, mismo estilo/densidad que los archivos tocados.
-- Gate de calidad por app (lo que corre el CI): api = `prisma generate`+`prisma validate`+`tsc --noEmit`+`build`+`test:sprint4`+`test:sprint5`; web = `lint`+`tsc --noEmit`+`build`.
+- Gate de calidad por app (lo que corre el CI): api = `npm audit`+`test:sprint1-security`+`prisma generate`+`test:sprint2`+`test:sprint3`+`test:sprint4`+`test:sprint5`+`benchmark:sprint3`+`test:config-refs`+`test:migrations`+`test:qa-ingest`+`prisma validate`+`tsc --noEmit`+`build`; web = `lint`+`tsc --noEmit`+`build`.
 
 ---
 
@@ -179,9 +179,9 @@ y después del bloque de respuestas v3 (tras `aprobacionPorGobernante`):
 
 ```bash
 cd "/mnt/c/Users/paulo/Claude Code/flotillas-v2/api" && cmd.exe /c "npx prisma validate > prisma.log 2>&1 && npx prisma generate >> prisma.log 2>&1"; tail -20 prisma.log
-node ../scripts/check-qa-migrations-safe.js 2>/dev/null || cmd.exe /c "node scripts\\check-qa-migrations-safe.js" || true
+cd "/mnt/c/Users/paulo/Claude Code/flotillas-v2/api" && cmd.exe /c "npm run test:migrations > migr.log 2>&1"; tail -20 migr.log
 ```
-Esperado: `The schema ... is valid`, generate OK. Correr el gate de migraciones desde la raíz si el script existe ahí (`ls scripts/`): debe pasar.
+Esperado: `The schema ... is valid`, generate OK. El gate de migraciones vive en `api/scripts/check-qa-migrations-safe.js` y se corre con `npm run test:migrations` desde `api/`: debe pasar.
 
 - [ ] **Step 4: Verificar que la API sigue compilando**
 
@@ -638,8 +638,8 @@ Esperado: verde.
 - [ ] **Step 3: Gate de migraciones seguras**
 
 ```bash
-cd "/mnt/c/Users/paulo/Claude Code/flotillas-v2" && ls scripts/ | grep -i migr
-# correr el script que exista (check-qa-migrations-safe.js) con node vía cmd.exe si hace falta
+cd "/mnt/c/Users/paulo/Claude Code/flotillas-v2/api" && cmd.exe /c "npm run test:migrations > migr.log 2>&1"; tail -20 migr.log
+# el gate vive en api/scripts/check-qa-migrations-safe.js; npm run test:migrations lo corre desde api/
 ```
 Esperado: la migración `20260806120000_restore_encuestas_v1` pasa (es puramente aditiva).
 

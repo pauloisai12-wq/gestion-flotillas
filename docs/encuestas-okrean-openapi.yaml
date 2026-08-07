@@ -528,8 +528,9 @@ components:
         P6, unión discriminada por `tipo`. Cuando P5 dejó al encuestado sin
         ninguna personalidad conocida, la app **no** pregunta P6 y manda
         `omitidaPorLogica`; en cualquier otro caso manda `respondida` con al menos
-        un medio. Las dos formas se rechazan cruzadas: `respondida` con la lista
-        vacía y `omitidaPorLogica` con `medios` son ambas 422.
+        un medio. `respondida` con la lista vacía es 422; en cambio
+        `omitidaPorLogica` con `medios` no lo es: el servidor estripa `medios` y
+        acepta con 201.
       oneOf:
         - $ref: '#/components/schemas/MediosConocimientoOmitidaV1'
         - $ref: '#/components/schemas/MediosConocimientoRespondidaV1'
@@ -542,7 +543,9 @@ components:
     MediosConocimientoOmitidaV1:
       title: Omitida por lógica del cuestionario
       type: object
-      additionalProperties: false
+      # Sin `additionalProperties: false` a propósito: el servidor ESTRIPA lo que
+      # sobra (p. ej. un `medios` residual) y acepta con 201, así que un cliente
+      # generado con ese candado rechazaría un payload legítimo del teléfono.
       required: [tipo]
       properties:
         tipo:
@@ -754,7 +757,8 @@ components:
             maxLength: 80
         conoceLalo:
           type: string
-          enum: [si, no]
+          # Entrecomillados: en YAML 1.1 un `no` a secas se lee como booleano false.
+          enum: ['si', 'no']
           description: ¿Conoce a Lalo Ximénez?
         rolLalo:
           $ref: '#/components/schemas/RolLaloV3'
@@ -790,7 +794,7 @@ components:
       properties:
         credencialVigente:
           type: string
-          const: si
+          const: 'si'
           description: P1. En esta rama solo puede valer `si`.
         rangoEdad:
           $ref: '#/components/schemas/RangoEdadV1'

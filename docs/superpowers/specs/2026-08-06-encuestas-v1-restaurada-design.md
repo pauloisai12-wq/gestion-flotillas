@@ -108,8 +108,9 @@ TRUNCATE/DELETE/DROP TABLE (pasa `scripts/check-qa-migrations-safe.js`):
   desplegarse; su comentario afirma que producción no tiene datos v1. Si el VPS tuviera filas v1
   reales y la migración v3 aún no se ha aplicado ahí, respaldar antes (`pg_dump`); re-crear las
   columnas NO resucita datos ya borrados (solo `payload_raw` los conserva como auditoría).
-- `ALTER TYPE … ADD VALUE` no puede correr dentro de la misma transacción que use el valor
-  nuevo en versiones viejas de Postgres; en PG16 es válido pero conviene que la migración lo
-  haga en su propia sentencia inicial (Prisma ejecuta el .sql tal cual).
+- `ALTER TYPE … ADD VALUE` sí puede correr dentro de la transacción de la migración (Prisma
+  envuelve el .sql en una), pero el valor nuevo **no puede usarse** (en `INSERT`/`UPDATE`/
+  comparaciones) hasta que esa transacción haga commit — regla vigente de PG12 a PG17,
+  PG16 incluido.
 - Fuera de alcance: cambios en la app móvil, panel de análisis, y cualquier alteración de los
   catálogos v3.

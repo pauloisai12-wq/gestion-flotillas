@@ -279,8 +279,11 @@ el que ordena las 7 columnas pivoteadas del CSV.
 | Conoce al menos a una persona (algún `nivel ≠ no_conoce`) | `{"tipo":"respondida","medios":["redes_sociales", …]}` con **al menos un medio** y **sin repetidos** |
 
 Las dos direcciones se rechazan: P6 respondida sobre gente que dijo no conocer, y P6 omitida cuando
-sí conoce a alguien. También son `422` mandar `respondida` con `medios: []`, mandar
-`omitidaPorLogica` acompañada de `medios`, o repetir un medio.
+sí conoce a alguien. También son `422` mandar `respondida` con `medios: []` o repetir un medio.
+En cambio, `omitidaPorLogica` acompañada de `medios` **no es un error**: el schema de esa rama solo
+declara `tipo`, así que el servidor **descarta** `medios` antes de hashear y la petición se acepta
+igual (`201`). El único rastro del envío original queda en `payload_raw`, que nunca sale del
+servidor.
 
 ### Ubicación
 
