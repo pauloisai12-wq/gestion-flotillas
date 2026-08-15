@@ -5,7 +5,6 @@
 import { createHash } from 'crypto';
 import { promises as fs } from 'fs';
 import path from 'path';
-import imageSize from 'image-size';
 import { env } from '../config/env';
 import { BadRequest } from '../middlewares/errorHandler';
 
@@ -16,6 +15,46 @@ export interface StoredImage {
   bytes: number;
   width: number | null;
   height: number | null;
+}
+
+/**
+ * Dimensiones de un JPEG leyendo su segmento SOF, sin dependencias. Sustituye a
+ * image-size, retirado por GHSA-w3rx-r6r6-pgpr / GHSA-5p2g-fcmc-qvqq (DoS sin
+ * versión parcheada en parsers ICNS/JXL/HEIF que aquí ni se usan: a esta función
+ * solo llegan JPEG reales, validados por magic bytes en el paso 1 de processImage).
+ * Best-effort como siempre fueron las dimensiones: ante cualquier forma
+ * inesperada devuelve null y las columnas quedan nulas.
+ * Exportada solo para sus tests (tests/sprint4).
+ */
+export function jpegDimensions(buffer: Buffer): { width: number; height: number } | null {
+  if (buffer.length < 4 || buffer[0] !== 0xff || buffer[1] !== 0xd8) return null;
+  let offset = 2;
+  // El offset crece estrictamente en cada vuelta: aquí no puede haber bucle infinito.
+  while (offset + 9 <= buffer.length) {
+    if (buffer[offset] !== 0xff) return null;
+    const marker = buffer[offset + 1];
+    // Relleno 0xFF entre segmentos.
+    if (marker === 0xff) {
+      offset += 1;
+      continue;
+    }
+    // Marcadores sin payload: TEM, RST0-RST7 y SOI.
+    if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd8)) {
+      offset += 2;
+      continue;
+    }
+    // EOI antes de encontrar un SOF: no hay dimensiones que leer.
+    if (marker === 0xd9) return null;
+    // SOF0-SOF15 (0xC0-0xCF) menos DHT (0xC4), JPG (0xC8) y DAC (0xCC): el
+    // payload trae [precisión][alto u16][ancho u16].
+    if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
+      return { height: buffer.readUInt16BE(offset + 5), width: buffer.readUInt16BE(offset + 7) };
+    }
+    const segLen = buffer.readUInt16BE(offset + 2);
+    if (segLen < 2) return null;
+    offset += 2 + segLen;
+  }
+  return null;
 }
 
 /** Crea el directorio de almacenamiento si no existe (idempotente). */
@@ -44,16 +83,10 @@ export async function processImage(
   // 2. Hash de contenido.
   const sha256 = createHash('sha256').update(buffer).digest('hex');
 
-  // 3. Dimensiones (opcionales; si falla el parseo quedan nulas).
-  let width: number | null = null;
-  let height: number | null = null;
-  try {
-    const dims = imageSize(buffer);
-    width = dims.width ?? null;
-    height = dims.height ?? null;
-  } catch {
-    // dimensiones opcionales
-  }
+  // 3. Dimensiones (opcionales; si el parseo no encuentra SOF quedan nulas).
+  const dims = jpegDimensions(buffer);
+  const width = dims?.width ?? null;
+  const height = dims?.height ?? null;
 
   // 4. Escritura content-addressed. sha256 proviene de createHash (hex de 64
   //    chars); lo validamos y, además, pasamos el nombre por path.basename como
