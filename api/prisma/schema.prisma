@@ -1041,7 +1041,13 @@ model Encuesta {
   rolLalo                     String?              @map("rol_lalo")
   opinionLalo                 String?              @map("opinion_lalo")
   preferenciaElectoral        String?              @map("preferencia_electoral")
+  /// Texto libre de "otro" del cuestionario v4; NULL en v1/v3 y cuando el
+  /// código no es "otro".
+  preferenciaElectoralOtro    String?              @map("preferencia_electoral_otro")
   preferenciaPartido          String?              @map("preferencia_partido")
+  /// Texto libre de "otro" del cuestionario v4; NULL en v1/v3 y cuando el
+  /// código no es "otro".
+  preferenciaPartidoOtro      String?              @map("preferencia_partido_otro")
   aprobacionPorGobernante     Json?                @map("aprobacion_por_gobernante")
   /// Respuestas v1 (cuestionario restaurado). NULL = fila v3. En la rama
   /// noElegible solo se llena credencialVigente (P2–P8 no se almacenan).

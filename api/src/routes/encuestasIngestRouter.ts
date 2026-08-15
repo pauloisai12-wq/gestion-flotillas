@@ -1,4 +1,4 @@
-// Ingesta de la app "Encuestas Okrean" (v1 y v3). El guard de dispositivo
+// Ingesta de la app "Encuestas Okrean" (v1, v3 y v4). El guard de dispositivo
 // (encuestasDeviceAuthMiddleware), el cubo de rate-limit por IP y el
 // express.json de 256 KB se aplican en el MONTAJE (index.ts), de modo que el
 // auth precede a TODA ruta/método de aquí — incluido el 405 de GET /.
@@ -20,16 +20,18 @@ import { BadRequest } from '../middlewares/errorHandler';
 import {
   encuestaV1Schema,
   encuestaV3Schema,
+  encuestaV4Schema,
   type EncuestaV1,
   type EncuestaV3,
+  type EncuestaV4,
 } from '../validators/encuestasIngestValidator';
-import { hashEncuestaV1, hashEncuestaV3 } from '../lib/encuestasCanonical';
+import { hashEncuestaV1, hashEncuestaV3, hashEncuestaV4 } from '../lib/encuestasCanonical';
 import { ingestEncuesta } from '../services/encuestasIngestService';
 import { env } from '../config/env';
 
 /** Lo que deja el paso "validar + hashear" de una versión, ya sin zod a la vista. */
 type ResultadoVersion =
-  | { ok: true; parsed: EncuestaV1 | EncuestaV3; payloadHash: string }
+  | { ok: true; parsed: EncuestaV1 | EncuestaV3 | EncuestaV4; payloadHash: string }
   | { ok: false; issues: { path: PropertyKey[]; message: string }[] };
 
 /**
@@ -37,7 +39,7 @@ type ResultadoVersion =
  * genérico ata ambos: el hash recibe exactamente lo que produce el schema, así
  * que una pareja cruzada (validar con v3 y hashear con v1) no compila.
  */
-function validadorDe<T extends EncuestaV1 | EncuestaV3>(
+function validadorDe<T extends EncuestaV1 | EncuestaV3 | EncuestaV4>(
   schema: ZodType<T>,
   hash: (d: T) => string,
 ): (body: unknown) => ResultadoVersion {
@@ -52,13 +54,14 @@ function validadorDe<T extends EncuestaV1 | EncuestaV3>(
 /**
  * ÚNICA fuente de verdad de las versiones soportadas: el gate se deriva de las
  * llaves de esta tabla, no de una lista aparte. Sin este acoplamiento, declarar
- * una v4 soportada sin darle schema/canónico propios la haría pasar el gate y
+ * una v5 soportada sin darle schema/canónico propios la haría pasar el gate y
  * persistirse en silencio con el canónico de otra versión; aquí una versión sin
  * entrada cae siempre en UNSUPPORTED_VERSION.
  */
 const POR_VERSION: Partial<Record<number, (body: unknown) => ResultadoVersion>> = {
   1: validadorDe(encuestaV1Schema, hashEncuestaV1),
   3: validadorDe(encuestaV3Schema, hashEncuestaV3),
+  4: validadorDe(encuestaV4Schema, hashEncuestaV4),
 };
 
 // Cuota de captura POR DISPOSITIVO (cubo `rl:enc:dev:<id>`), separada del cubo
