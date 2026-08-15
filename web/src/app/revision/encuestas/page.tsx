@@ -90,6 +90,20 @@ const columns: ColumnDef<Encuesta, unknown>[] = [
     cell: ({ row }) => row.original.preferenciaPartido ?? row.original.partidoPreferido ?? '—',
   },
   {
+    id: 'preferenciaElectoralOtro',
+    header: 'Preferencia electoral (texto)',
+    // v4 con preferenciaElectoral='otro': texto libre de la preferencia.
+    // NULL = v1/v3 o v4 sin el código 'otro'.
+    cell: ({ row }) => row.original.preferenciaElectoralOtro ?? '—',
+  },
+  {
+    id: 'preferenciaPartidoOtro',
+    header: 'Preferencia partido (texto)',
+    // v4 con preferenciaPartido='otro': texto libre de la preferencia.
+    // NULL = v1/v3 o v4 sin el código 'otro'.
+    cell: ({ row }) => row.original.preferenciaPartidoOtro ?? '—',
+  },
+  {
     accessorKey: 'conoceLalo',
     header: 'Conoce a Lalo',
     // 'si'/'no' del catálogo v3; null = fila v1 residual sin el dato.

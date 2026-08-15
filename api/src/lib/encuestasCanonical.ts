@@ -1,4 +1,4 @@
-// Canonicalización y hash del contenido de una encuesta ya validada, v3 y v1. El
+// Canonicalización y hash del contenido de una encuesta ya validada, v1, v3 y v4. El
 // hash es la mitad sustantiva de la idempotencia: el UNIQUE de idLocal decide si
 // la fila ya existe, y este hash decide si el reenvío trae el MISMO contenido
 // (200 con el idRemoto original) o uno distinto (409, sin sobrescribir).
@@ -33,12 +33,13 @@
 // si algún día cambia una de estas reglas, subirla evita comparar hashes viejos
 // contra nuevos como si fueran del mismo esquema.
 //
-// Aquí conviven los DOS cuestionarios que el servidor sabe recibir: el v3
-// vigente y el v1 restaurado. Cada uno reconstruye su propio objeto literal —
-// las reglas de arriba valen para ambos, pero el bloque de respuestas y el orden
-// de claves son de cada versión. Lo único compartido es `ubicacionCanonica`, que
-// es idéntica entre versiones. Salvo eso, tocar uno no puede mover el hash del
-// otro.
+// Aquí conviven los TRES cuestionarios que el servidor sabe recibir: el v3
+// vigente, el v4 expandido, y el v1 restaurado. Cada uno reconstruye su propio
+// objeto literal — las reglas de arriba valen para los tres, pero el bloque de
+// respuestas y el orden de claves son de cada versión (v4 expande respuestas
+// con campos opcionales de texto). Lo único compartido es `ubicacionCanonica`,
+// que es idéntica entre versiones. Salvo eso, tocar uno no puede mover el hash
+// del otro.
 
 import { createHash } from 'crypto';
 import {
@@ -47,13 +48,22 @@ import {
   PERSONAS_V1,
   type EncuestaV1,
   type EncuestaV3,
+  type EncuestaV4,
 } from '../validators/encuestasIngestValidator';
 
 // La versión canónica es POR CUESTIONARIO, no del archivo: el v1 se quedó en 1
 // porque los payloadHash de los registros v1 guardados antes del reemplazo
-// tienen que seguir coincidiendo. Subir la del v3 nunca debe arrastrar la del v1.
+// tienen que seguir coincidiendo. El v3 está en 2 y el v4 en 3: aunque ambos
+// tienen el mismo bloque de respuestas v3 (enums idénticos), el v4 expande ese
+// bloque con dos campos opcionales de texto (preferenciaElectoralOtro,
+// preferenciaPartidoOtro) que van al canónico, cambiando la forma. Subir la
+// versión distingue los hashes v3 de los v4 incluso si versionCuestionario
+// fuera a su vez una desambiguación (aquí versionCuestionario entra en el
+// canónico, así que técnicamente no hace falta; el número existe para que el
+// cambio de forma esté documentado y evitar futuras confusiones).
 const VERSION_CANONICA = 2;
 const VERSION_CANONICA_V1 = 1;
+const VERSION_CANONICA_V4 = 3;
 
 function respuestasCanonicas(d: EncuestaV3) {
   const r = d.respuestas;
@@ -82,9 +92,37 @@ function respuestasCanonicas(d: EncuestaV3) {
   };
 }
 
-// Compartida por las dos versiones: la forma de `ubicacion` es la misma en el v3
-// y en el v1 (el schema la declara una sola vez), así que el union de tipos es
-// una formalidad para TS, no dos formas distintas.
+function respuestasCanonicasV4(d: EncuestaV4) {
+  const r = d.respuestas;
+  // Análoga a respuestasCanonicas, pero con campos opcionales de texto para
+  // "otro". Ausente ≡ null tras trim para normalizar reenvíos. El orden de
+  // claves es fijo: los campos de "otro" van inmediatamente después de sus
+  // correspondientes enums de preferencia.
+  const califPorGobernante = new Map(
+    r.aprobacionPorGobernante.map((fila) => [fila.gobernante, fila.calificacion] as const),
+  );
+  return {
+    sexo: r.sexo,
+    rangoEdad: r.rangoEdad,
+    empresariosConocidos: r.empresariosConocidos,
+    politicosConocidos: r.politicosConocidos,
+    conoceLalo: r.conoceLalo,
+    rolLalo: r.rolLalo,
+    opinionLalo: r.opinionLalo,
+    preferenciaElectoral: r.preferenciaElectoral,
+    preferenciaElectoralOtro: r.preferenciaElectoralOtro ?? null,
+    preferenciaPartido: r.preferenciaPartido,
+    preferenciaPartidoOtro: r.preferenciaPartidoOtro ?? null,
+    aprobacionPorGobernante: GOBERNANTES_V3.map((gobernante) => ({
+      gobernante,
+      calificacion: califPorGobernante.get(gobernante)!,
+    })),
+  };
+}
+
+// Compartida por las tres versiones: la forma de `ubicacion` es la misma en v1,
+// v3 y v4 (el schema la declara una sola vez), así que el union de tipos es
+// una formalidad para TS, no tres formas distintas.
 function ubicacionCanonica(u: EncuestaV1['ubicacion'] | EncuestaV3['ubicacion']) {
   if (!u) return null;
   if (u.disponible) {
@@ -142,6 +180,39 @@ export function canonicalizarEncuestaV3(d: EncuestaV3): string {
  */
 export function hashEncuestaV3(d: EncuestaV3): string {
   return createHash('sha256').update(canonicalizarEncuestaV3(d), 'utf8').digest('hex');
+}
+
+/**
+ * Representación estable del contenido sustantivo de una encuesta v4 ya validada.
+ * Igual a v3, pero con los campos opcionales de texto para "otro".
+ */
+export function canonicalizarEncuestaV4(d: EncuestaV4): string {
+  return JSON.stringify({
+    v: VERSION_CANONICA_V4,
+    idLocal: d.idLocal,
+    folioLocal: d.folioLocal ?? null,
+    encuestador: d.encuestador ?? null,
+    versionCuestionario: d.versionCuestionario,
+    estado: d.estado,
+    fechaHoraInicio: d.fechaHoraInicio.toISOString(),
+    fechaHoraFinalizacion: d.fechaHoraFinalizacion.toISOString(),
+    duracionSegundos: d.duracionSegundos,
+    respuestas: respuestasCanonicasV4(d),
+    ubicacion: ubicacionCanonica(d.ubicacion),
+    dispositivo: {
+      plataforma: d.dispositivo.plataforma,
+      modelo: d.dispositivo.modelo,
+      versionSistema: d.dispositivo.versionSistema,
+    },
+    versionAplicacion: d.versionAplicacion,
+  });
+}
+
+/**
+ * sha256 hex de la forma canónica v4.
+ */
+export function hashEncuestaV4(d: EncuestaV4): string {
+  return createHash('sha256').update(canonicalizarEncuestaV4(d), 'utf8').digest('hex');
 }
 
 // ---------------------------------------------------------------------------

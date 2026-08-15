@@ -1,5 +1,5 @@
-// Alta de una encuesta ya validada, de CUALQUIERA de los dos cuestionarios
-// vivos (v1 restaurada y v3 vigente): el bloque de respuestas se aplana a las
+// Alta de una encuesta ya validada, de CUALQUIERA de los cuestionarios
+// soportados (v1 restaurada, v3 vigente y v4): el bloque de respuestas se aplana a las
 // columnas de su versión y el resto de la fila es común. El contrato con la app
 // móvil es idempotente por `idLocal` (el UUID que genera el teléfono): el mismo
 // id reenviado devuelve SIEMPRE el mismo `idRemoto`, y el mismo id con
@@ -38,11 +38,12 @@ import {
   PERSONAS_V1,
   type EncuestaV1,
   type EncuestaV3,
+  type EncuestaV4,
 } from '../validators/encuestasIngestValidator';
 
 export interface IngestEncuestaInput {
-  /** Salida de `encuestaV1Schema` o `encuestaV3Schema`: lo ÚNICO que se aplana a columnas. */
-  parsed: EncuestaV1 | EncuestaV3;
+  /** Salida de `encuestaV1Schema`, `encuestaV3Schema` o `encuestaV4Schema`: lo ÚNICO que se aplana a columnas. */
+  parsed: EncuestaV1 | EncuestaV3 | EncuestaV4;
   /** Estampado server-side desde la API key autenticada; el cliente no lo envía. */
   dispositivoId: number;
   payloadHash: string;
@@ -86,6 +87,22 @@ type RespuestasV3Row = Pick<
   | 'opinionLalo'
   | 'preferenciaElectoral'
   | 'preferenciaPartido'
+  | 'aprobacionPorGobernante'
+>;
+
+type RespuestasV4Row = Pick<
+  Prisma.EncuestaUncheckedCreateInput,
+  | 'sexo'
+  | 'rangoEdad'
+  | 'empresariosConocidos'
+  | 'politicosConocidos'
+  | 'conoceLalo'
+  | 'rolLalo'
+  | 'opinionLalo'
+  | 'preferenciaElectoral'
+  | 'preferenciaElectoralOtro'
+  | 'preferenciaPartido'
+  | 'preferenciaPartidoOtro'
   | 'aprobacionPorGobernante'
 >;
 
@@ -175,8 +192,36 @@ function respuestasRowV3(d: EncuestaV3): RespuestasV3Row {
   };
 }
 
-// El bloque de ubicación es el MISMO en los dos cuestionarios (comparten el
-// schema), así que una sola función cubre ambas versiones.
+function respuestasRowV4(d: EncuestaV4): RespuestasV4Row {
+  const r = d.respuestas;
+  // Análoga a respuestasRowV3 pero con los campos opcionales de texto para
+  // "otro": preferenciaElectoralOtro y preferenciaPartidoOtro llegan ya
+  // recortados por el validador (trim) y se guardan tal cual (ausente ≡ null),
+  // igual que en el hash canónico.
+  const califPorGobernante = new Map(
+    r.aprobacionPorGobernante.map((fila) => [fila.gobernante, fila.calificacion] as const),
+  );
+  return {
+    sexo: r.sexo,
+    rangoEdad: r.rangoEdad,
+    empresariosConocidos: r.empresariosConocidos,
+    politicosConocidos: r.politicosConocidos,
+    conoceLalo: r.conoceLalo,
+    rolLalo: r.rolLalo,
+    opinionLalo: r.opinionLalo,
+    preferenciaElectoral: r.preferenciaElectoral,
+    preferenciaElectoralOtro: r.preferenciaElectoralOtro ?? null,
+    preferenciaPartido: r.preferenciaPartido,
+    preferenciaPartidoOtro: r.preferenciaPartidoOtro ?? null,
+    aprobacionPorGobernante: GOBERNANTES_V3.map((gobernante) => ({
+      gobernante,
+      calificacion: califPorGobernante.get(gobernante)!,
+    })),
+  };
+}
+
+// El bloque de ubicación es el MISMO en los tres cuestionarios (comparten el
+// schema), así que una sola función cubre las tres versiones.
 function ubicacionRow(u: EncuestaV1['ubicacion'] | EncuestaV3['ubicacion']): UbicacionRow {
   if (!u) {
     // Bloque AUSENTE (app vieja sin GPS): `ubicacionDisponible` queda en NULL,
@@ -231,6 +276,7 @@ function ubicacionRow(u: EncuestaV1['ubicacion'] | EncuestaV3['ubicacion']): Ubi
 function mapEncuestaToRow(input: IngestEncuestaInput): Prisma.EncuestaUncheckedCreateInput {
   const d = input.parsed;
   const esV1 = d.versionCuestionario === 1;
+  const esV4 = d.versionCuestionario === 4;
   return {
     idLocal: d.idLocal,
     dispositivoId: input.dispositivoId,
@@ -241,13 +287,13 @@ function mapEncuestaToRow(input: IngestEncuestaInput): Prisma.EncuestaUncheckedC
     // Ausente ≡ NULL: lo mandan las versiones de la app que ya lo capturan.
     encuestador: d.encuestador ?? null,
     estado: d.estado,
-    // v1 la manda explícita (atada al estado por el validador); en v3 el
+    // v1 la manda explícita (atada al estado por el validador); en v3/v4 el
     // concepto no existe y la columna queda NULL.
     elegibilidad: esV1 ? d.elegibilidad : null,
     fechaHoraInicio: d.fechaHoraInicio,
     fechaHoraFinalizacion: d.fechaHoraFinalizacion,
     duracionSegundos: d.duracionSegundos,
-    ...(esV1 ? respuestasRowV1(d) : respuestasRowV3(d)),
+    ...(esV1 ? respuestasRowV1(d) : esV4 ? respuestasRowV4(d) : respuestasRowV3(d)),
     ...ubicacionRow(d.ubicacion),
     dispositivoPlataforma: d.dispositivo.plataforma,
     dispositivoModelo: d.dispositivo.modelo,

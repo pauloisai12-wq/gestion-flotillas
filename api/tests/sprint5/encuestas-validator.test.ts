@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   encuestaV1Schema,
   encuestaV3Schema,
+  encuestaV4Schema,
   GOBERNANTES_V3,
   TOLERANCIA_DURACION_SEG,
 } from '../../src/validators/encuestasIngestValidator';
@@ -9,6 +10,7 @@ import {
   encuestaCompletaValida,
   encuestaV1CompletaValida,
   encuestaV1NoElegibleValida,
+  encuestaV4CompletaValida,
   sinClaves,
   type PayloadEncuesta,
 } from './fixtures';
@@ -146,6 +148,22 @@ describe('encuestaV3Schema — aprobacionPorGobernante', () => {
       ],
     })).success).toBe(true);
     expect(GOBERNANTES_V3).toEqual(['sheinbaum', 'jara', 'huerta']);
+  });
+  it('los mensajes de error especifican la versión 3 (regresión: evitar cambios de sufijo)', () => {
+    const r = encuestaV3Schema.safeParse(conRespuestas({
+      aprobacionPorGobernante: [
+        { gobernante: 'gobernante_inexistente', calificacion: 'buena' },
+        { gobernante: 'jara', calificacion: 'regular' },
+        { gobernante: 'huerta', calificacion: 'mala' },
+      ],
+    }));
+    expect(r.success).toBe(false);
+    if (!r.success) {
+      const gobernanteMensaje = r.error.issues.find(
+        (i) => i.path.join('.') === 'respuestas.aprobacionPorGobernante.0.gobernante'
+      );
+      expect(gobernanteMensaje?.message).toBe('gobernante fuera del catálogo de la versión 3');
+    }
   });
 });
 
@@ -671,6 +689,289 @@ describe('encuestaV1Schema (cuestionario restaurado)', () => {
           'credencialVigente',
         ]);
       }
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Cuestionario v4 (nuevo)
+// ---------------------------------------------------------------------------
+// La v4 extiende el catálogo de v3 con dos valores nuevos ("otro" y "no_sabe_no_contesta")
+// en ambos campos de preferencia, y dos campos opcionales de texto libre para ellos.
+// Los catálogos de v3 siguen siendo válidos en v4. El resto del contrato es idéntico.
+
+describe('encuestaV4Schema — cuestionario v4', () => {
+  function conRespuestasV4(cambios: Record<string, unknown>): PayloadEncuesta {
+    const base = encuestaV4CompletaValida();
+    return { ...base, respuestas: { ...(base.respuestas as Record<string, unknown>), ...cambios } };
+  }
+
+  function issuesDe(payload: PayloadEncuesta): string[] {
+    const r = encuestaV4Schema.safeParse(payload);
+    return r.success ? [] : r.error.issues.map((i) => i.path.join('.'));
+  }
+
+  function acepta(payload: PayloadEncuesta): boolean {
+    return encuestaV4Schema.safeParse(payload).success;
+  }
+
+  it('acepta el payload v4 completo y estripa los campos de la cola del teléfono', () => {
+    const r = encuestaV4Schema.safeParse(encuestaV4CompletaValida());
+    expect(r.success).toBe(true);
+    if (!r.success) return;
+    expect(r.data).not.toHaveProperty('estadoSincronizacion');
+    expect(r.data).not.toHaveProperty('fechaSincronizacion');
+  });
+
+  it('rechaza versionCuestionario ≠ 4 y estado ≠ completada', () => {
+    expect(encuestaV4Schema.safeParse(encuestaV4CompletaValida({ versionCuestionario: 3 })).success).toBe(false);
+    expect(encuestaV4Schema.safeParse(encuestaV4CompletaValida({ versionCuestionario: 5 })).success).toBe(false);
+    expect(encuestaV4Schema.safeParse(encuestaV4CompletaValida({ estado: 'borrador' })).success).toBe(false);
+  });
+
+  describe('Compatibilidad: catálogos v3 siguen siendo válidos en v4', () => {
+    it('rechaza candidatos fuera del catálogo v4 (enum inválido)', () => {
+      const payload = conRespuestasV4({
+        preferenciaElectoral: 'candidato_inexistente',
+      });
+      expect(acepta(payload)).toBe(false);
+    });
+
+    it('rechaza partidos fuera del catálogo v4 (enum inválido)', () => {
+      const payload = conRespuestasV4({
+        preferenciaPartido: 'partido_inexistente',
+      });
+      expect(acepta(payload)).toBe(false);
+    });
+
+    it('acepta todos los candidatos de v3 en v4 SIN campo de texto', () => {
+      const candidatos = ['lalo_ximenez', 'irineo_molina', 'fernando_huerta', 'paola_barrera', 'ana_gabriela_delgado'];
+      for (const candidato of candidatos) {
+        const payload = conRespuestasV4({
+          preferenciaElectoral: candidato,
+          preferenciaElectoralOtro: undefined,
+        });
+        expect(acepta(payload), `falla con candidato ${candidato}`).toBe(true);
+      }
+    });
+
+    it('acepta todos los partidos de v3 en v4 SIN campo de texto', () => {
+      const partidos = ['pri', 'morena', 'pan', 'panal_oaxaca', 'pt', 'prd_oaxaca', 'pvem', 'pto', 'mc'];
+      for (const partido of partidos) {
+        const payload = conRespuestasV4({
+          preferenciaPartido: partido,
+          preferenciaPartidoOtro: undefined,
+        });
+        expect(acepta(payload), `falla con partido ${partido}`).toBe(true);
+      }
+    });
+
+    it('rechaza candidatos v3 CON preferenciaElectoralOtro presente: regla condicional', () => {
+      const payload = conRespuestasV4({
+        preferenciaElectoral: 'lalo_ximenez',
+        preferenciaElectoralOtro: 'Texto no permitido',
+      });
+      expect(acepta(payload)).toBe(false);
+      const r = encuestaV4Schema.safeParse(payload);
+      const issue = r.success ? null : r.error.issues.find((i) => i.path.join('.') === 'respuestas.preferenciaElectoralOtro');
+      expect(issue?.message).toMatch(/solo se admite/);
+    });
+
+    it('rechaza partidos v3 CON preferenciaPartidoOtro presente: regla condicional', () => {
+      const payload = conRespuestasV4({
+        preferenciaPartido: 'morena',
+        preferenciaPartidoOtro: 'Texto no permitido',
+      });
+      expect(acepta(payload)).toBe(false);
+      const r = encuestaV4Schema.safeParse(payload);
+      const issue = r.success ? null : r.error.issues.find((i) => i.path.join('.') === 'respuestas.preferenciaPartidoOtro');
+      expect(issue?.message).toMatch(/solo se admite/);
+    });
+  });
+
+  describe('Valores nuevos en v4: "otro" y "no_sabe_no_contesta"', () => {
+    it('acepta preferenciaElectoral=otro CON preferenciaElectoralOtro válido', () => {
+      const payload = conRespuestasV4({
+        preferenciaElectoral: 'otro',
+        preferenciaElectoralOtro: 'Mi candidato independiente',
+      });
+      expect(acepta(payload)).toBe(true);
+    });
+
+    it('rechaza preferenciaElectoral=otro SIN preferenciaElectoralOtro', () => {
+      const payload = conRespuestasV4({
+        preferenciaElectoral: 'otro',
+        preferenciaElectoralOtro: undefined,
+      });
+      expect(acepta(payload)).toBe(false);
+      expect(issuesDe(payload)).toContain('respuestas.preferenciaElectoralOtro');
+    });
+
+    it('rechaza preferenciaElectoral=otro con texto vacío o solo espacios', () => {
+      expect(acepta(conRespuestasV4({ preferenciaElectoral: 'otro', preferenciaElectoralOtro: '' }))).toBe(false);
+      expect(acepta(conRespuestasV4({ preferenciaElectoral: 'otro', preferenciaElectoralOtro: '   ' }))).toBe(false);
+    });
+
+    it('rechaza preferenciaElectoral=otro con texto > 80 caracteres', () => {
+      const payload = conRespuestasV4({
+        preferenciaElectoral: 'otro',
+        preferenciaElectoralOtro: 'a'.repeat(81),
+      });
+      expect(acepta(payload)).toBe(false);
+      expect(issuesDe(payload)).toContain('respuestas.preferenciaElectoralOtro');
+    });
+
+    it('acepta preferenciaElectoral=otro con exactamente 80 caracteres', () => {
+      const payload = conRespuestasV4({
+        preferenciaElectoral: 'otro',
+        preferenciaElectoralOtro: 'a'.repeat(80),
+      });
+      expect(acepta(payload)).toBe(true);
+    });
+
+    it('recorta espacios en los bordes de preferenciaElectoralOtro', () => {
+      const r = encuestaV4Schema.safeParse(conRespuestasV4({
+        preferenciaElectoral: 'otro',
+        preferenciaElectoralOtro: '  candidato con espacios  ',
+      }));
+      expect(r.success).toBe(true);
+      if (!r.success) return;
+      expect(r.data.respuestas.preferenciaElectoralOtro).toBe('candidato con espacios');
+    });
+
+    it('acepta preferenciaElectoral=no_sabe_no_contesta SIN preferenciaElectoralOtro', () => {
+      const payload = conRespuestasV4({
+        preferenciaElectoral: 'no_sabe_no_contesta',
+        preferenciaElectoralOtro: undefined,
+      });
+      expect(acepta(payload)).toBe(true);
+    });
+
+    it('rechaza preferenciaElectoral=no_sabe_no_contesta CON preferenciaElectoralOtro', () => {
+      const payload = conRespuestasV4({
+        preferenciaElectoral: 'no_sabe_no_contesta',
+        preferenciaElectoralOtro: 'Algo',
+      });
+      expect(acepta(payload)).toBe(false);
+      expect(issuesDe(payload)).toContain('respuestas.preferenciaElectoralOtro');
+    });
+  });
+
+  describe('Mismo conjunto de reglas para preferenciaPartido', () => {
+    it('acepta preferenciaPartido=otro CON preferenciaPartidoOtro válido (1-80 chars)', () => {
+      const payload = conRespuestasV4({
+        preferenciaPartido: 'otro',
+        preferenciaPartidoOtro: 'Partido Popular Alternativo',
+      });
+      expect(acepta(payload)).toBe(true);
+    });
+
+    it('rechaza preferenciaPartido=otro SIN preferenciaPartidoOtro', () => {
+      const payload = conRespuestasV4({
+        preferenciaPartido: 'otro',
+        preferenciaPartidoOtro: undefined,
+      });
+      expect(acepta(payload)).toBe(false);
+      expect(issuesDe(payload)).toContain('respuestas.preferenciaPartidoOtro');
+    });
+
+    it('rechaza preferenciaPartido=otro con texto vacío o > 80 chars', () => {
+      expect(acepta(conRespuestasV4({ preferenciaPartido: 'otro', preferenciaPartidoOtro: '' }))).toBe(false);
+      expect(acepta(conRespuestasV4({ preferenciaPartido: 'otro', preferenciaPartidoOtro: 'x'.repeat(81) }))).toBe(false);
+    });
+
+    it('recorta espacios en los bordes de preferenciaPartidoOtro', () => {
+      const r = encuestaV4Schema.safeParse(conRespuestasV4({
+        preferenciaPartido: 'otro',
+        preferenciaPartidoOtro: '  \t Partido  \n  ',
+      }));
+      expect(r.success).toBe(true);
+      if (!r.success) return;
+      expect(r.data.respuestas.preferenciaPartidoOtro).toBe('Partido');
+    });
+
+    it('acepta preferenciaPartido=no_sabe_no_contesta SIN preferenciaPartidoOtro', () => {
+      const payload = conRespuestasV4({
+        preferenciaPartido: 'no_sabe_no_contesta',
+        preferenciaPartidoOtro: undefined,
+      });
+      expect(acepta(payload)).toBe(true);
+    });
+
+    it('rechaza preferenciaPartido=no_sabe_no_contesta CON preferenciaPartidoOtro', () => {
+      const payload = conRespuestasV4({
+        preferenciaPartido: 'no_sabe_no_contesta',
+        preferenciaPartidoOtro: 'Un partido',
+      });
+      expect(acepta(payload)).toBe(false);
+      expect(issuesDe(payload)).toContain('respuestas.preferenciaPartidoOtro');
+    });
+  });
+
+  describe('Combinaciones cruzadas válidas de v4', () => {
+    it('electoral "otro" + partido "no_sabe_no_contesta" es válido', () => {
+      const payload = conRespuestasV4({
+        preferenciaElectoral: 'otro',
+        preferenciaElectoralOtro: 'Independiente',
+        preferenciaPartido: 'no_sabe_no_contesta',
+        preferenciaPartidoOtro: undefined,
+      });
+      expect(acepta(payload)).toBe(true);
+    });
+
+    it('ambos campos en "otro" con textos es válido', () => {
+      const payload = conRespuestasV4({
+        preferenciaElectoral: 'otro',
+        preferenciaElectoralOtro: 'Candidato X',
+        preferenciaPartido: 'otro',
+        preferenciaPartidoOtro: 'Movimiento Y',
+      });
+      expect(acepta(payload)).toBe(true);
+    });
+  });
+
+  describe('Compatibilidad v3: comportamiento en v3 vs v4', () => {
+    it('v3 rechaza "otro" y "no_sabe_no_contesta" en preferenciaElectoral por enum', () => {
+      const v3payload = { ...encuestaCompletaValida(), respuestas: { ...encuestaCompletaValida().respuestas as Record<string, unknown>, preferenciaElectoral: 'otro' } };
+      expect(encuestaV3Schema.safeParse(v3payload).success).toBe(false);
+
+      const v3payload2 = { ...encuestaCompletaValida(), respuestas: { ...encuestaCompletaValida().respuestas as Record<string, unknown>, preferenciaElectoral: 'no_sabe_no_contesta' } };
+      expect(encuestaV3Schema.safeParse(v3payload2).success).toBe(false);
+    });
+
+    it('v3 rechaza "otro" y "no_sabe_no_contesta" en preferenciaPartido por enum', () => {
+      const v3payload = { ...encuestaCompletaValida(), respuestas: { ...encuestaCompletaValida().respuestas as Record<string, unknown>, preferenciaPartido: 'otro' } };
+      expect(encuestaV3Schema.safeParse(v3payload).success).toBe(false);
+
+      const v3payload2 = { ...encuestaCompletaValida(), respuestas: { ...encuestaCompletaValida().respuestas as Record<string, unknown>, preferenciaPartido: 'no_sabe_no_contesta' } };
+      expect(encuestaV3Schema.safeParse(v3payload2).success).toBe(false);
+    });
+
+    it('v3 stripea preferenciaElectoralOtro si llega en respuestas (sin error, comportamiento de zod)', () => {
+      const v3payload = conRespuestas({
+        preferenciaElectoralOtro: 'Texto ignorado',
+      });
+      const r = encuestaV3Schema.safeParse(v3payload);
+      expect(r.success).toBe(true);
+      if (!r.success) return;
+      const respuestas = r.data.respuestas as Record<string, unknown>;
+      expect(respuestas).not.toHaveProperty('preferenciaElectoralOtro');
+    });
+
+    it('v3 stripea preferenciaPartidoOtro si llega en respuestas (sin error, comportamiento de zod)', () => {
+      const v3payload = conRespuestas({
+        preferenciaPartidoOtro: 'Texto ignorado',
+      });
+      const r = encuestaV3Schema.safeParse(v3payload);
+      expect(r.success).toBe(true);
+      if (!r.success) return;
+      const respuestas = r.data.respuestas as Record<string, unknown>;
+      expect(respuestas).not.toHaveProperty('preferenciaPartidoOtro');
+    });
+
+    it('v4 rechaza versionCuestionario 3 y viceversa', () => {
+      expect(encuestaV4Schema.safeParse(encuestaCompletaValida()).success).toBe(false);
+      expect(encuestaV3Schema.safeParse(encuestaV4CompletaValida()).success).toBe(false);
     });
   });
 });

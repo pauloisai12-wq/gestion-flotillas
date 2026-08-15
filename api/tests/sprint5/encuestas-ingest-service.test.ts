@@ -28,12 +28,14 @@ import {
 import {
   encuestaV1Schema,
   encuestaV3Schema,
+  encuestaV4Schema,
 } from '../../src/validators/encuestasIngestValidator';
-import { hashEncuestaV1, hashEncuestaV3 } from '../../src/lib/encuestasCanonical';
+import { hashEncuestaV1, hashEncuestaV3, hashEncuestaV4 } from '../../src/lib/encuestasCanonical';
 import {
   encuestaCompletaValida,
   encuestaV1CompletaValida,
   encuestaV1NoElegibleValida,
+  encuestaV4CompletaValida,
   sinClaves,
   type PayloadEncuesta,
 } from './fixtures';
@@ -115,9 +117,32 @@ function entradaV1(
   };
 }
 
+/** Lo mismo para el cuestionario v4: su schema y su hash, no los de la v3. */
+function entradaV4(
+  payload: PayloadEncuesta,
+  overrides: Partial<IngestEncuestaInput> = {},
+): IngestEncuestaInput {
+  const parsed = encuestaV4Schema.parse(payload);
+  return {
+    parsed,
+    dispositivoId: 1,
+    payloadHash: hashEncuestaV4(parsed),
+    payloadRaw: JSON.stringify(payload),
+    ...overrides,
+  };
+}
+
 function conRespuestas(
   sobre: PayloadEncuesta,
   base: PayloadEncuesta = encuestaCompletaValida(),
+): PayloadEncuesta {
+  return { ...base, respuestas: { ...(base.respuestas as PayloadEncuesta), ...sobre } };
+}
+
+/** Equivalente para v4. */
+function conRespuestasV4(
+  sobre: PayloadEncuesta,
+  base: PayloadEncuesta = encuestaV4CompletaValida(),
 ): PayloadEncuesta {
   return { ...base, respuestas: { ...(base.respuestas as PayloadEncuesta), ...sobre } };
 }
@@ -498,5 +523,109 @@ describe('ingesta v1 (restaurada)', () => {
     const fila = filas.get(encuestaV1CompletaValida().idLocal as string)!;
     expect(fila.idRemoto).toBe(original.idRemoto);
     expect(fila.partidoPreferido).toBe('morena');
+  });
+});
+
+describe('ingestEncuestaWithDeps — v4: persistencia de campos nuevos', () => {
+  it('una encuesta v4 normal (sin "otro") persiste ambos campos de texto como null', async () => {
+    const { db, create } = fakeDbConMemoria();
+
+    await ingestEncuestaWithDeps(entradaV4(encuestaV4CompletaValida()), { db });
+
+    const datos = datosDelCreate(create);
+    expect(datos).toMatchObject({
+      versionCuestionario: 4,
+      preferenciaElectoral: 'lalo_ximenez',
+      preferenciaPartido: 'morena',
+    });
+    expect(datos.preferenciaElectoralOtro).toBeNull();
+    expect(datos.preferenciaPartidoOtro).toBeNull();
+  });
+
+  it('una encuesta v4 con ambos "otro" + textos persiste ambos campos', async () => {
+    const { db, create } = fakeDbConMemoria();
+    const conOtros = conRespuestasV4({
+      preferenciaElectoral: 'otro',
+      preferenciaElectoralOtro: 'Candidato independiente A',
+      preferenciaPartido: 'otro',
+      preferenciaPartidoOtro: 'Movimiento Progresista',
+    });
+
+    await ingestEncuestaWithDeps(entradaV4(conOtros), { db });
+
+    const datos = datosDelCreate(create);
+    expect(datos.preferenciaElectoralOtro).toBe('Candidato independiente A');
+    expect(datos.preferenciaPartidoOtro).toBe('Movimiento Progresista');
+  });
+
+  it('una encuesta v4 con candidato de v3 + "no_sabe_no_contesta" persiste null en ambos', async () => {
+    const { db, create } = fakeDbConMemoria();
+    const v3style = conRespuestasV4({
+      preferenciaElectoral: 'lalo_ximenez',
+      preferenciaElectoralOtro: undefined,
+      preferenciaPartido: 'no_sabe_no_contesta',
+      preferenciaPartidoOtro: undefined,
+    });
+
+    await ingestEncuestaWithDeps(entradaV4(v3style), { db });
+
+    const datos = datosDelCreate(create);
+    expect(datos.preferenciaElectoral).toBe('lalo_ximenez');
+    expect(datos.preferenciaElectoralOtro).toBeNull();
+    expect(datos.preferenciaPartido).toBe('no_sabe_no_contesta');
+    expect(datos.preferenciaPartidoOtro).toBeNull();
+  });
+
+  it('el reenvío v4 idéntico devuelve el MISMO idRemoto sin duplicar la fila', async () => {
+    const { db, filas } = fakeDbConMemoria();
+
+    const primera = await ingestEncuestaWithDeps(entradaV4(encuestaV4CompletaValida()), { db });
+    const reenvio = await ingestEncuestaWithDeps(entradaV4(encuestaV4CompletaValida()), { db });
+
+    expect(primera.created).toBe(true);
+    expect(reenvio).toEqual({ idRemoto: primera.idRemoto, created: false });
+    expect(filas.size).toBe(1);
+  });
+
+  it('una encuesta v3 persiste preferenciaElectoralOtro/preferenciaPartidoOtro como null/undefined', async () => {
+    const { db, create } = fakeDbConMemoria();
+
+    await ingestEncuestaWithDeps(entrada(encuestaCompletaValida()), { db });
+
+    const datos = datosDelCreate(create);
+    expect(datos.versionCuestionario).toBe(3);
+    // La fila v3 no emite estas claves, así que quedan ausentes (o null en la BD si hay default)
+    expect(datos.preferenciaElectoralOtro).toBeUndefined();
+    expect(datos.preferenciaPartidoOtro).toBeUndefined();
+  });
+
+  it('el mismo idLocal v4 con otro contenido en los campos nuevos es 409', async () => {
+    const { db, filas } = fakeDbConMemoria();
+
+    const original = await ingestEncuestaWithDeps(
+      entradaV4(conRespuestasV4({
+        preferenciaElectoral: 'otro',
+        preferenciaElectoralOtro: 'Candidato X',
+      })),
+      { db },
+    );
+
+    await expect(
+      ingestEncuestaWithDeps(
+        entradaV4(conRespuestasV4({
+          preferenciaElectoral: 'otro',
+          preferenciaElectoralOtro: 'Candidato Y', // Distinto
+        })),
+        { db },
+      ),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'CONFLICT',
+    });
+
+    expect(filas.size).toBe(1);
+    const fila = filas.get(encuestaV4CompletaValida().idLocal as string)!;
+    expect(fila.idRemoto).toBe(original.idRemoto);
+    expect(fila.preferenciaElectoralOtro).toBe('Candidato X');
   });
 });

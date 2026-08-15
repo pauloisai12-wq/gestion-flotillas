@@ -91,7 +91,11 @@ function encuestaCompletada(overrides: Partial<EncuestaExportRow> = {}): Encuest
     rolLalo: 'empresario',
     opinionLalo: 'fuerte',
     preferenciaElectoral: 'lalo_ximenez',
+    preferenciaElectoralOtro: null,
     preferenciaPartido: 'morena',
+    preferenciaPartidoOtro: null,
+    // Los campos nuevos v4 quedan nullificados en una fila v3, tal como se
+    // persisten de la ingesta: un v3 no traerá nunca "otro" ni texto libre.
     // Pivoteo: [{ gobernante: 'sheinbaum', calificacion: 'fuerte' }, ...]
     aprobacionPorGobernante: [
       { gobernante: 'sheinbaum', calificacion: 'fuerte' },
@@ -212,8 +216,8 @@ describe('GET /api/encuestas/export.csv', () => {
     expect(response.headers['content-type']).toContain('text/csv');
     // El archivo es exactamente BOM + encabezados: ni una columna de más.
     expect(response.text).toBe(`\uFEFF${ENCABEZADOS}\r\n`);
-    // La unión de los dos cuestionarios: 36 columnas v3 + 15 v1.
-    expect(ENCUESTAS_CSV_HEADERS).toHaveLength(51);
+    // La unión de las tres versiones: 36 columnas v3 + 2 nuevas v4 + 15 v1.
+    expect(ENCUESTAS_CSV_HEADERS).toHaveLength(53);
     // Ni el body crudo ni su hash tienen columna en el CSV.
     expect(ENCUESTAS_CSV_HEADERS.some((h) => /payload|hash/i.test(h))).toBe(false);
   });
@@ -367,5 +371,87 @@ describe('GET /api/encuestas/export.csv', () => {
       .query({ dateFrom: '2026-01-01', dateTo: '2027-01-01' });
 
     expect(response.status).toBe(200);
+  });
+
+  describe('Campos nuevos v4 en el CSV', () => {
+    it('una fila v4 con "otro" + textos emite ambas columnas nuevas', async () => {
+      const encuestaV4 = encuestaCompletada({
+        id: 4,
+        idRemoto: '7a1d9c22-1f4e-4f2a-9d3b-5c6e7f8a9b04',
+        idLocal: '3f2504e0-4f89-41d3-9a0c-0305e82c3304',
+        versionCuestionario: 4,
+        preferenciaElectoral: 'otro',
+        preferenciaElectoralOtro: 'Candidato independiente X',
+        preferenciaPartido: 'otro',
+        preferenciaPartidoOtro: 'Movimiento Popular Alternativo',
+      });
+
+      iterateForExport.mockImplementation(async function* () {
+        yield [encuestaV4];
+      });
+
+      const response = await request(crearApp()).get(RUTA).query(FILTRO);
+
+      expect(response.status).toBe(200);
+      const lineas = response.text.split('\r\n');
+      expect(lineas[0]).toBe(`﻿${ENCABEZADOS}`);
+
+      // Los campos nuevos están en el encabezado.
+      expect(ENCUESTAS_CSV_HEADERS).toContain('Preferencia electoral (otro)');
+      expect(ENCUESTAS_CSV_HEADERS).toContain('Preferencia partido (otro)');
+
+      // La fila v4 emite los textos en esas columnas.
+      expect(celda(lineas[1], 'Preferencia electoral (otro)')).toBe('Candidato independiente X');
+      expect(celda(lineas[1], 'Preferencia partido (otro)')).toBe('Movimiento Popular Alternativo');
+    });
+
+    it('una fila v4 sin "otro" deja las columnas nuevas vacías', async () => {
+      const encuestaV4Normal = encuestaCompletada({
+        id: 5,
+        idRemoto: '7a1d9c22-1f4e-4f2a-9d3b-5c6e7f8a9b05',
+        idLocal: '3f2504e0-4f89-41d3-9a0c-0305e82c3305',
+        versionCuestionario: 4,
+        preferenciaElectoral: 'lalo_ximenez',
+        preferenciaElectoralOtro: null,
+        preferenciaPartido: 'morena',
+        preferenciaPartidoOtro: null,
+      });
+
+      iterateForExport.mockImplementation(async function* () {
+        yield [encuestaV4Normal];
+      });
+
+      const response = await request(crearApp()).get(RUTA).query(FILTRO);
+
+      const lineas = response.text.split('\r\n');
+      expect(celda(lineas[1], 'Preferencia electoral (otro)')).toBe('');
+      expect(celda(lineas[1], 'Preferencia partido (otro)')).toBe('');
+    });
+
+    it('una fila v3 deja las columnas nuevas de v4 vacías (como siempre)', async () => {
+      iterateForExport.mockImplementation(async function* () {
+        yield [encuestaCompletada()];
+      });
+
+      const response = await request(crearApp()).get(RUTA).query(FILTRO);
+
+      const lineas = response.text.split('\r\n');
+      expect(celda(lineas[1], 'Preferencia electoral (otro)')).toBe('');
+      expect(celda(lineas[1], 'Preferencia partido (otro)')).toBe('');
+    });
+
+    it('las columnas nuevas están adyacentes a sus enums correspondientes', () => {
+      // Preferencia electoral (otro) debe estar justo después de Preferencia electoral
+      // Preferencia partido (otro) debe estar justo después de Preferencia partido
+      const prefElectoralIdx = ENCUESTAS_CSV_HEADERS.indexOf('Preferencia electoral');
+      const prefElectoralOtroIdx = ENCUESTAS_CSV_HEADERS.indexOf('Preferencia electoral (otro)');
+      const prefPartidoIdx = ENCUESTAS_CSV_HEADERS.indexOf('Preferencia partido');
+      const prefPartidoOtroIdx = ENCUESTAS_CSV_HEADERS.indexOf('Preferencia partido (otro)');
+      
+      expect(prefElectoralIdx).toBeGreaterThanOrEqual(0);
+      expect(prefElectoralOtroIdx).toBe(prefElectoralIdx + 1);
+      expect(prefPartidoIdx).toBeGreaterThanOrEqual(0);
+      expect(prefPartidoOtroIdx).toBe(prefPartidoIdx + 1);
+    });
   });
 });

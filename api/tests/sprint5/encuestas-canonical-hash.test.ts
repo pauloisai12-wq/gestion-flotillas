@@ -2,17 +2,21 @@ import { describe, expect, it } from 'vitest';
 import {
   canonicalizarEncuestaV1,
   canonicalizarEncuestaV3,
+  canonicalizarEncuestaV4,
   hashEncuestaV1,
   hashEncuestaV3,
+  hashEncuestaV4,
 } from '../../src/lib/encuestasCanonical';
 import {
   encuestaV1Schema,
   encuestaV3Schema,
+  encuestaV4Schema,
 } from '../../src/validators/encuestasIngestValidator';
 import {
   encuestaCompletaValida,
   encuestaV1CompletaValida,
   encuestaV1NoElegibleValida,
+  encuestaV4CompletaValida,
   sinClaves,
   type PayloadEncuesta,
 } from './fixtures';
@@ -305,6 +309,22 @@ describe('hashEncuestaV1 — lo que SÍ debe cambiar el hash', () => {
   });
 });
 
+// Helpers v4: idénticos a los de v3, pero con schema y hash de la versión 4.
+function hashV4De(payload: PayloadEncuesta): string {
+  const r = encuestaV4Schema.safeParse(payload);
+  if (!r.success) throw new Error('fixture v4 inválido: ' + JSON.stringify(r.error.issues));
+  return hashEncuestaV4(r.data);
+}
+
+function canonicoV4(payload: PayloadEncuesta): string {
+  return canonicalizarEncuestaV4(encuestaV4Schema.parse(payload));
+}
+
+function conRespuestasV4(cambios: Record<string, unknown>): PayloadEncuesta {
+  const base = encuestaV4CompletaValida();
+  return { ...base, respuestas: { ...(base.respuestas as Record<string, unknown>), ...cambios } };
+}
+
 // Estos hashes protegen la compatibilidad de los payloadHash PERSISTIDOS: son
 // los sha256 reales que el algoritmo vigente produce para las tres fixtures
 // deterministas. Si este test falla, tu cambio rompe la idempotencia de los
@@ -328,5 +348,131 @@ describe('golden hashes — compatibilidad con los payloadHash persistidos', () 
     expect(hashDe(encuestaCompletaValida())).toBe(
       '684fb294d27cc70b6cba6c9c630bc88ac350117ca05ddd49f8a08703dc06d291',
     );
+  });
+
+  it('v4 completada con códigos normales preserva su hash (protege payloadHash v4 persistidos)', () => {
+    // Este hash protege la estabilidad de los registros v4 que se persistan desde
+    // este despliegue en adelante. El fixture v4 base trae códigos normales sin "otro".
+    expect(hashV4De(encuestaV4CompletaValida())).toBe(
+      '043af11ed4d5403f3f051a6fa77d7fa2841026e0ceba93a75ac85e5d1bf55723',
+    );
+  });
+
+  it('v4 con "otro" + texto en ambos campos preserva su hash', () => {
+    // Fixture alternativa: electoral "otro" + texto, partido "otro" + texto.
+    // Protege cambios que rompan el hash cuando hay textos presentes.
+    const v4conOtros = conRespuestasV4({
+      preferenciaElectoral: 'otro',
+      preferenciaElectoralOtro: 'Candidato independiente X',
+      preferenciaPartido: 'otro',
+      preferenciaPartidoOtro: 'Movimiento Popular Alternativo',
+    });
+    expect(hashV4De(v4conOtros)).toBe(
+      '0a9fc6f464d16cf239fefbbf8da49404fe978f24b5f0877ccf319ddc5130690c',
+    );
+  });
+});
+
+describe('canonicalizarEncuestaV4 — estructura', () => {
+  it('emite las claves en orden fijo (compatibilidad de hashes persistidos)', () => {
+    const canónico = canonicoV4(encuestaV4CompletaValida());
+    const objeto = JSON.parse(canónico) as Record<string, unknown>;
+    expect(Object.keys(objeto)).toEqual([
+      'v',
+      'idLocal',
+      'folioLocal',
+      'encuestador',
+      'versionCuestionario',
+      'estado',
+      'fechaHoraInicio',
+      'fechaHoraFinalizacion',
+      'duracionSegundos',
+      'respuestas',
+      'ubicacion',
+      'dispositivo',
+      'versionAplicacion',
+    ]);
+    expect(objeto.v).toBe(3);
+  });
+
+  it('emite las respuestas en orden fijo por construcción', () => {
+    const canónico = canonicoV4(encuestaV4CompletaValida());
+    const objeto = JSON.parse(canónico) as Record<string, unknown>;
+    const respuestas = objeto.respuestas as Record<string, unknown>;
+    expect(Object.keys(respuestas)).toEqual([
+      'sexo',
+      'rangoEdad',
+      'empresariosConocidos',
+      'politicosConocidos',
+      'conoceLalo',
+      'rolLalo',
+      'opinionLalo',
+      'preferenciaElectoral',
+      'preferenciaElectoralOtro',
+      'preferenciaPartido',
+      'preferenciaPartidoOtro',
+      'aprobacionPorGobernante',
+    ]);
+  });
+
+  it('trata preferenciaElectoralOtro y preferenciaPartidoOtro ausentes como null en el JSON canónico', () => {
+    const sinTextos = conRespuestasV4({
+      preferenciaElectoral: 'lalo_ximenez',
+      preferenciaElectoralOtro: undefined,
+      preferenciaPartido: 'morena',
+      preferenciaPartidoOtro: undefined,
+    });
+    const canónico = canonicoV4(sinTextos);
+    expect(canónico).toContain('"preferenciaElectoralOtro":null');
+    expect(canónico).toContain('"preferenciaPartidoOtro":null');
+  });
+
+  it('preserva el texto cuando preferenciaElectoral es "otro"', () => {
+    const conOtro = conRespuestasV4({
+      preferenciaElectoral: 'otro',
+      preferenciaElectoralOtro: 'Candidato X',
+    });
+    const canónico = canonicoV4(conOtro);
+    expect(canónico).toContain('"preferenciaElectoral":"otro"');
+    expect(canónico).toContain('"preferenciaElectoralOtro":"Candidato X"');
+  });
+
+  it('preserva el texto cuando preferenciaPartido es "otro"', () => {
+    const conOtro = conRespuestasV4({
+      preferenciaPartido: 'otro',
+      preferenciaPartidoOtro: 'Movimiento Y',
+    });
+    const canónico = canonicoV4(conOtro);
+    expect(canónico).toContain('"preferenciaPartido":"otro"');
+    expect(canónico).toContain('"preferenciaPartidoOtro":"Movimiento Y"');
+  });
+
+  it('es estable ante reorden de aprobacionPorGobernante (conjunto, como v3)', () => {
+    const reordenada = conRespuestasV4({
+      aprobacionPorGobernante: [
+        { gobernante: 'huerta', calificacion: 'regular' },
+        { gobernante: 'jara', calificacion: 'buena' },
+        { gobernante: 'sheinbaum', calificacion: 'muy_buena' },
+      ],
+    });
+    const ordenOriginal = conRespuestasV4({
+      aprobacionPorGobernante: [
+        { gobernante: 'sheinbaum', calificacion: 'muy_buena' },
+        { gobernante: 'jara', calificacion: 'buena' },
+        { gobernante: 'huerta', calificacion: 'regular' },
+      ],
+    });
+    expect(hashV4De(reordenada)).toBe(hashV4De(ordenOriginal));
+  });
+
+  it('ignora los campos de sincronización del teléfono', () => {
+    const conSync = encuestaV4CompletaValida({
+      estadoSincronizacion: 'reintentando',
+      numeroIntentosSincronizacion: 7,
+      fechaUltimoIntento: '2026-08-02T14:10:00.000Z',
+      fechaSincronizacion: '2026-08-02T14:11:00.000Z',
+      idRemoto: '9f1b3c2d-4e5f-4a6b-8c9d-0e1f2a3b4c5d',
+    });
+    expect(hashV4De(conSync)).toBe(hashV4De(encuestaV4CompletaValida()));
   });
 });

@@ -16,16 +16,17 @@
 openapi: 3.1.0
 
 info:
-  title: Encuestas Okrean — API de ingesta (v1 y v3)
-  version: '3.1.0'
+  title: Encuestas Okrean — API de ingesta (v1, v3 y v4)
+  version: '4.0.0'
   summary: Recepción de encuestas de campo desde la app móvil Encuestas Okrean.
   description: |
     Contrato entre la app móvil **Encuestas Okrean** y el backend de flotillas.
 
-    **Se aceptan DOS versiones del cuestionario:** `versionCuestionario: 1` (el
-    restaurado, con sus dos ramas por `estado`) y `versionCuestionario: 3` (el
-    vigente). El servidor despacha por ese entero **antes** de validar y cada
-    versión tiene su propio schema; cualquier otro entero recibe
+    **Se aceptan TRES versiones del cuestionario:** `versionCuestionario: 1` (el
+    restaurado, con sus dos ramas por `estado`), `versionCuestionario: 3` (el
+    vigente) y `versionCuestionario: 4` (v3 extendida con opciones "otro" y
+    preguntas abiertas). El servidor despacha por ese entero **antes** de validar
+    y cada versión tiene su propio schema; cualquier otro entero recibe
     `422 UNSUPPORTED_VERSION`.
 
     Módulo **separado** de la ingesta de GeoCampo (`/api/qa-externa/*`): tablas
@@ -91,13 +92,14 @@ paths:
         content:
           application/json:
             schema:
-              # Las dos versiones del cuestionario, seleccionadas por el `const`
-              # de `versionCuestionario` (1 o 3) que lleva cada rama. NO se usa
+              # Las tres versiones del cuestionario, seleccionadas por el `const`
+              # de `versionCuestionario` (1, 3 o 4) que lleva cada rama. NO se usa
               # `discriminator`: el keyword exige una propiedad de tipo string y
               # aquí el discriminante es un entero.
               oneOf:
                 - $ref: '#/components/schemas/EncuestaV1'
                 - $ref: '#/components/schemas/EncuestaV3'
+                - $ref: '#/components/schemas/EncuestaV4'
             examples:
               encuestaV3:
                 summary: Encuesta completada (v3)
@@ -138,6 +140,47 @@ paths:
                     modelo: 'Moto G54'
                     versionSistema: '14'
                   versionAplicacion: '2.0.0'
+              encuestaV4:
+                summary: Encuesta completada (v4 con "otro")
+                value:
+                  idLocal: 'a1b2c3d4-e5f6-47a8-9b0c-1d2e3f4a5b6c'
+                  folioLocal: 'LX-001250'
+                  encuestador: 'Roberto García'
+                  versionCuestionario: 4
+                  estado: completada
+                  fechaHoraInicio: '2026-07-31T09:30:00.000Z'
+                  fechaHoraFinalizacion: '2026-07-31T09:35:20.000Z'
+                  duracionSegundos: 320
+                  respuestas:
+                    sexo: hombre
+                    rangoEdad: '18_30'
+                    empresariosConocidos: ['Juan Pérez']
+                    politicosConocidos: ['Otro político local']
+                    conoceLalo: 'si'
+                    rolLalo: 'politico_lider_social'
+                    opinionLalo: 'regular'
+                    preferenciaElectoral: otro
+                    preferenciaElectoralOtro: 'Candidato independiente'
+                    preferenciaPartido: otro
+                    preferenciaPartidoOtro: 'Movimiento local'
+                    aprobacionPorGobernante:
+                      - { gobernante: sheinbaum, calificacion: regular }
+                      - { gobernante: jara, calificacion: mala }
+                      - { gobernante: huerta, calificacion: buena }
+                  ubicacion:
+                    disponible: true
+                    latitud: 19.5432
+                    longitud: -99.1456
+                    precisionMetros: 25.0
+                    fechaHoraCaptura: '2026-07-31T09:35:15.000Z'
+                    permiso: concedido
+                    servicioActivo: true
+                    esValida: true
+                  dispositivo:
+                    plataforma: android
+                    modelo: 'Samsung A12'
+                    versionSistema: '11'
+                  versionAplicacion: '2.1.0'
               encuestaV1:
                 summary: Encuesta completada, elegible (v1)
                 value:
@@ -264,7 +307,7 @@ paths:
           description: |
             El JSON es válido pero el contenido no pasa el cuestionario de su
             versión (`VALIDATION_ERROR`), o `versionCuestionario` es un entero
-            fuera de {1, 3} (`UNSUPPORTED_VERSION`). **Terminal**: reintentar el
+            fuera de {1, 3, 4} (`UNSUPPORTED_VERSION`). **Terminal**: reintentar el
             mismo payload volverá a fallar.
           content:
             application/json:
@@ -296,7 +339,7 @@ paths:
                         message: 'mediosConocimiento debe venir respondida si conoce al menos a una persona'
                     requestId: '0f0c1a7e-…'
                 versionNoSoportada:
-                  summary: Cuestionario de una versión que este servidor no habla
+                  summary: Cuestionario de una versión que este servidor no habla (p. ej. v2, v5)
                   value:
                     error: 'Versión de cuestionario no soportada'
                     code: UNSUPPORTED_VERSION
@@ -449,6 +492,36 @@ components:
       description: Preferencia partidista declarada.
       enum: [pri, morena, pan, panal_oaxaca, pt, prd_oaxaca, pvem, pto, mc]
 
+    PreferenciaElectoralV4:
+      type: string
+      description: |
+        Preferencia electoral declarada (v4). Extiende la v3 con opciones de texto libre.
+      enum:
+        - lalo_ximenez
+        - irineo_molina
+        - fernando_huerta
+        - paola_barrera
+        - ana_gabriela_delgado
+        - otro
+        - no_sabe_no_contesta
+
+    PartidoV4:
+      type: string
+      description: |
+        Preferencia partidista declarada (v4). Extiende la v3 con opciones de texto libre.
+      enum:
+        - pri
+        - morena
+        - pan
+        - panal_oaxaca
+        - pt
+        - prd_oaxaca
+        - pvem
+        - pto
+        - mc
+        - otro
+        - no_sabe_no_contesta
+
     GobernantesV3:
       type: string
       description: Gobernante del catálogo para aprobación.
@@ -581,9 +654,9 @@ components:
         calificacion:
           $ref: '#/components/schemas/CalificacionV3'
 
-    # ── Bloques compartidos por las dos versiones ───────────────────────────
+    # ── Bloques compartidos por las tres versiones ───────────────────────────
     # El cuestionario cambia, pero la ubicación y los metadatos del teléfono son
-    # los mismos en v1 y en v3. Conservan los nombres publicados en el spec
+    # los mismos en v1, v3 y v4. Conservan los nombres publicados en el spec
     # 3.0.0 (el sufijo `V1` viene de la ruta `/api/v1/`, no del cuestionario):
     # renombrarlos rompería cualquier cliente ya generado de ese spec.
 
@@ -779,6 +852,91 @@ components:
           items:
             $ref: '#/components/schemas/AprobacionPorGobernanteV3'
 
+    RespuestasV4:
+      type: object
+      additionalProperties: false
+      required:
+        - sexo
+        - rangoEdad
+        - empresariosConocidos
+        - politicosConocidos
+        - conoceLalo
+        - rolLalo
+        - opinionLalo
+        - preferenciaElectoral
+        - preferenciaPartido
+        - aprobacionPorGobernante
+      description: |
+        Respuestas de v4 (igual a v3 excepto por los nuevos catálogos y campos opcionales).
+        Los campos `preferenciaElectoralOtro` y `preferenciaPartidoOtro` son opcionales,
+        pero con regla condicional: si `preferenciaElectoral` o `preferenciaPartido`
+        (según corresponda) es `"otro"`, el campo de texto es **obligatorio** (1–80 chars
+        tras trim); si es cualquier otro valor, el campo presente se **rechaza**; en
+        `no_sabe_no_contesta` se omite.
+      properties:
+        sexo:
+          $ref: '#/components/schemas/SexoV3'
+        rangoEdad:
+          $ref: '#/components/schemas/RangoEdadV3'
+        empresariosConocidos:
+          type: array
+          minItems: 0
+          maxItems: 3
+          description: |
+            Nombres de empresarios conocidos. Texto libre, 1–80 caracteres cada uno.
+            Se recorta el espacio sobrante (trim).
+          items:
+            type: string
+            minLength: 1
+            maxLength: 80
+        politicosConocidos:
+          type: array
+          minItems: 1
+          maxItems: 3
+          description: |
+            Nombres de políticos conocidos. Texto libre, 1–80 caracteres cada uno.
+            Debe traer al menos uno.
+          items:
+            type: string
+            minLength: 1
+            maxLength: 80
+        conoceLalo:
+          type: string
+          enum: ['si', 'no']
+          description: ¿Conoce a Lalo Ximénez?
+        rolLalo:
+          $ref: '#/components/schemas/RolLaloV3'
+        opinionLalo:
+          $ref: '#/components/schemas/OpinionLaloV3'
+        preferenciaElectoral:
+          $ref: '#/components/schemas/PreferenciaElectoralV4'
+        preferenciaElectoralOtro:
+          type: string
+          minLength: 1
+          maxLength: 80
+          description: |
+            Campo opcional (v4): especificación en texto libre cuando
+            `preferenciaElectoral` es `"otro"`.
+        preferenciaPartido:
+          $ref: '#/components/schemas/PartidoV4'
+        preferenciaPartidoOtro:
+          type: string
+          minLength: 1
+          maxLength: 80
+          description: |
+            Campo opcional (v4): especificación en texto libre cuando
+            `preferenciaPartido` es `"otro"`.
+        aprobacionPorGobernante:
+          type: array
+          minItems: 3
+          maxItems: 3
+          description: |
+            Exactamente 3 filas, una por gobernante (sheinbaum, jara, huerta),
+            sin repetir. El orden en el payload será normalizado al orden canónico
+            antes de hashear.
+          items:
+            $ref: '#/components/schemas/AprobacionPorGobernanteV3'
+
     RespuestasCompletadaV1:
       type: object
       additionalProperties: false
@@ -851,12 +1009,12 @@ components:
     EncuestaBaseV3:
       type: object
       description: |
-        Campos de la **raíz** que las dos versiones comparten. Cada versión añade
+        Campos de la **raíz** que las tres versiones comparten. Cada versión añade
         encima su `versionCuestionario`, su `estado` y su bloque `respuestas` (y,
         en v1, la `elegibilidad`).
 
         El nombre conserva el sufijo V3 del spec 3.0.0 aunque la base sea común a
-        las dos versiones: renombrarlo rompería los clientes ya generados.
+        las tres versiones: renombrarlo rompería los clientes ya generados.
       required:
         - idLocal
         - fechaHoraInicio
@@ -937,15 +1095,42 @@ components:
               const: 3
               description: |
                 Versión del cuestionario. Además del `3` se acepta el `1` (ver
-                `EncuestaV1`); cualquier otro entero responde 422
-                `UNSUPPORTED_VERSION` (y un valor que no sea entero positivo,
-                422 `VALIDATION_ERROR`).
+                `EncuestaV1`) y el `4` (ver `EncuestaV4`); cualquier otro entero
+                responde 422 `UNSUPPORTED_VERSION` (y un valor que no sea entero
+                positivo, 422 `VALIDATION_ERROR`).
             estado:
               type: string
               const: completada
               description: Siempre `completada` en v3.
             respuestas:
               $ref: '#/components/schemas/RespuestasV3'
+
+    EncuestaV4:
+      title: Encuesta v4 (v3 extendida con opciones "otro")
+      description: |
+        Payload de una encuesta v4. Idéntico a v3 salvo por los nuevos catálogos de
+        preferencias (que incluyen `"otro"` y `"no_sabe_no_contesta"`) y dos campos
+        opcionales condicionales para especificar en texto libre. Todos los demás
+        campos de respuesta son obligatorios y no hay ramas: `estado` solo puede
+        ser `completada`.
+      allOf:
+        - $ref: '#/components/schemas/EncuestaBaseV3'
+        - type: object
+          required: [versionCuestionario, estado, respuestas]
+          properties:
+            versionCuestionario:
+              type: integer
+              const: 4
+              description: |
+                Versión del cuestionario. Además del `4` se acepta el `1` (ver
+                `EncuestaV1`) y el `3` (ver `EncuestaV3`); cualquier otro entero
+                responde 422 `UNSUPPORTED_VERSION`.
+            estado:
+              type: string
+              const: completada
+              description: Siempre `completada` en v4.
+            respuestas:
+              $ref: '#/components/schemas/RespuestasV4'
 
     EncuestaCompletadaV1:
       title: Encuesta v1 completada (elegible)

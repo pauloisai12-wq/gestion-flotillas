@@ -19,13 +19,14 @@
 // no pueden alterar el hash de idempotencia ni acabar en columnas. El body tal
 // como llegó se conserva aparte, en payloadRaw.
 //
-// Aquí conviven los DOS cuestionarios que el servidor sabe recibir: el v3
-// vigente y el v1 restaurado (la app móvil sigue mandando ambos). Cada uno tiene
-// su schema y sus catálogos; nada se comparte salvo los helpers, la ubicación y
-// la coherencia de fechas/duración, que son idénticos entre versiones.
+// Aquí conviven los TRES cuestionarios que el servidor sabe recibir: el v3
+// vigente, el v4 expandido (enums de preferencias + campos de texto condicionales),
+// y el v1 restaurado (la app móvil Encuestas Okrean 3 emite las tres versiones).
+// Cada uno tiene su schema y sus catálogos; nada se comparte salvo los helpers,
+// la ubicación y la coherencia de fechas/duración, que son idénticos entre versiones.
 //
 // Dos cosas que a propósito NO viven aquí:
-//  - el dispatch por versión de cuestionario: una versión ∉ {1, 3} se responde
+//  - el dispatch por versión de cuestionario: una versión ∉ {1, 3, 4} se responde
 //    422 UNSUPPORTED_VERSION en el router, antes de tocar estos schemas;
 //  - la forma del error: el router responde 422 inline con las issues y nunca
 //    relanza el ZodError (el handler global lo convertiría en 400).
@@ -65,6 +66,12 @@ export const PREFERENCIAS_ELECTORALES_V3 = [
 ] as const;
 export const PARTIDOS_V3 = [
   'pri', 'morena', 'pan', 'panal_oaxaca', 'pt', 'prd_oaxaca', 'pvem', 'pto', 'mc',
+] as const;
+export const PREFERENCIAS_ELECTORALES_V4 = [
+  'lalo_ximenez', 'irineo_molina', 'fernando_huerta', 'paola_barrera', 'ana_gabriela_delgado', 'otro', 'no_sabe_no_contesta',
+] as const;
+export const PARTIDOS_V4 = [
+  'pri', 'morena', 'pan', 'panal_oaxaca', 'pt', 'prd_oaxaca', 'pvem', 'pto', 'mc', 'otro', 'no_sabe_no_contesta',
 ] as const;
 export const GOBERNANTES_V3 = ['sheinbaum', 'jara', 'huerta'] as const;
 export const CALIFICACIONES_V3 = ['muy_buena', 'buena', 'regular', 'mala', 'muy_mala'] as const;
@@ -133,6 +140,15 @@ const textoCorto = (max: number, campo: string) =>
     .min(1, `${campo} es obligatorio`)
     .max(max, `${campo} no puede exceder ${max} caracteres`);
 
+/** Texto libre opcional: si se proporciona, se recorta y se acota a [1, max]. */
+const textoOpcional = (max: number, campo: string) =>
+  z
+    .string({ error: `${campo} debe ser texto` })
+    .trim()
+    .min(1, `${campo} no puede ir vacío`)
+    .max(max, `${campo} no puede exceder ${max} caracteres`)
+    .optional();
+
 // ---------------------------------------------------------------------------
 // Listas de nombres tecleados por el encuestador (empresarios, políticos)
 // ---------------------------------------------------------------------------
@@ -159,23 +175,35 @@ const listaDeNombres = (campo: string, min: number) =>
 // ---------------------------------------------------------------------------
 
 // P10 — aprobación por gobernante: exactamente los 3 del catálogo, sin repetir.
-const aprobacionPorGobernanteSchema = z
-  .array(
-    z.object({
-      gobernante: z.enum(GOBERNANTES_V3, { error: 'gobernante fuera del catálogo de la versión 3' }),
-      calificacion: z.enum(CALIFICACIONES_V3, { error: 'calificacion fuera del catálogo de la versión 3' }),
-    }),
-  )
-  .length(3, 'aprobacionPorGobernante debe traer los 3 gobernantes del catálogo v3')
-  .superRefine((filas, ctx) => {
-    // El check corre aunque el parseo previo haya fallado: comprobar la forma
-    // antes de recorrer (mismo criterio que el conocimientoPorPersona de v1).
-    if (!Array.isArray(filas)) return;
-    const distintos = new Set(filas.map((f) => f?.gobernante));
-    if (distintos.size !== filas.length) {
-      ctx.addIssue({ code: 'custom', message: 'aprobacionPorGobernante no puede repetir gobernantes' });
-    }
-  });
+// Los catálogos son idénticos entre v3 y v4, pero los mensajes de error deben
+// ser específicos de cada versión para evitar regresión en los payloads v3.
+const crearAprobacionPorGobernanteSchema = (version: 3 | 4) => {
+  const mensajeLength = version === 3
+    ? 'aprobacionPorGobernante debe traer los 3 gobernantes del catálogo v3'
+    : 'aprobacionPorGobernante debe traer los 3 gobernantes del catálogo v4';
+  const sufijo = version === 3 ? 'de la versión 3' : 'de la versión 4';
+
+  return z
+    .array(
+      z.object({
+        gobernante: z.enum(GOBERNANTES_V3, { error: `gobernante fuera del catálogo ${sufijo}` }),
+        calificacion: z.enum(CALIFICACIONES_V3, { error: `calificacion fuera del catálogo ${sufijo}` }),
+      }),
+    )
+    .length(3, mensajeLength)
+    .superRefine((filas, ctx) => {
+      // El check corre aunque el parseo previo haya fallado: comprobar la forma
+      // antes de recorrer (mismo criterio que el conocimientoPorPersona de v1).
+      if (!Array.isArray(filas)) return;
+      const distintos = new Set(filas.map((f) => f?.gobernante));
+      if (distintos.size !== filas.length) {
+        ctx.addIssue({ code: 'custom', message: 'aprobacionPorGobernante no puede repetir gobernantes' });
+      }
+    });
+};
+
+const aprobacionPorGobernanteSchemaV3 = crearAprobacionPorGobernanteSchema(3);
+const aprobacionPorGobernanteSchemaV4 = crearAprobacionPorGobernanteSchema(4);
 
 // ---------------------------------------------------------------------------
 // Bloque de respuestas v3
@@ -199,11 +227,72 @@ const respuestasV3Schema = z.object({
   preferenciaPartido: z.enum(PARTIDOS_V3, {
     error: 'preferenciaPartido fuera del catálogo de la versión 3',
   }),
-  aprobacionPorGobernante: aprobacionPorGobernanteSchema,
+  aprobacionPorGobernante: aprobacionPorGobernanteSchemaV3,
 });
 
+// Bloque de respuestas v4: igual a v3 pero con catálogos expandidos de
+// preferencias electorales y partidos (que incluyen "otro" y
+// "no_sabe_no_contesta"), y dos campos opcionales condicionales
+// preferenciaElectoralOtro y preferenciaPartidoOtro que se validan en
+// cruzada: si el código correspondiente es "otro", el texto es obligatorio;
+// si el código NO es "otro", el texto presente se rechaza (no se silencia).
+const respuestasV4Schema = z
+  .object({
+    sexo: z.enum(SEXOS_V3, { error: 'sexo fuera del catálogo de la versión 4' }),
+    rangoEdad: z.enum(RANGOS_EDAD_V3, { error: 'rangoEdad fuera del catálogo de la versión 4' }),
+    empresariosConocidos: listaDeNombres('empresariosConocidos', 0),
+    politicosConocidos: listaDeNombres('politicosConocidos', 1),
+    conoceLalo: z.enum(SI_NO_V3, { error: 'conoceLalo debe ser si o no' }),
+    rolLalo: z.enum(ROLES_LALO_V3, { error: 'rolLalo fuera del catálogo de la versión 4' }),
+    opinionLalo: z.enum(OPINIONES_LALO_V3, { error: 'opinionLalo fuera del catálogo de la versión 4' }),
+    preferenciaElectoral: z.enum(PREFERENCIAS_ELECTORALES_V4, {
+      error: 'preferenciaElectoral fuera del catálogo de la versión 4',
+    }),
+    preferenciaElectoralOtro: textoOpcional(80, 'preferenciaElectoralOtro'),
+    preferenciaPartido: z.enum(PARTIDOS_V4, {
+      error: 'preferenciaPartido fuera del catálogo de la versión 4',
+    }),
+    preferenciaPartidoOtro: textoOpcional(80, 'preferenciaPartidoOtro'),
+    aprobacionPorGobernante: aprobacionPorGobernanteSchemaV4,
+  })
+  .superRefine((r, ctx) => {
+    // preferenciaElectoral: si es "otro", el texto es obligatorio; si no es
+    // "otro", el texto presente se rechaza.
+    if (r.preferenciaElectoral === 'otro') {
+      if (typeof r.preferenciaElectoralOtro !== 'string' || r.preferenciaElectoralOtro.trim().length === 0) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['preferenciaElectoralOtro'],
+          message: 'preferenciaElectoralOtro es obligatorio cuando preferenciaElectoral es otro',
+        });
+      }
+    } else if (r.preferenciaElectoralOtro !== undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['preferenciaElectoralOtro'],
+        message: 'preferenciaElectoralOtro solo se admite cuando preferenciaElectoral es otro',
+      });
+    }
+    // preferenciaPartido: regla análoga.
+    if (r.preferenciaPartido === 'otro') {
+      if (typeof r.preferenciaPartidoOtro !== 'string' || r.preferenciaPartidoOtro.trim().length === 0) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['preferenciaPartidoOtro'],
+          message: 'preferenciaPartidoOtro es obligatorio cuando preferenciaPartido es otro',
+        });
+      }
+    } else if (r.preferenciaPartidoOtro !== undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['preferenciaPartidoOtro'],
+        message: 'preferenciaPartidoOtro solo se admite cuando preferenciaPartido es otro',
+      });
+    }
+  });
+
 // ---------------------------------------------------------------------------
-// Ubicación (sin cambios entre v1 y v3)
+// Ubicación (sin cambios entre v1, v3 y v4)
 // ---------------------------------------------------------------------------
 
 const ubicacionDisponibleSchema = z
@@ -292,7 +381,7 @@ const ubicacionSchema = z.discriminatedUnion('disponible', [
 // ---------------------------------------------------------------------------
 
 /**
- * Refinamiento compartido por los dos cuestionarios: la finalización no puede
+ * Refinamiento compartido por los tres cuestionarios: la finalización no puede
  * ser anterior al inicio y `duracionSegundos` tiene que concordar con el
  * intervalo dentro de la tolerancia. Los campos se tipan `unknown` porque el
  * check corre aunque el parseo previo haya fallado (y entonces una fecha sigue
@@ -353,8 +442,9 @@ const camposComunes = {
     .min(1, 'encuestador no puede ir vacío: si no se conoce, omite la clave')
     .max(120, 'encuestador no puede exceder 120 caracteres')
     .optional(),
-  // El bloque lo comparten las dos versiones, así que las ramas v1 sobrescriben
-  // esta clave con su literal(1) después del spread.
+  // El bloque lo comparten las tres versiones, así que las ramas v1 y v4
+  // sobrescriben esta clave con su literal(1) y z.literal(4) respectivamente
+  // después del spread en sus schemas.
   versionCuestionario: z.literal(3),
   fechaHoraInicio: fechaIso('fechaHoraInicio'),
   fechaHoraFinalizacion: fechaIso('fechaHoraFinalizacion'),
@@ -383,6 +473,29 @@ export const encuestaV3Schema = z
   .superRefine(coherenciaFechasDuracion);
 
 export type EncuestaV3 = z.infer<typeof encuestaV3Schema>;
+
+// ---------------------------------------------------------------------------
+// Encuesta v4
+// ---------------------------------------------------------------------------
+// v4 = v3 + códigos "otro" y "no_sabe_no_contesta" en preferencias electorales
+// y de partido, + campos de texto opcional condicional para explicarlos cuando
+// aplica. El resto (estado, fechas, duración, ubicación, dispositivo) es idéntico
+// al v3; no cambian los catálogos de sexo, edad, roles de Lalo, gobernantes, etc.
+
+const camposComunesV4 = {
+  ...camposComunes,
+  versionCuestionario: z.literal(4),
+};
+
+export const encuestaV4Schema = z
+  .object({
+    ...camposComunesV4,
+    estado: z.literal('completada'),
+    respuestas: respuestasV4Schema,
+  })
+  .superRefine(coherenciaFechasDuracion);
+
+export type EncuestaV4 = z.infer<typeof encuestaV4Schema>;
 
 // ---------------------------------------------------------------------------
 // Cuestionario v1 (restaurado)

@@ -35,8 +35,8 @@ export interface EncuestasListQuery {
 
 /**
  * Encuesta serializada para el listado del portal de revisión. Lleva las
- * columnas de las DOS versiones del cuestionario: cada fila llena las de la
- * suya y deja la otra en NULL.
+ * columnas de las TRES versiones del cuestionario: cada fila llena las de la
+ * suya y deja las otras en NULL.
  */
 export interface EncuestaDto {
   id: number;
@@ -46,7 +46,11 @@ export interface EncuestaDto {
   encuestador: string | null;
   versionCuestionario: number;
   preferenciaElectoral: string | null;
+  /** Texto libre de "otro" (v4). NULL = v1/v3 o cuando el código no es "otro". */
+  preferenciaElectoralOtro: string | null;
   preferenciaPartido: string | null;
+  /** Texto libre de "otro" (v4). NULL = v1/v3 o cuando el código no es "otro". */
+  preferenciaPartidoOtro: string | null;
   conoceLalo: string | null;
   /**
    * Equivalentes v1 de las dos preferencias de arriba (P4 y P8 del cuestionario
@@ -95,7 +99,11 @@ export interface EncuestaExportRow {
   rolLalo: string | null;
   opinionLalo: string | null;
   preferenciaElectoral: string | null;
+  /** Texto libre de "otro" (v4). NULL = v1/v3 o cuando el código no es "otro". */
+  preferenciaElectoralOtro: string | null;
   preferenciaPartido: string | null;
+  /** Texto libre de "otro" (v4). NULL = v1/v3 o cuando el código no es "otro". */
+  preferenciaPartidoOtro: string | null;
   aprobacionPorGobernante: unknown;
   /** Bloque v1 (cuestionario restaurado). NULL = fila v3. */
   credencialVigente: string | null;
@@ -137,7 +145,9 @@ const encuestaListSelect = {
   encuestador: true,
   versionCuestionario: true,
   preferenciaElectoral: true,
+  preferenciaElectoralOtro: true,
   preferenciaPartido: true,
+  preferenciaPartidoOtro: true,
   conoceLalo: true,
   partidoPreferido: true,
   candidatoPreferido: true,
@@ -149,7 +159,7 @@ const encuestaListSelect = {
 } as const;
 
 /**
- * Columnas de la exportación: las 51 cabeceras del CSV (v3 + v1). Es un select
+ * Columnas de la exportación: las 53 cabeceras del CSV (v3 + v4 + v1). Es un select
  * distinto del listado a propósito —el CSV sí lleva los JSONB y el bloque de
  * ubicación completo—, pero comparte con él las dos exclusiones que importan:
  * `payloadRaw` y `payloadHash`.
@@ -175,7 +185,9 @@ const encuestaExportSelect = {
   rolLalo: true,
   opinionLalo: true,
   preferenciaElectoral: true,
+  preferenciaElectoralOtro: true,
   preferenciaPartido: true,
+  preferenciaPartidoOtro: true,
   aprobacionPorGobernante: true,
   credencialVigente: true,
   genero: true,
@@ -238,7 +250,9 @@ function toDto(row: EncuestaDto): EncuestaDto {
     encuestador: row.encuestador,
     versionCuestionario: row.versionCuestionario,
     preferenciaElectoral: row.preferenciaElectoral,
+    preferenciaElectoralOtro: row.preferenciaElectoralOtro,
     preferenciaPartido: row.preferenciaPartido,
+    preferenciaPartidoOtro: row.preferenciaPartidoOtro,
     conoceLalo: row.conoceLalo,
     partidoPreferido: row.partidoPreferido,
     candidatoPreferido: row.candidatoPreferido,
@@ -306,8 +320,8 @@ export async function* iterateForExport(
 }
 
 /**
- * Encabezados del CSV (51 columnas: 36 del contrato v3 + 15 del v1), en el
- * mismo orden que produce toCsvRow. Es UN solo archivo con la unión de ambos
+ * Encabezados del CSV (53 columnas: 36 del contrato v3 + 2 nuevos de "otro" en v4 + 15 del v1),
+ * en el mismo orden que produce toCsvRow. Es UN solo archivo con la unión de ambos
  * cuestionarios: cada fila llena las columnas de su versión y deja vacías las
  * de la otra, en vez de dos exportaciones que el revisor tendría que cruzar.
  *
@@ -338,7 +352,9 @@ export const ENCUESTAS_CSV_HEADERS = [
   'Rol Lalo',
   'Opinión Lalo',
   'Preferencia electoral',
+  'Preferencia electoral (otro)',
   'Preferencia partido',
+  'Preferencia partido (otro)',
   'Aprobación sheinbaum',
   'Aprobación jara',
   'Aprobación huerta',
@@ -491,7 +507,7 @@ export function toCsvRow(encuesta: EncuestaExportRow): string {
       encuesta.versionCuestionario,
       encuesta.credencialVigente,
       encuesta.sexo,
-      // Única columna compartida por las dos versiones (catálogos disjuntos).
+      // Única columna compartida por las tres versiones (catálogos disjuntos por versión).
       encuesta.rangoEdad,
       encuesta.genero,
       encuesta.partidoPreferido,
@@ -501,7 +517,9 @@ export function toCsvRow(encuesta: EncuestaExportRow): string {
       encuesta.rolLalo,
       encuesta.opinionLalo,
       encuesta.preferenciaElectoral,
+      encuesta.preferenciaElectoralOtro,
       encuesta.preferenciaPartido,
+      encuesta.preferenciaPartidoOtro,
       // Las 3 columnas de aprobación por gobernante, en orden de GOBERNANTES_V3.
       ...GOBERNANTES_V3.map((g) => calificaciones.get(g) ?? ''),
       // Las 7 columnas de P5 (v1), en orden de PERSONAS_V1. En una encuesta v1

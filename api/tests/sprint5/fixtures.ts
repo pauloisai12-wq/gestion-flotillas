@@ -165,3 +165,51 @@ export function encuestaV1NoElegibleValida(overrides: PayloadEncuesta = {}): Pay
     ...overrides,
   };
 }
+
+/**
+ * Encuesta v4 completada: igual a v3 pero con catálogos extendidos y campos
+ * opcionales de texto libre. Con códigos normales (sin "otro", sin textos).
+ * Los casos excepcionales se construyen en cada test con overrides de respuestas.
+ */
+export function encuestaV4CompletaValida(overrides: PayloadEncuesta = {}): PayloadEncuesta {
+  return {
+    idLocal: '4a8e7f9b-3c2d-4e1f-8a5b-9c7d6e1f2a3b',
+    folioLocal: 'LX-2024',
+    encuestador: 'Carlos Rodríguez',
+    versionCuestionario: 4,
+    estado: 'completada',
+    fechaHoraInicio: '2026-08-02T14:00:00.000Z',
+    fechaHoraFinalizacion: '2026-08-02T14:07:30.000Z',
+    duracionSegundos: 450,
+    respuestas: {
+      sexo: 'hombre',
+      rangoEdad: '46_mas',
+      empresariosConocidos: [],
+      politicosConocidos: ['Lalo Ximénez'],
+      conoceLalo: 'si',
+      rolLalo: 'empresario',
+      opinionLalo: 'muy_buena',
+      preferenciaElectoral: 'lalo_ximenez',
+      preferenciaPartido: 'morena',
+      aprobacionPorGobernante: [
+        { gobernante: 'sheinbaum', calificacion: 'muy_buena' },
+        { gobernante: 'jara', calificacion: 'buena' },
+        { gobernante: 'huerta', calificacion: 'regular' },
+      ],
+    },
+    ubicacion: {
+      disponible: true,
+      latitud: 20.123456,
+      longitud: -98.654321,
+      precisionMetros: 18.3,
+      fechaHoraCaptura: '2026-08-02T14:06:00.000Z',
+      permiso: 'concedido',
+      servicioActivo: true,
+      esValida: true,
+    },
+    dispositivo: { ...DISPOSITIVO },
+    versionAplicacion: '2.1.0',
+    ...SINCRONIZACION,
+    ...overrides,
+  };
+}
