@@ -21,7 +21,7 @@
 //
 // Aquí conviven los TRES cuestionarios que el servidor sabe recibir: el v3
 // vigente, el v4 expandido (enums de preferencias + campos de texto condicionales),
-// y el v1 restaurado (la app móvil sigue mandando el v3 y el v1; v4 será futuro).
+// y el v1 restaurado (la app móvil Encuestas Okrean 3 emite las tres versiones).
 // Cada uno tiene su schema y sus catálogos; nada se comparte salvo los helpers,
 // la ubicación y la coherencia de fechas/duración, que son idénticos entre versiones.
 //
@@ -180,7 +180,7 @@ const listaDeNombres = (campo: string, min: number) =>
 const crearAprobacionPorGobernanteSchema = (version: 3 | 4) => {
   const mensajeLength = version === 3
     ? 'aprobacionPorGobernante debe traer los 3 gobernantes del catálogo v3'
-    : 'aprobacionPorGobernante debe traer los 3 gobernantes del catálogo de la versión 4';
+    : 'aprobacionPorGobernante debe traer los 3 gobernantes del catálogo v4';
   const sufijo = version === 3 ? 'de la versión 3' : 'de la versión 4';
 
   return z

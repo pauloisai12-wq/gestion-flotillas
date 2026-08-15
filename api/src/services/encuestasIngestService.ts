@@ -195,8 +195,9 @@ function respuestasRowV3(d: EncuestaV3): RespuestasV3Row {
 function respuestasRowV4(d: EncuestaV4): RespuestasV4Row {
   const r = d.respuestas;
   // Análoga a respuestasRowV3 pero con los campos opcionales de texto para
-  // "otro": preferenciaElectoralOtro y preferenciaPartidoOtro se guardan
-  // con normalización trim (ausente ≡ null), igual que en el hash canónico.
+  // "otro": preferenciaElectoralOtro y preferenciaPartidoOtro llegan ya
+  // recortados por el validador (trim) y se guardan tal cual (ausente ≡ null),
+  // igual que en el hash canónico.
   const califPorGobernante = new Map(
     r.aprobacionPorGobernante.map((fila) => [fila.gobernante, fila.calificacion] as const),
   );
