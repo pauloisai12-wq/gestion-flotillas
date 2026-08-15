@@ -52,7 +52,7 @@ function crearApp(role?: UserRole) {
 
 const RUTA = '/api/encuestas';
 
-/** Las 15 claves del EncuestaDto (v3 + las dos preferencias v1): ni una más. */
+/** Las 17 claves del EncuestaDto (v3 + dos campos nuevos v4 + dos preferencias v1): ni una más. */
 const CLAVES_DTO = [
   'id',
   'idRemoto',
@@ -60,7 +60,9 @@ const CLAVES_DTO = [
   'encuestador',
   'versionCuestionario',
   'preferenciaElectoral',
+  'preferenciaElectoralOtro',
   'preferenciaPartido',
+  'preferenciaPartidoOtro',
   'conoceLalo',
   'partidoPreferido',
   'candidatoPreferido',
@@ -79,7 +81,9 @@ function encuesta(overrides: Partial<EncuestaDto> = {}): EncuestaDto {
     encuestador: 'María López',
     versionCuestionario: 3,
     preferenciaElectoral: 'lalo_ximenez',
+    preferenciaElectoralOtro: null,
     preferenciaPartido: 'morena',
+    preferenciaPartidoOtro: null,
     conoceLalo: 'si',
     // Preferencias del contrato v1: NULL en una fila v3.
     partidoPreferido: null,
@@ -211,6 +215,37 @@ describe('list — columnas que el servicio pide y devuelve', () => {
     expect(Object.keys(data[0]).sort()).toEqual([...CLAVES_DTO].sort());
     expect(data[0]).toMatchObject({ partidoPreferido: 'pri', candidatoPreferido: 'irineo_molina' });
     expect(data[0]).not.toHaveProperty('payloadRaw');
+  });
+
+  it('v4 con "otro" emite los campos de texto en el DTO', async () => {
+    const { list: listReal } = await vi.importActual<
+      typeof import('../../src/services/encuestasRevisionService')
+    >('../../src/services/encuestasRevisionService');
+
+    prismaFalso.encuesta.findMany.mockResolvedValue([
+      {
+        ...encuesta({
+          versionCuestionario: 4,
+          preferenciaElectoral: 'otro',
+          preferenciaElectoralOtro: 'Candidato independiente',
+          preferenciaPartido: 'otro',
+          preferenciaPartidoOtro: 'Movimiento alternativo',
+        }),
+        payloadRaw: '{"idLocal":"…"}',
+      },
+    ]);
+    prismaFalso.encuesta.count.mockResolvedValue(1);
+
+    const { data } = await listReal({});
+
+    // El DTO v4 con "otro" debe exponer los campos de texto sin truncar.
+    expect(data[0]).toMatchObject({
+      versionCuestionario: 4,
+      preferenciaElectoral: 'otro',
+      preferenciaElectoralOtro: 'Candidato independiente',
+      preferenciaPartido: 'otro',
+      preferenciaPartidoOtro: 'Movimiento alternativo',
+    });
   });
 });
 

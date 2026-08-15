@@ -87,6 +87,7 @@ import {
   encuestaCompletaValida,
   encuestaV1CompletaValida,
   encuestaV1NoElegibleValida,
+  encuestaV4CompletaValida,
   type PayloadEncuesta,
 } from './fixtures';
 
@@ -307,6 +308,130 @@ describe('POST /api/v1/encuestas — rechazos', () => {
     expect(response.status).toBe(400);
     expect(response.body.code).toBe('BAD_REQUEST');
     expect(almacen.filas.size).toBe(0);
+  });
+});
+
+describe('POST /api/v1/encuestas — ingesta HTTP v4', () => {
+  function conRespuestasV4(
+    sobre: PayloadEncuesta,
+    base: PayloadEncuesta = encuestaV4CompletaValida(),
+  ): PayloadEncuesta {
+    return { ...base, respuestas: { ...(base.respuestas as PayloadEncuesta), ...sobre } };
+  }
+
+  it('una encuesta v4 completada válida responde 201 con el idRemoto y nada más', async () => {
+    const response = await request(crearApp()).post(RUTA).send(encuestaV4CompletaValida());
+
+    expect(response.status).toBe(201);
+    expect(Object.keys(response.body)).toEqual(['idRemoto']);
+    expect(typeof response.body.idRemoto).toBe('string');
+    expect(response.body.idRemoto.length).toBeGreaterThan(0);
+    expect(almacen.filas.size).toBe(1);
+  });
+
+  it('una encuesta v4 con preferenciaElectoral=otro + texto responde 201', async () => {
+    const response = await request(crearApp())
+      .post(RUTA)
+      .send(conRespuestasV4({
+        preferenciaElectoral: 'otro',
+        preferenciaElectoralOtro: 'Candidato independiente',
+      }));
+
+    expect(response.status).toBe(201);
+    expect(Object.keys(response.body)).toEqual(['idRemoto']);
+    expect(almacen.filas.size).toBe(1);
+  });
+
+  it('una encuesta v4 con preferenciaPartido=otro + texto responde 201', async () => {
+    const response = await request(crearApp())
+      .post(RUTA)
+      .send(conRespuestasV4({
+        preferenciaPartido: 'otro',
+        preferenciaPartidoOtro: 'Movimiento Popular',
+      }));
+
+    expect(response.status).toBe(201);
+    expect(typeof response.body.idRemoto).toBe('string');
+    expect(almacen.filas.size).toBe(1);
+  });
+
+  it('una encuesta v4 con ambos campos en "otro" + textos responde 201', async () => {
+    const response = await request(crearApp())
+      .post(RUTA)
+      .send(conRespuestasV4({
+        preferenciaElectoral: 'otro',
+        preferenciaElectoralOtro: 'Candidato X',
+        preferenciaPartido: 'otro',
+        preferenciaPartidoOtro: 'Movimiento Y',
+      }));
+
+    expect(response.status).toBe(201);
+    expect(almacen.filas.size).toBe(1);
+  });
+
+  it('el reenvío v4 idéntico responde 200 con el MISMO idRemoto y no duplica', async () => {
+    const app = crearApp();
+
+    const primera = await request(app).post(RUTA).send(encuestaV4CompletaValida());
+    const reenvio = await request(app).post(RUTA).send(encuestaV4CompletaValida());
+
+    expect(primera.status).toBe(201);
+    expect(reenvio.status).toBe(200);
+    expect(reenvio.body.idRemoto).toBe(primera.body.idRemoto);
+    expect(almacen.filas.size).toBe(1);
+  });
+
+  it('v4 con "otro" sin texto responde 422 VALIDATION_ERROR con issue', async () => {
+    const response = await request(crearApp())
+      .post(RUTA)
+      .send(conRespuestasV4({
+        preferenciaElectoral: 'otro',
+        preferenciaElectoralOtro: undefined,
+      }));
+
+    expect(response.status).toBe(422);
+    expect(response.body.code).toBe('VALIDATION_ERROR');
+    expect(response.body.issues.length).toBeGreaterThan(0);
+    expect(response.body.issues.some((i: { field: string }) => i.field === 'respuestas.preferenciaElectoralOtro')).toBe(true);
+    expect(almacen.filas.size).toBe(0);
+  });
+
+  it('v4 con preferenciaPartido="otro" sin texto responde 422 VALIDATION_ERROR', async () => {
+    const response = await request(crearApp())
+      .post(RUTA)
+      .send(conRespuestasV4({
+        preferenciaPartido: 'otro',
+        preferenciaPartidoOtro: undefined,
+      }));
+
+    expect(response.status).toBe(422);
+    expect(response.body.code).toBe('VALIDATION_ERROR');
+    expect(response.body.issues.some((i: { field: string }) => i.field === 'respuestas.preferenciaPartidoOtro')).toBe(true);
+    expect(almacen.filas.size).toBe(0);
+  });
+
+  it('versionCuestionario 5 (no soportada) responde 422 UNSUPPORTED_VERSION', async () => {
+    const response = await request(crearApp())
+      .post(RUTA)
+      .send(encuestaCompletaValida({ versionCuestionario: 5 }));
+
+    expect(response.status).toBe(422);
+    expect(response.body.code).toBe('UNSUPPORTED_VERSION');
+    expect(response.body.details).toEqual({ versionCuestionario: 5 });
+    expect(almacen.filas.size).toBe(0);
+  });
+
+  it('el mismo idLocal v4 con otro contenido responde 409', async () => {
+    const app = crearApp();
+
+    await request(app).post(RUTA).send(encuestaV4CompletaValida());
+    const response = await request(app)
+      .post(RUTA)
+      .send(conRespuestasV4({ rolLalo: 'politico_lider_social' }));
+
+    expect(response.status).toBe(409);
+    expect(response.body.code).toBe('CONFLICT');
+    expect(almacen.filas.size).toBe(1);
   });
 });
 
