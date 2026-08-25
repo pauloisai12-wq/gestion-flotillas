@@ -17,8 +17,9 @@ host ports in the public profile.
 Heavy work is durable and asynchronous:
 
 - report generation uses a PostgreSQL outbox and the BullMQ `reports` queue;
-- QA exports use `data_jobs` plus the `data-jobs` queue and stream records in
-  batches from the Python worker;
+- QA and Encuestas ZIP exports use distinct `data_jobs` types on the shared
+  `data-jobs` queue and stream records/source media in batches from the Python
+  worker;
 - vehicle imports use `data_jobs` plus `vehicle-imports`, with a bounded parser
   thread and batched identifier lookups;
 - QA/ticket thumbnails use `media-processing` and private immutable caching.

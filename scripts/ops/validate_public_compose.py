@@ -73,6 +73,8 @@ def validate(config):
     worker_env = worker.get("environment", {})
     if worker_env.get("QA_EXTERNA_DIR") != "/app/uploads/qa-externa":
         errors.append("worker-python: QA_EXTERNA_DIR no apunta al volumen de uploads")
+    if worker_env.get("ENCUESTAS_AUDIO_DIR") != "/app/uploads/encuestas-audio":
+        errors.append("worker-python: ENCUESTAS_AUDIO_DIR no apunta al volumen de uploads")
     uploads_mounts = [
         volume
         for volume in worker.get("volumes", [])
@@ -120,6 +122,7 @@ def self_check():
     config["services"]["redis"]["environment"] = {"REDISCLI_AUTH": "secret"}
     config["services"]["worker-python"]["environment"] = {
         "QA_EXTERNA_DIR": "/app/uploads/qa-externa",
+        "ENCUESTAS_AUDIO_DIR": "/app/uploads/encuestas-audio",
     }
     config["services"]["worker-python"]["volumes"] = [
         {"source": "uploads_data", "target": "/app/uploads", "read_only": True},

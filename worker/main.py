@@ -9,12 +9,13 @@ from datetime import datetime
 from urllib.parse import urlparse
 
 from bullmq import Worker
-from psycopg2.extras import Json
-
 from db import connection, repeatable_read_snapshot
-from generate_pdf import collect_report_data, generate_pdf
+from encuestas_export_policy import public_encuestas_export_error
+from generate_encuestas_export import generate_encuestas_export
 from generate_excel import generate_excel
+from generate_pdf import collect_report_data, generate_pdf
 from generate_qa_export import generate_qa_export
+from psycopg2.extras import Json
 from qa_export_policy import public_qa_export_error
 from worker_health import WorkerHeartbeat
 
@@ -53,6 +54,10 @@ DATA_JOBS_DIR = os.environ.get(
     os.path.join(os.environ.get("REPORTS_DIR", "/app/storage/reports"), "data-jobs"),
 )
 QA_EXTERNA_DIR = os.environ.get("QA_EXTERNA_DIR", "/app/uploads/qa-externa")
+ENCUESTAS_AUDIO_DIR = os.environ.get(
+    "ENCUESTAS_AUDIO_DIR",
+    "/app/uploads/encuestas-audio",
+)
 
 
 def claim_report_history(report_id, month, year, run_token):
@@ -328,7 +333,7 @@ def remove_generated_file(filepath):
 
 
 def claim_data_job(data_job_id):
-    """Reclama un QA_EXPORT; BullMQ serializa la cola con concurrency=1."""
+    """Reclama un export durable; BullMQ serializa la cola con concurrency=1."""
     with connection() as conn:
         try:
             cursor = conn.cursor()
@@ -341,23 +346,34 @@ def claim_data_job(data_job_id):
                     "errorMessage" = NULL,
                     "updatedAt" = NOW()
                 WHERE id = %s
-                  AND type = 'QA_EXPORT'::"DataJobType"
+                  AND type IN (
+                    'QA_EXPORT'::"DataJobType",
+                    'ENCUESTAS_EXPORT'::"DataJobType"
+                  )
                   AND status = 'QUEUED'::"DataJobStatus"
-                RETURNING payload, "requestedById"
+                RETURNING payload, "requestedById", type::text AS type
                 """,
                 (data_job_id,),
             )
             claimed = cursor.fetchone()
             if not claimed:
                 cursor.execute(
-                    "SELECT status::text AS status FROM data_jobs WHERE id = %s",
+                    """
+                    SELECT status::text AS status, type::text AS type
+                    FROM data_jobs
+                    WHERE id = %s
+                      AND type IN (
+                        'QA_EXPORT'::"DataJobType",
+                        'ENCUESTAS_EXPORT'::"DataJobType"
+                      )
+                    """,
                     (data_job_id,),
                 )
                 existing = cursor.fetchone()
                 if existing and existing["status"] == "COMPLETED":
                     conn.commit()
                     return {"already_completed": True}
-                raise RuntimeError("DataJob QA inexistente o no reclamable")
+                raise RuntimeError("DataJob de exportación inexistente o no reclamable")
             conn.commit()
             return {"already_completed": False, **claimed}
         except Exception:
@@ -380,7 +396,7 @@ def update_data_job_progress(data_job_id, progress):
         conn.commit()
 
 
-def complete_data_job(data_job_id, requested_by_id, result):
+def complete_data_job(data_job_id, requested_by_id, data_job_type, result):
     artifact_path = result["artifactPath"]
     artifact_name = result["artifactName"]
     artifact_size = int(result["artifactBytes"])
@@ -404,7 +420,9 @@ def complete_data_job(data_job_id, requested_by_id, result):
                     "errorMessage" = NULL,
                     "completedAt" = NOW(),
                     "updatedAt" = NOW()
-                WHERE id = %s AND status = 'PROCESSING'::"DataJobStatus"
+                WHERE id = %s
+                  AND type = %s::"DataJobType"
+                  AND status = 'PROCESSING'::"DataJobStatus"
                 RETURNING id
                 """,
                 (
@@ -413,6 +431,7 @@ def complete_data_job(data_job_id, requested_by_id, result):
                     artifact_size,
                     Json(public_result),
                     data_job_id,
+                    data_job_type,
                 ),
             )
             if not cursor.fetchone():
@@ -420,10 +439,15 @@ def complete_data_job(data_job_id, requested_by_id, result):
             cursor.execute(
                 """
                 INSERT INTO audit_logs
-                  ("userId", action, resource, "resourceId", metadata, "createdAt")
-                VALUES (%s, 'EXPORT', 'QaExternaRegistro', %s, %s, NOW())
+                ("userId", action, resource, "resourceId", metadata, "createdAt")
+                VALUES (%s, 'EXPORT', %s, %s, %s, NOW())
                 """,
-                (requested_by_id, str(data_job_id), Json(public_result)),
+                (
+                    requested_by_id,
+                    "Encuesta" if data_job_type == "ENCUESTAS_EXPORT" else "QaExternaRegistro",
+                    str(data_job_id),
+                    Json(public_result),
+                ),
             )
             conn.commit()
         except Exception:
@@ -431,8 +455,12 @@ def complete_data_job(data_job_id, requested_by_id, result):
             raise
 
 
-def fail_data_job(data_job_id, error, final_attempt):
-    public_error = public_qa_export_error(error)
+def fail_data_job(data_job_id, data_job_type, error, final_attempt):
+    public_error = (
+        public_encuestas_export_error(error)
+        if data_job_type == "ENCUESTAS_EXPORT"
+        else public_qa_export_error(error)
+    )
     with connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
@@ -442,13 +470,16 @@ def fail_data_job(data_job_id, error, final_attempt):
                 "errorMessage" = %s,
                 "completedAt" = CASE WHEN %s THEN NOW() ELSE NULL END,
                 "updatedAt" = NOW()
-            WHERE id = %s AND status = 'PROCESSING'::"DataJobStatus"
+            WHERE id = %s
+              AND type = %s::"DataJobType"
+              AND status = 'PROCESSING'::"DataJobStatus"
             """,
             (
                 "FAILED" if final_attempt else "QUEUED",
                 public_error,
                 final_attempt,
                 data_job_id,
+                data_job_type,
             ),
         )
         conn.commit()
@@ -465,7 +496,7 @@ def _is_final_attempt(job):
 
 
 async def process_data_job(job, job_token):
-    """Genera ZIP QA en el proceso worker, nunca en el API HTTP."""
+    """Genera ZIPs de datos en el worker, nunca en el proceso HTTP."""
     data_job_id = int((getattr(job, "data", {}) or {}).get("dataJobId", 0))
     if data_job_id <= 0:
         raise ValueError("dataJobId inválido")
@@ -474,14 +505,25 @@ async def process_data_job(job, job_token):
         return {"success": True, "dataJobId": data_job_id, "alreadyCompleted": True}
 
     generated = None
+    data_job_type = claim["type"]
     try:
         attempt_token = str(uuid.uuid4())
+        generator = (
+            generate_encuestas_export
+            if data_job_type == "ENCUESTAS_EXPORT"
+            else generate_qa_export
+        )
+        storage_root = (
+            ENCUESTAS_AUDIO_DIR
+            if data_job_type == "ENCUESTAS_EXPORT"
+            else QA_EXTERNA_DIR
+        )
         generated = await asyncio.to_thread(
-            generate_qa_export,
+            generator,
             data_job_id,
             claim["payload"],
             DATA_JOBS_DIR,
-            QA_EXTERNA_DIR,
+            storage_root,
             attempt_token,
             lambda progress: update_data_job_progress(data_job_id, progress),
         )
@@ -490,6 +532,7 @@ async def process_data_job(job, job_token):
             complete_data_job,
             data_job_id,
             claim["requestedById"],
+            data_job_type,
             generated,
         )
         await job.updateProgress(100)
@@ -497,7 +540,7 @@ async def process_data_job(job, job_token):
             "success": True,
             "dataJobId": data_job_id,
             "records": generated["records"],
-            "photos": generated["photos"],
+            "files": generated.get("photos", generated.get("audios", 0)),
         }
     except Exception as exc:
         print(f"  [DataJob] Error interno {type(exc).__name__}: {exc}")
@@ -506,6 +549,7 @@ async def process_data_job(job, job_token):
         await asyncio.to_thread(
             fail_data_job,
             data_job_id,
+            data_job_type,
             exc,
             _is_final_attempt(job),
         )
@@ -729,7 +773,7 @@ async def process_report_with_heartbeat(job, job_token):
 
 
 async def process_data_job_with_heartbeat(job, job_token):
-    """Incluye los jobs QA_EXPORT en salud y concurrencia del mismo proceso."""
+    """Incluye las exportaciones en salud y concurrencia del mismo proceso."""
     async with heavy_job_semaphore:
         worker_heartbeat.mark_job_started(getattr(job, "id", None), DATA_QUEUE_NAME)
         try:

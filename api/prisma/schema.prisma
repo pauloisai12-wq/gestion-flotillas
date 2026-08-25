@@ -43,6 +43,7 @@ enum ReportStatus {
 
 enum DataJobType {
   QA_EXPORT
+  ENCUESTAS_EXPORT
   VEHICLE_IMPORT
 }
 

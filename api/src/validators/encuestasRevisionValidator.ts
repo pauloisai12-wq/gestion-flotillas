@@ -18,9 +18,8 @@ import { z } from 'zod/v4';
 // regex no justifica atar este módulo al de GeoCampo.
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Usa formato AAAA-MM-DD');
 
-// En v3 el enum EncuestaEstado tiene un solo valor ('completada'): un filtro de
-// una sola opción es UI muerta. Se elimina el parámetro y zod estripa cualquier
-// `?estado=...` en silencio (sin error).
+// v1 restauró `noElegible`, así que el filtro vuelve a tener dos estados reales.
+const estadoFiltro = z.enum(['completada', 'noElegible']);
 
 // A diferencia del molde —donde `dispositivo` es el id numérico del padrón— aquí
 // el filtro va por TEXTO: el revisor conoce el equipo por su etiqueta
@@ -46,6 +45,7 @@ export const encuestasQuerySchema = z.object({
   page: z.coerce.number().optional(),
   limit: z.coerce.number().optional(),
   dispositivo: dispositivoFiltro.optional(),
+  estado: estadoFiltro.optional(),
   conAudio: conAudioFiltro,
   dateFrom: isoDate.optional(),
   dateTo: isoDate.optional(),
@@ -63,6 +63,7 @@ export type EncuestasQueryInput = z.infer<typeof encuestasQuerySchema>;
 export const encuestasExportQuerySchema = z
   .object({
     dispositivo: dispositivoFiltro.optional(),
+    estado: estadoFiltro.optional(),
     conAudio: conAudioFiltro,
     dateFrom: isoDate,
     dateTo: isoDate,

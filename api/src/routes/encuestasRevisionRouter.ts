@@ -6,20 +6,21 @@
 // única barrera entre un usuario autenticado cualquiera y las respuestas
 // políticas de la encuesta.
 //
-// La exportación se sirve en streaming (lote a lote) en vez de registrarse como
-// DataJob: un CSV sin imágenes cabe de sobra en una respuesta HTTP, y el tope de
-// filas del servicio impide que crezca sin límite.
+// El CSV se sirve en streaming porque no lleva binarios. El ZIP con todos los
+// audios sí se registra como DataJob y lo genera el worker Python: el proceso
+// HTTP nunca recorre ni empaqueta blobs.
 //
 // Réplica de qaExternaPersonasRouter (escritor con contrapresión, cabeceras
 // diferidas, BOM). A la tercera copia, unificar en api/src/lib/csv.ts.
 
 import { Router, Request, Response } from 'express';
+import path from 'path';
 import { ah } from '../lib/asyncHandler';
 import { logger } from '../lib/logger';
 import { requireRole, Roles } from '../middlewares/roleMiddleware';
 import { validateQuery } from '../middlewares/validate';
 import { ensureFound, parseId, parsePagination } from '../lib/http';
-import { NotFound } from '../middlewares/errorHandler';
+import { BadRequest, Conflict, NotFound } from '../middlewares/errorHandler';
 import { sendPrivateFile } from '../lib/privateFileResponse';
 import { rutaAbsolutaAudio } from '../lib/encuestasAudioStorage';
 import {
@@ -29,6 +30,13 @@ import {
   EncuestasExportQueryInput,
 } from '../validators/encuestasRevisionValidator';
 import * as service from '../services/encuestasRevisionService';
+import {
+  createEncuestasExportJob,
+  getLatestOwnedActiveDataJob,
+  getOwnedDataJob,
+  serializeDataJob,
+} from '../services/dataJobService';
+import { env } from '../config/env';
 
 const router = Router();
 
@@ -43,6 +51,7 @@ router.get(
       page,
       limit,
       dispositivo: q.dispositivo,
+      estado: q.estado,
       conAudio: q.conAudio,
       dateFrom: q.dateFrom,
       dateTo: q.dateTo,
@@ -140,6 +149,7 @@ router.get(
     try {
       for await (const lote of service.iterateForExport({
         dispositivo: q.dispositivo,
+        estado: q.estado,
         conAudio: q.conAudio,
         dateFrom: q.dateFrom,
         dateTo: q.dateTo,
@@ -166,6 +176,82 @@ router.get(
     if (!abierto && !res.destroyed) abrirArchivo();
     res.end();
   }),
+);
+
+const downloadEncuestasExport = ah(async (req: Request, res: Response) => {
+  const id = parseId(req, 'jobId');
+  const job = await getOwnedDataJob(id, req.user!.userId, 'ENCUESTAS_EXPORT');
+  if (job.status !== 'COMPLETED') throw Conflict('La exportación aún no está lista');
+  if (job.expiresAt <= new Date()) throw NotFound('Exportación');
+  if (!job.artifactPath || !job.artifactName) throw NotFound('Archivo de exportación');
+
+  const baseDir = path.resolve(env.REPORTS_DIR, 'data-jobs');
+  const safePath = path.resolve(baseDir, path.basename(job.artifactPath));
+  if (!safePath.startsWith(baseDir + path.sep)) throw BadRequest('Ruta de artefacto inválida');
+  const sent = await sendPrivateFile(req, res, safePath, {
+    contentType: 'application/zip',
+    downloadName: job.artifactName,
+    cacheControl: 'private, no-store',
+  });
+  if (!sent) throw NotFound('Archivo de exportación');
+});
+
+router.post(
+  '/exports',
+  requireRole([Roles.REVISOR_QA]),
+  validateQuery(encuestasExportQuerySchema),
+  ah(async (req: Request, res: Response) => {
+    const q = req.query as unknown as EncuestasExportQueryInput;
+    const dateFrom = new Date(`${q.dateFrom}T00:00:00.000Z`);
+    const dateToExclusive = new Date(`${q.dateTo}T00:00:00.000Z`);
+    dateToExclusive.setUTCDate(dateToExclusive.getUTCDate() + 1);
+    const job = await createEncuestasExportJob({
+      requestedById: req.user!.userId,
+      dateFrom,
+      dateToExclusive,
+      dateTo: q.dateTo,
+      maxRecords: service.MAX_ENCUESTAS_EXPORT,
+      dispositivo: q.dispositivo,
+      estado: q.estado,
+      conAudio: q.conAudio,
+    });
+    res.status(202).json({ data: serializeDataJob(job) });
+  }),
+);
+
+router.get(
+  '/exports/active',
+  requireRole([Roles.REVISOR_QA]),
+  ah(async (req: Request, res: Response) => {
+    const job = await getLatestOwnedActiveDataJob(req.user!.userId, 'ENCUESTAS_EXPORT');
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json({ data: job ? serializeDataJob(job) : null });
+  }),
+);
+
+router.get(
+  '/exports/:jobId',
+  requireRole([Roles.REVISOR_QA]),
+  ah(async (req: Request, res: Response) => {
+    const job = await getOwnedDataJob(
+      parseId(req, 'jobId'),
+      req.user!.userId,
+      'ENCUESTAS_EXPORT',
+    );
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json({ data: serializeDataJob(job) });
+  }),
+);
+
+router.head(
+  '/exports/:jobId/download',
+  requireRole([Roles.REVISOR_QA]),
+  downloadEncuestasExport,
+);
+router.get(
+  '/exports/:jobId/download',
+  requireRole([Roles.REVISOR_QA]),
+  downloadEncuestasExport,
 );
 
 // ─── Detalle y audios ────────────────────────────────────────────────────────

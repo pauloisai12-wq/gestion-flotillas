@@ -1,9 +1,9 @@
 // Hooks del portal de revisión (rol REVISOR_QA) para el módulo "Encuestas
 // Okrean": la app móvil de encuestas, sin relación con GeoCampo/qa_externa.
 // Espeja useQaPersonas.ts —same-origin vía el rewrite /api/* de next.config.ts,
-// cookie httpOnly con withCredentials, exportación en CSV que la API sirve en
-// streaming (sin job que sondear)— con dos diferencias: el modelo no tiene
-// programa (una sola tabla) y no hay búsqueda libre.
+// cookie httpOnly con withCredentials, CSV servido en streaming y ZIP durable
+// con polling— con dos diferencias: el modelo no tiene programa (una sola
+// tabla) y no hay búsqueda libre.
 
 import { useQuery } from '@tanstack/react-query';
 import api, { getApiError } from '@/lib/api';
@@ -49,6 +49,7 @@ interface EncuestaQuery {
   limit?: number;
   dateFrom?: string;
   dateTo?: string;
+  estado?: 'completada' | 'noElegible';
   // true = solo encuestas con al menos un audio, false = solo las que no tienen
   // ninguno. `undefined` (no se manda el parámetro) = todas: es un tri-estado,
   // no un booleano, así que nunca se serializa por truthiness.
@@ -61,6 +62,7 @@ function buildParams(query: EncuestaQuery): URLSearchParams {
   if (query.limit) params.set('limit', query.limit.toString());
   if (query.dateFrom) params.set('dateFrom', query.dateFrom);
   if (query.dateTo) params.set('dateTo', query.dateTo);
+  if (query.estado) params.set('estado', query.estado);
   if (query.conAudio !== undefined) params.set('conAudio', String(query.conAudio));
   return params;
 }
@@ -81,6 +83,7 @@ export function useEncuestas(query: EncuestaQuery = {}) {
 export interface EncuestasCsvParams {
   dateFrom: string;
   dateTo: string;
+  estado?: 'completada' | 'noElegible';
   // Mismo tri-estado que en el listado: el CSV exporta lo que el revisor tiene
   // filtrado en pantalla, no siempre el universo completo del rango.
   conAudio?: boolean;
@@ -135,6 +138,73 @@ export async function descargarEncuestasCsv(params: EncuestasCsvParams) {
     link.remove();
   } catch (err) {
     toast.error(mensajeDeFalloCsv(err));
+  }
+}
+
+export type EncuestasDataJobStatus = 'QUEUED' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
+
+export interface EncuestasExportJob {
+  id: number;
+  type: 'ENCUESTAS_EXPORT';
+  status: EncuestasDataJobStatus;
+  progress: number;
+  artifactName: string | null;
+  artifactSize: number | null;
+  result: unknown;
+  errorMessage: string | null;
+  completedAt: string | null;
+  expiresAt: string;
+}
+
+export async function createEncuestasExport(
+  params: EncuestasCsvParams,
+): Promise<EncuestasExportJob> {
+  const query = buildParams(params);
+  const res = await api.post('/encuestas/exports', undefined, { params: query });
+  return res.data.data as EncuestasExportJob;
+}
+
+export function useEncuestasExportJob(jobId: number | null) {
+  return useQuery<EncuestasExportJob>({
+    queryKey: ['encuestas-export-job', jobId],
+    queryFn: async () => {
+      const res = await api.get(`/encuestas/exports/${jobId}`);
+      return res.data.data as EncuestasExportJob;
+    },
+    enabled: jobId !== null,
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      return status === 'COMPLETED' || status === 'FAILED' ? false : 1_500;
+    },
+  });
+}
+
+export async function getActiveEncuestasExport(): Promise<EncuestasExportJob | null> {
+  const res = await api.get('/encuestas/exports/active');
+  return (res.data.data as EncuestasExportJob | null) ?? null;
+}
+
+export function useActiveEncuestasExport(enabled: boolean) {
+  return useQuery<EncuestasExportJob | null>({
+    queryKey: ['encuestas-export-job', 'active'],
+    queryFn: getActiveEncuestasExport,
+    enabled,
+    refetchOnWindowFocus: false,
+  });
+}
+
+export async function downloadEncuestasZip(job: EncuestasExportJob) {
+  const apiPath = `/encuestas/exports/${job.id}/download`;
+  try {
+    await api.head(apiPath);
+    const link = document.createElement('a');
+    link.href = `/api${apiPath}`;
+    link.download = job.artifactName || `encuestas-${job.id}.zip`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  } catch {
+    toast.error('No se pudo descargar el ZIP. Intenta de nuevo.');
   }
 }
 

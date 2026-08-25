@@ -253,7 +253,7 @@ jobs:
 
       - name: Syntax check & imports
         run: |
-          python -m py_compile main.py db.py generate_pdf.py generate_excel.py generate_qa_export.py qa_export_policy.py artifact_storage.py worker_health.py healthcheck.py
+          python -m py_compile main.py db.py generate_pdf.py generate_excel.py generate_qa_export.py qa_export_policy.py generate_encuestas_export.py encuestas_export_policy.py artifact_storage.py worker_health.py healthcheck.py
 
       - name: Worker unit tests
         run: python -m unittest discover -s tests -p "test_*.py" -v

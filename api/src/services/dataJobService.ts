@@ -15,7 +15,7 @@ import {
 } from './vehicleImportService';
 import { refreshMaterializedViews } from '../jobs/refreshViewsJob';
 
-const QA_EXPORT_QUEUE = 'data-jobs';
+const DATA_EXPORT_QUEUE = 'data-jobs';
 const VEHICLE_IMPORT_QUEUE = 'vehicle-imports';
 const JOB_RETENTION_HOURS = 24;
 const STALE_JOB_MINUTES = 15;
@@ -27,8 +27,12 @@ const FINAL_QA_ARTIFACT_RE =
   /^qa-externa-(?:buffalo|lx)-([1-9]\d*)_a[0-9a-f]{32}\.zip$/;
 const TEMP_QA_ARTIFACT_RE =
   /^\.qa-externa-(?:buffalo|lx)-([1-9]\d*)_a[0-9a-f]{32}\.zip\.[0-9a-f]{32}\.tmp\.zip(?:\.[0-9a-f]{32}\.xlsx)?$/;
+const FINAL_ENCUESTAS_ARTIFACT_RE =
+  /^encuestas-export-([1-9]\d*)_a[0-9a-f]{32}\.zip$/;
+const TEMP_ENCUESTAS_ARTIFACT_RE =
+  /^\.encuestas-export-([1-9]\d*)_a[0-9a-f]{32}\.zip\.[0-9a-f]{32}\.tmp\.zip(?:\.[0-9a-f]{32}\.manifest\.csv)?$/;
 
-const qaExportQueue = createQueue(QA_EXPORT_QUEUE);
+const dataExportQueue = createQueue(DATA_EXPORT_QUEUE);
 const vehicleImportQueue = createQueue(VEHICLE_IMPORT_QUEUE);
 
 type QaExportPayload = {
@@ -36,6 +40,16 @@ type QaExportPayload = {
   dateFrom: string;
   dateToExclusive: string;
   maxRecords: number;
+};
+
+type EncuestasExportPayload = {
+  dateFrom: string;
+  dateToExclusive: string;
+  dateTo: string;
+  maxRecords: number;
+  dispositivo?: string;
+  estado?: 'completada' | 'noElegible';
+  conAudio?: boolean;
 };
 
 type VehicleImportPayload = {
@@ -47,11 +61,24 @@ function expiresAt(hours = JOB_RETENTION_HOURS): Date {
 }
 
 function queueFor(type: DataJobType): Queue {
-  return type === 'QA_EXPORT' ? qaExportQueue : vehicleImportQueue;
+  switch (type) {
+    case 'QA_EXPORT':
+    case 'ENCUESTAS_EXPORT':
+      return dataExportQueue;
+    case 'VEHICLE_IMPORT':
+      return vehicleImportQueue;
+  }
 }
 
 function queueJobName(type: DataJobType): string {
-  return type === 'QA_EXPORT' ? 'generate-qa-export' : 'import-vehicles';
+  switch (type) {
+    case 'QA_EXPORT':
+      return 'generate-qa-export';
+    case 'ENCUESTAS_EXPORT':
+      return 'generate-encuestas-export';
+    case 'VEHICLE_IMPORT':
+      return 'import-vehicles';
+  }
 }
 
 function queueJobId(id: number): string {
@@ -59,7 +86,7 @@ function queueJobId(id: number): string {
 }
 
 export function getDataJobQueues(): Queue[] {
-  return [qaExportQueue, vehicleImportQueue];
+  return [dataExportQueue, vehicleImportQueue];
 }
 
 export async function closeDataJobQueues(): Promise<void> {
@@ -135,6 +162,45 @@ export async function createQaExportJob(input: {
   } catch (err) {
     if (isPrismaKnownError(err, 'P2002')) {
       throw Conflict('Ya tienes una exportación QA en cola o procesándose');
+    }
+    throw err;
+  }
+  await publishBestEffort(job);
+  return job;
+}
+
+export async function createEncuestasExportJob(input: {
+  requestedById: number;
+  dateFrom: Date;
+  dateToExclusive: Date;
+  dateTo: string;
+  maxRecords: number;
+  dispositivo?: string;
+  estado?: 'completada' | 'noElegible';
+  conAudio?: boolean;
+}): Promise<DataJob> {
+  const payload: EncuestasExportPayload = {
+    dateFrom: input.dateFrom.toISOString(),
+    dateToExclusive: input.dateToExclusive.toISOString(),
+    dateTo: input.dateTo,
+    maxRecords: input.maxRecords,
+    ...(input.dispositivo ? { dispositivo: input.dispositivo } : {}),
+    ...(input.estado ? { estado: input.estado } : {}),
+    ...(input.conAudio !== undefined ? { conAudio: input.conAudio } : {}),
+  };
+  let job: DataJob;
+  try {
+    job = await prisma.dataJob.create({
+      data: {
+        type: 'ENCUESTAS_EXPORT',
+        requestedById: input.requestedById,
+        payload,
+        expiresAt: expiresAt(),
+      },
+    });
+  } catch (err) {
+    if (isPrismaKnownError(err, 'P2002')) {
+      throw Conflict('Ya tienes una exportación de encuestas en cola o procesándose');
     }
     throw err;
   }
@@ -234,7 +300,8 @@ export async function dispatchQueuedDataJobs(limit = 50): Promise<number> {
 
 /**
  * Recuperación explícita tras caída de proceso:
- * - QA_EXPORT es seguro de regenerar porque publica artefactos inmutables.
+ * - Ambos tipos de exportación son seguros de regenerar porque publican
+ *   artefactos inmutables.
  * - VEHICLE_IMPORT puede haber confirmado filas; se marca FAILED y nunca se
  *   reejecuta automáticamente.
  */
@@ -266,7 +333,7 @@ export async function recoverStaleDataJobs(limit = 25): Promise<{
     // Nunca competir con un procesador que aún conserva el lock de BullMQ.
     if (state === 'active') continue;
 
-    if (record.type === 'QA_EXPORT') {
+    if (record.type === 'QA_EXPORT' || record.type === 'ENCUESTAS_EXPORT') {
       const reset = await prisma.dataJob.updateMany({
         where: {
           id: record.id,
@@ -350,20 +417,24 @@ export async function cleanupExpiredDataJobs(limit = 50): Promise<number> {
   return removed;
 }
 
-function managedQaArtifactDataJobId(fileName: string): number | null {
-  const match = FINAL_QA_ARTIFACT_RE.exec(fileName) ?? TEMP_QA_ARTIFACT_RE.exec(fileName);
+function managedExportArtifactDataJobId(fileName: string): number | null {
+  const match =
+    FINAL_QA_ARTIFACT_RE.exec(fileName)
+    ?? TEMP_QA_ARTIFACT_RE.exec(fileName)
+    ?? FINAL_ENCUESTAS_ARTIFACT_RE.exec(fileName)
+    ?? TEMP_ENCUESTAS_ARTIFACT_RE.exec(fileName);
   if (!match) return null;
   const id = Number(match[1]);
   return Number.isSafeInteger(id) && id > 0 ? id : null;
 }
 
 export function isManagedDataJobArtifactName(fileName: string): boolean {
-  return managedQaArtifactDataJobId(fileName) !== null;
+  return managedExportArtifactDataJobId(fileName) !== null;
 }
 
 /**
  * Retira residuos de un worker terminado con SIGKILL. Solo admite nombres que
- * genera `generate_qa_export.py`, nunca sigue symlinks, conserva rutas
+ * generan los exportadores Python, nunca sigue symlinks, conserva rutas
  * referenciadas y omite cualquier DataJob que siga PROCESSING.
  */
 export async function cleanupOrphanedDataJobArtifacts(limit = 100): Promise<number> {
@@ -378,7 +449,7 @@ export async function cleanupOrphanedDataJobArtifacts(limit = 100): Promise<numb
 
   const tracked = await prisma.dataJob.findMany({
     where: {
-      type: 'QA_EXPORT',
+      type: { in: ['QA_EXPORT', 'ENCUESTAS_EXPORT'] },
       OR: [{ status: 'PROCESSING' }, { artifactPath: { not: null } }],
     },
     select: { id: true, status: true, artifactPath: true },
@@ -399,7 +470,7 @@ export async function cleanupOrphanedDataJobArtifacts(limit = 100): Promise<numb
   for (const entry of entries) {
     if (removed >= boundedLimit) break;
     if (!entry.isFile()) continue;
-    const dataJobId = managedQaArtifactDataJobId(entry.name);
+    const dataJobId = managedExportArtifactDataJobId(entry.name);
     if (dataJobId === null || activeIds.has(dataJobId)) continue;
 
     const candidate = path.join(artifactRoot, entry.name);

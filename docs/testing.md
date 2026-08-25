@@ -35,6 +35,7 @@ Worker:
 cd worker
 python -m py_compile main.py db.py generate_pdf.py generate_excel.py \
   generate_qa_export.py qa_export_policy.py artifact_storage.py \
+  generate_encuestas_export.py encuestas_export_policy.py \
   worker_health.py healthcheck.py
 python -m unittest discover -s tests -p "test_*.py" -v
 python benchmarks/benchmark_qa_export_streaming.py 10000

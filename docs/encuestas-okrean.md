@@ -80,6 +80,10 @@ Vive **fuera** de `/api/v1/*`, que es el montaje por API key:
 |---|---|---|
 | GET | `/api/encuestas` | `200 { "data": [ <EncuestaDto> ], "pagination": { "page","limit","total","totalPages" } }` |
 | GET / HEAD | `/api/encuestas/export.csv` | `200 text/csv; charset=utf-8` como adjunto. `HEAD` solo valida filtros y cabeceras (no toca la base de datos) |
+| POST | `/api/encuestas/exports` | `202 {data:<DataJob>}`. Crea el ZIP asíncrono; rango obligatorio |
+| GET | `/api/encuestas/exports/active` | Job `ENCUESTAS_EXPORT` activo más reciente del revisor, o `data:null` |
+| GET | `/api/encuestas/exports/:jobId` | Estado/progreso del job, limitado al usuario que lo creó |
+| GET / HEAD | `/api/encuestas/exports/:jobId/download` | ZIP terminado como adjunto; `409` mientras no esté listo y `404` si expiró |
 | GET | `/api/encuestas/:id` | `200 <EncuestaDetalleDto>` (el `EncuestaDto` del listado **más** `idLocal` y `audios[]`). `404` si el id no existe |
 | GET / HEAD | `/api/encuestas/:id/audios/:audioId` | `200` con el audio (`206` si el navegador manda `Range`; `416` si el tramo cae fuera). `?download=1` lo sirve como adjunto `<idLocal>-<segmento>`. `404` si ese audio no es de esa encuesta o el blob no está en disco |
 
@@ -89,6 +93,7 @@ Parámetros de consulta:
 |---|---|---|---|
 | `page` / `limit` | opcional | — | Default 20, tope 100 |
 | `dispositivo` | opcional | opcional | Texto: coincide contra el `identificador` del dispositivo registrado |
+| `estado` | opcional | opcional | `completada` o `noElegible`. Cualquier otro valor → `400` |
 | `conAudio` | opcional | opcional | `true` = solo encuestas con **al menos un** segmento; `false` = solo las que no tienen ninguno. Ausente = sin filtrar. Cualquier otro texto (`1`, `si`, …) → `400` |
 | `dateFrom` / `dateTo` | opcional | **obligatorios** | `AAAA-MM-DD` sobre `fechaHoraFinalizacion`. Día civil completo en **UTC** con **tope superior exclusivo** (`dateTo` + 1 día). En exportación: `dateTo ≥ dateFrom` y rango máximo **366 días** |
 
@@ -853,6 +858,40 @@ dos encuestas con los mismos medios produzcan el mismo texto y la columna sea ag
 Las fechas salen en **ISO UTC** (igual que se persisten: la hora local del revisor no debe cambiar
 el contenido del archivo) y los booleanos como `si` / `no` / celda vacía.
 
+## Exportación ZIP
+
+`POST /api/encuestas/exports` registra un `DataJob` de tipo `ENCUESTAS_EXPORT`. La API no arma el
+archivo: el worker Python reclama el job desde la cola `data-jobs`, lee las encuestas y audios con
+cursores dentro de un snapshot consistente y publica el artefacto de forma atómica en
+`REPORTS_DIR/data-jobs`. Si Redis no estaba disponible al crear el job, la fila `QUEUED` conserva
+la intención y el dispatcher periódico vuelve a publicarla. Un job `PROCESSING` abandonado se
+puede reencolar porque sus artefactos usan nombres inmutables por intento.
+
+El rango `dateFrom`/`dateTo` es obligatorio, abarca como máximo 366 días y se aplica sobre
+`fecha_hora_finalizacion` en UTC. `estado`, `conAudio` y `dispositivo` usan exactamente el mismo
+significado que en el listado y el CSV. Solo `REVISOR_QA` puede crear, consultar o descargar estos
+jobs, y cada consulta exige que `requestedById` sea el usuario de la sesión.
+
+Límites por ZIP: **50,000 encuestas** y **1 GiB de bytes de audio fuente**. A 32 kbps
+(aproximadamente 0.24 MB/min), 1 GiB equivale a unas 71 horas de grabación. Si el conjunto excede
+alguno de los topes el job falla con un mensaje público que pide dividir el rango.
+
+Nombre descargado: `encuestas-<dateFrom>_<dateTo>[-con-audio|-sin-audio].zip`. El nombre interno
+incluye el id del job y un token de intento para impedir sobrescrituras. Contenido:
+
+| Entrada | Contenido |
+|---|---|
+| `encuestas.csv` | Las mismas 53 cabeceras, orden, BOM UTF-8, CRLF y neutralización de fórmulas que `/api/encuestas/export.csv` |
+| `manifiesto-audios.csv` | `idLocal,idRemoto,segmento,sha256,tamano_bytes,duracion_ms,recibido_en,archivo,faltante` |
+| `audios/<idLocal>/<segmento>` | Bytes originales del blob, con `ZIP_STORED` (sin transcodificar ni recomprimir) |
+
+Si una fila de `encuestas_audios` apunta a un blob ausente o a una ruta inválida, el job continúa:
+`archivo` queda vacío y `faltante=1`. El worker nunca sigue una ruta fuera de
+`ENCUESTAS_AUDIO_DIR`, no incluye symlinks y vuelve a comprobar los bytes reales mientras escribe.
+Los CSV y audios se almacenan sin compresión para mantener acotado el uso de CPU. El artefacto
+expira y se limpia con la misma política de 24 horas que `QA_EXPORT`; también se barren ZIP y
+manifiestos temporales huérfanos de un worker terminado con `SIGKILL`.
+
 **`payload_raw` y `payload_hash` no se exportan nunca**, ni salen en el listado: son auditoría
 interna.
 
@@ -1097,9 +1136,12 @@ Pestaña **Encuestas** en `/revision/encuestas`, junto a las dos de GeoCampo
 | Registro de personas | `/revision/personas` | GeoCampo: listado + CSV |
 | **Encuestas** | `/revision/encuestas` | **Encuestas Okrean: listado + CSV + detalle con audios** |
 
-En el listado hay una columna **Audio** con el número de segmentos (o "Sin audio") y un filtro
-**Todas / Con audio / Sin audio**, que viaja como `conAudio` y recorta **igual** el CSV que se
-descarga con los filtros puestos. Cada fila abre el detalle `/revision/encuestas/<id>`: los datos
+En el listado hay una columna **Audio** con el número de segmentos (o "Sin audio"), un filtro
+**Todas / Con audio / Sin audio** y un filtro de estado **Todos / Completada / No elegible**. Esos
+filtros recortan igual el listado, el CSV y el ZIP. Junto a **Descargar CSV**, el botón
+**Descargar todo (ZIP)** muestra cola/progreso/error y el enlace final; guarda el contexto en
+`sessionStorage` y consulta `/exports/active`, por lo que reanuda un job al recargar. Cada fila
+abre el detalle `/revision/encuestas/<id>`: los datos
 que no caben en columnas más los segmentos, cada uno con reproductor `<audio>` nativo —el stream
 atiende `Range`, así que el revisor puede buscar dentro del tramo— y botón de descarga
 (`?download=1`). Todo eso es código de Next: tras el deploy **exige rebuild de `web`**.
