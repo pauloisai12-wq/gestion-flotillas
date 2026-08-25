@@ -550,7 +550,10 @@ describe('GET|HEAD /api/encuestas/:id/audios/:audioId', () => {
   });
 
   it('?download=1 lo entrega como adjunto con un nombre útil', async () => {
-    getAudioParaServir.mockResolvedValue(servible());
+    // El mime declarado se elige A PROPÓSITO distinto del que Express derivaría
+    // de la extensión (`.m4a` → audio/mp4): solo así la aserción distingue el
+    // orden actual (`attachment` y luego `type`) del if/else anterior.
+    getAudioParaServir.mockResolvedValue(servible({ mimeDeclarado: 'audio/aac' }));
 
     const response = await request(crearApp(Roles.REVISOR_QA))
       .get(`${RUTA}/9/audios/3`)
@@ -561,10 +564,11 @@ describe('GET|HEAD /api/encuestas/:id/audios/:audioId', () => {
     expect(response.headers['content-disposition']).toContain('attachment');
     expect(response.headers['content-disposition']).toContain('e1-uuid-seg1.m4a');
     // El tipo lo manda el servicio, no la extensión del nombre de descarga:
-    // `res.attachment` adivina por extensión y `.m4a` no está en la tabla mime
-    // de Express, así que sin el `res.type` posterior la descarga saldría como
-    // application/octet-stream.
-    expect(response.headers['content-type']).toMatch(/^audio\/mp4/);
+    // `res.attachment('e1-uuid-seg1.m4a')` ya fija `audio/mp4` por extensión
+    // (la tabla mime de `send` sí conoce `.m4a`), así que sin el `res.type`
+    // posterior esta descarga saldría como audio/mp4 en vez del audio/aac que
+    // declaró el teléfono.
+    expect(response.headers['content-type']).toMatch(/^audio\/aac/);
   });
 
   it('HEAD publica las cabeceras sin mover el cuerpo', async () => {
