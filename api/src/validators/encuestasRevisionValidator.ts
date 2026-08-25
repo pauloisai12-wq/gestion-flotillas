@@ -32,10 +32,21 @@ const dispositivoFiltro = z
   .min(1, 'El filtro de dispositivo no puede ir vacío')
   .max(120, 'El filtro de dispositivo no puede exceder 120 caracteres');
 
+// Filtro "solo con audio" / "solo sin audio". Llega como texto en la query, así
+// que NO se usa z.coerce.boolean(): `Boolean('false')` es `true` y el filtro
+// "sin audio" devolvería justo lo contrario de lo pedido. El enum acota los dos
+// literales aceptados (cualquier otro texto es 400) y el transform los convierte
+// a booleano; `undefined` se conserva para distinguir "sin filtro" de "false".
+const conAudioFiltro = z
+  .enum(['true', 'false'])
+  .optional()
+  .transform((v) => (v === undefined ? undefined : v === 'true'));
+
 export const encuestasQuerySchema = z.object({
   page: z.coerce.number().optional(),
   limit: z.coerce.number().optional(),
   dispositivo: dispositivoFiltro.optional(),
+  conAudio: conAudioFiltro,
   dateFrom: isoDate.optional(),
   dateTo: isoDate.optional(),
 });
@@ -52,6 +63,7 @@ export type EncuestasQueryInput = z.infer<typeof encuestasQuerySchema>;
 export const encuestasExportQuerySchema = z
   .object({
     dispositivo: dispositivoFiltro.optional(),
+    conAudio: conAudioFiltro,
     dateFrom: isoDate,
     dateTo: isoDate,
   })

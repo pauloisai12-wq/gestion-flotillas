@@ -29,6 +29,8 @@ export interface EncuestasListQuery {
   page?: number;
   limit?: number;
   dispositivo?: string;
+  /** true = solo con audio, false = solo sin audio, undefined = sin filtrar. */
+  conAudio?: boolean;
   dateFrom?: string;
   dateTo?: string;
 }
@@ -64,6 +66,8 @@ export interface EncuestaDto {
   recibidoEn: Date;
   /** null = el payload no traía bloque de ubicación; distinto de `false`. */
   ubicacionDisponible: boolean | null;
+  /** Segmentos de audio recibidos; 0 = sin audio. */
+  audiosCount: number;
   dispositivo: { id: number; identificador: string };
 }
 
@@ -155,6 +159,10 @@ const encuestaListSelect = {
   fechaHoraFinalizacion: true,
   recibidoEn: true,
   ubicacionDisponible: true,
+  // Solo el conteo, nunca las filas: el listado enseña "3 audios" y el detalle
+  // es quien trae la lista. Traer los audios aquí multiplicaría por N las filas
+  // que Prisma mueve por una página de 100 encuestas.
+  _count: { select: { audios: true } },
   dispositivo: dispositivoSelect,
 } as const;
 
@@ -225,6 +233,13 @@ export function buildWhere(params: EncuestasListQuery): Prisma.EncuestaWhereInpu
       identificador: { contains: params.dispositivo, mode: 'insensitive' },
     };
   }
+  if (params.conAudio !== undefined) {
+    // `some`/`none` sobre la relación en vez de un conteo en memoria: Postgres
+    // lo resuelve con un EXISTS y el filtro vale igual para el listado y para el
+    // CSV (que comparten este where por el invariante de arriba). Se comprueba
+    // contra `undefined` y no por veracidad: `false` es un filtro legítimo.
+    where.audios = params.conAudio ? { some: {} } : { none: {} };
+  }
   if (params.dateFrom || params.dateTo) {
     // Día civil completo en UTC: [dateFrom 00:00Z, dateTo+1 00:00Z). El rango va
     // sobre fechaHoraFinalizacion (cuándo se levantó la encuesta), no sobre
@@ -239,10 +254,17 @@ export function buildWhere(params: EncuestasListQuery): Prisma.EncuestaWhereInpu
   return where;
 }
 
+/**
+ * Fila cruda del listado: el DTO menos el conteo aplanado, más el `_count` tal
+ * como lo devuelve Prisma. El DTO publica `audiosCount` plano porque `_count` es
+ * un detalle del ORM que no tiene por qué llegar al front.
+ */
+type EncuestaListRow = Omit<EncuestaDto, 'audiosCount'> & { _count: { audios: number } };
+
 // Segunda red bajo `encuestaListSelect`: la consulta ya no pide `payloadRaw`, y
 // este mapeo explícito garantiza que tampoco lo exponga quien algún día vuelva a
 // `include`.
-function toDto(row: EncuestaDto): EncuestaDto {
+function toDto(row: EncuestaListRow): EncuestaDto {
   return {
     id: row.id,
     idRemoto: row.idRemoto,
@@ -260,6 +282,7 @@ function toDto(row: EncuestaDto): EncuestaDto {
     fechaHoraFinalizacion: row.fechaHoraFinalizacion,
     recibidoEn: row.recibidoEn,
     ubicacionDisponible: row.ubicacionDisponible,
+    audiosCount: row._count.audios,
     dispositivo: { id: row.dispositivo.id, identificador: row.dispositivo.identificador },
   };
 }
@@ -285,6 +308,124 @@ export async function list(params: EncuestasListQuery) {
 
   const data: EncuestaDto[] = rows.map(toDto);
   return { data, pagination: { page, limit, total, totalPages: Math.ceil(total / limit) } };
+}
+
+/**
+ * Un segmento de audio tal como lo ve el revisor. NO lleva `ruta`: dónde está el
+ * blob en el disco del servidor es interno, y el navegador solo necesita la URL
+ * que sirve el stream. `sha256` sí sale: es la prueba de integridad que el
+ * revisor puede contrastar contra lo que reportó el teléfono.
+ */
+export interface EncuestaAudioDto {
+  id: number;
+  segmento: string;
+  sha256: string;
+  tamanoBytes: number;
+  mimeDeclarado: string | null;
+  duracionMs: number | null;
+  recibidoEn: Date;
+  /** Ruta relativa same-origin para <audio src> y descarga (`?download=1`). */
+  url: string;
+}
+
+/**
+ * Detalle de una encuesta: el mismo DTO del listado más el `idLocal` (el UUID
+ * con que la app nombra la encuesta, útil para cruzar con el teléfono) y la
+ * lista de segmentos. El payload crudo y su hash siguen sin salir del servidor.
+ */
+export interface EncuestaDetalleDto extends EncuestaDto {
+  idLocal: string;
+  audios: EncuestaAudioDto[];
+}
+
+/**
+ * URL same-origin del stream. Se arma en el servidor y no en el front para que
+ * el contrato de la ruta viva en un solo sitio; el rewrite `/api/*` de Next
+ * la resuelve sin CORS ni host absoluto (que rompería tras el proxy de Caddy).
+ */
+export function audioUrl(encuestaId: number, audioId: number): string {
+  return `/api/encuestas/${encuestaId}/audios/${audioId}`;
+}
+
+export async function getById(id: number): Promise<EncuestaDetalleDto | null> {
+  const row = await prisma.encuesta.findUnique({
+    where: { id },
+    select: {
+      ...encuestaListSelect,
+      idLocal: true,
+      // Orden de llegada = orden de grabación (seg1, seg2…); ordenar por el
+      // nombre fallaría en seg10 < seg2. El desempate por `id` hace el orden
+      // estable cuando dos segmentos entran en el mismo milisegundo.
+      audios: {
+        orderBy: [{ recibidoEn: 'asc' }, { id: 'asc' }],
+        select: {
+          id: true,
+          segmento: true,
+          sha256: true,
+          tamanoBytes: true,
+          mimeDeclarado: true,
+          duracionMs: true,
+          recibidoEn: true,
+        },
+      },
+    },
+  });
+  if (!row) return null;
+  return {
+    ...toDto(row),
+    idLocal: row.idLocal,
+    audios: row.audios.map((a) => ({ ...a, url: audioUrl(id, a.id) })),
+  };
+}
+
+/** Lo mínimo para servir el blob: ruta en disco y con qué nombrarlo/tiparlo. */
+export interface AudioParaServir {
+  ruta: string;
+  mimeDeclarado: string | null;
+  segmento: string;
+  idLocal: string;
+}
+
+/**
+ * Busca el segmento EXIGIENDO que pertenezca a la encuesta de la URL
+ * (`findFirst` con las dos claves, no `findUnique` por id): con solo el id, un
+ * `/api/encuestas/1/audios/7` serviría el audio de cualquier otra encuesta y la
+ * ruta dejaría de ser comprobable.
+ */
+export async function getAudioParaServir(
+  encuestaId: number,
+  audioId: number,
+): Promise<AudioParaServir | null> {
+  const a = await prisma.encuestaAudio.findFirst({
+    where: { id: audioId, encuestaId },
+    select: {
+      ruta: true,
+      mimeDeclarado: true,
+      segmento: true,
+      encuesta: { select: { idLocal: true } },
+    },
+  });
+  return a
+    ? {
+        ruta: a.ruta,
+        mimeDeclarado: a.mimeDeclarado,
+        segmento: a.segmento,
+        idLocal: a.encuesta.idLocal,
+      }
+    : null;
+}
+
+/**
+ * Content-Type con que se sirve: el declarado si es un tipo audio/*, si no
+ * audio/mp4 (AAC en MP4, lo habitual). El mime lo eligió el teléfono y se
+ * guardó sin validar: la regex evita reflejar texto arbitrario en una cabecera
+ * y el fallback impide servir como `text/html` algo que el navegador
+ * interpretaría en el origen del portal.
+ */
+export function contentTypeDeAudio(mimeDeclarado: string | null): string {
+  return mimeDeclarado && /^audio\/[A-Za-z0-9.+-]{1,60}$/.test(mimeDeclarado)
+    ? mimeDeclarado
+    : 'audio/mp4';
 }
 
 /**

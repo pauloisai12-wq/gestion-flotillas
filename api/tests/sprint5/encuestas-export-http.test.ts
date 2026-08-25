@@ -237,6 +237,31 @@ describe('GET /api/encuestas/export.csv', () => {
     });
   });
 
+  // El CSV comparte el where del listado: si el revisor está viendo "solo con
+  // audio", el archivo que descarga debe traer ese mismo conjunto y no otro.
+  it.each([
+    ['true', true],
+    ['false', false],
+  ])('reenvía ?conAudio=%s al exportador como %s', async (crudo, esperado) => {
+    // eslint-disable-next-line require-yield
+    iterateForExport.mockImplementation(async function* () {});
+
+    await request(crearApp())
+      .get(RUTA)
+      .query({ ...FILTRO, conAudio: crudo });
+
+    expect(iterateForExport.mock.calls[0][0]).toMatchObject({ conAudio: esperado });
+  });
+
+  it('rechaza un ?conAudio que no sea true/false con 400', async () => {
+    const response = await request(crearApp())
+      .get(RUTA)
+      .query({ ...FILTRO, conAudio: 'si' });
+
+    expect(response.status).toBe(400);
+    expect(iterateForExport).not.toHaveBeenCalled();
+  });
+
   it('cada fila llena las columnas de SU versión y deja vacías las de la otra', async () => {
     iterateForExport.mockImplementation(async function* () {
       yield [encuestaCompletada(), encuestaV1()];
