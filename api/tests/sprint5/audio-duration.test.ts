@@ -50,6 +50,19 @@ describe('duracionMsIsoBmff', () => {
     expect(duracionMsIsoBmff(audioM4aMinimo({ mvhd: mvhdV0(1_000, 0) }))).toBeNull();
   });
 
+  it('devuelve null si los ms desbordan INT4 (columna INTEGER: evita el P2020 y el 500)', () => {
+    // mvhd v0 con timescale=1 y duration=3_000_000 -> 3e9 ms, muy por encima de
+    // 2_147_483_647. Es alcanzable: el módulo guarda el archivo tal cual, sin
+    // validar formato, así que un .m4a truncado o corrupto puede traer basura.
+    const buf = audioM4aMinimo({ mvhd: mvhdV0(3_000_000_000, 1) });
+    expect(duracionMsIsoBmff(buf)).toBeNull();
+  });
+
+  it('acepta el valor máximo exacto de INT4 (2_147_483_647 ms)', () => {
+    // El tope es inclusivo: justo en el borde la duración sigue siendo válida.
+    expect(duracionMsIsoBmff(audioM4aMinimo({ mvhd: mvhdV0(2_147_483_647) }))).toBe(2_147_483_647);
+  });
+
   it('devuelve null si la duración es 0xFFFFFFFF (mvhd fragmentado, duración desconocida)', () => {
     const mvhd = mvhdV0(1_000);
     mvhd.writeUInt32BE(0xffffffff, 8 + 16); // cabecera(8) + offset de `duration` en el payload

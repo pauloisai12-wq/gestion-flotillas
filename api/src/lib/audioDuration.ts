@@ -62,5 +62,10 @@ export function duracionMsIsoBmff(buffer: Buffer): number | null {
   }
   if (timescale === 0) return null;
   const ms = Math.round((duration * 1000) / timescale);
-  return Number.isFinite(ms) && ms >= 0 ? ms : null;
+  // Tope INT4: la columna `duracion_ms` es INTEGER en Postgres. Un mvhd basura
+  // (archivo truncado, timescale=1 con duración enorme) puede dar miles de
+  // millones de ms; si eso llegara al `create`, Prisma lanzaría P2020 y la
+  // subida moriría en 500 -> el móvil reintentaría el mismo segmento para
+  // siempre. La duración es best-effort: ante un valor fuera de rango, null.
+  return Number.isFinite(ms) && ms >= 0 && ms <= 2_147_483_647 ? ms : null;
 }
