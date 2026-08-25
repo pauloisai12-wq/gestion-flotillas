@@ -59,6 +59,7 @@ RUN addgroup -S -g 10001 appgroup \
     /app/uploads/maintenance-tickets/quotes \
     /app/uploads/qa-externa/buffalo \
     /app/uploads/qa-externa/lx \
+    /app/uploads/encuestas-audio \
     /app/storage/reports \
     /home/api \
   && chown -R api:appgroup /app /home/api

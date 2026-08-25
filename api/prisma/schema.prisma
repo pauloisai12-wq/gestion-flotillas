@@ -1017,6 +1017,9 @@ model Encuesta {
   idLocal                     String               @unique @map("id_local")
   dispositivoId               Int                  @map("dispositivo_id")
   dispositivo                 EncuestaDispositivo  @relation(fields: [dispositivoId], references: [id])
+  /// Segmentos de audio grabados durante la encuesta. Llegan DESPUÉS del alta
+  /// (subida diferida por la app), por eso la lista nace vacía y crece sola.
+  audios                      EncuestaAudio[]
   payloadHash                 String               @map("payload_hash")
   versionCuestionario         Int                  @map("version_cuestionario")
   /// Regex en la app, NO único: dos teléfonos pueden emitir el mismo folio.
@@ -1088,4 +1091,36 @@ model Encuesta {
   @@index([fechaHoraFinalizacion])
   @@index([estado])
   @@map("encuestas")
+}
+
+/// Segmento de audio grabado durante una encuesta. La app graba un archivo por
+/// tramo (pausa/reanudación como borrador) y los sube uno a uno DESPUÉS de que
+/// la encuesta fue aceptada. Los segmentos son inmutables: nunca se regraba
+/// `segmento`, siempre nace `segN+1`. Sin `dispositivo_id`: quien sube es por
+/// contrato el dueño de la encuesta (se resuelve dentro del dispositivo
+/// autenticado), así que se deriva de `encuesta.dispositivo`.
+model EncuestaAudio {
+  id            Int      @id @default(autoincrement())
+  encuestaId    Int      @map("encuesta_id")
+  /// Nombre de archivo lógico que manda la app (`seg1.m4a`). Único por encuesta.
+  segmento      String   @db.VarChar(64)
+  /// SHA-256 hex del contenido. NO es único por encuesta: dos segmentos con
+  /// bytes idénticos son dos filas que apuntan al mismo blob.
+  sha256        String   @db.Char(64)
+  tamanoBytes   Int      @map("tamano_bytes")
+  /// Content-Type declarado por el multipart. No se valida ni se confía en él
+  /// más allá de elegir el Content-Type con que se sirve.
+  mimeDeclarado String?  @map("mime_declarado") @db.VarChar(120)
+  /// Relativa a /app/uploads: `encuestas-audio/<sha256>.m4a`.
+  ruta          String
+  /// Best-effort (mvhd de ISO-BMFF). NULL = no se pudo calcular (p. ej. AMR).
+  duracionMs    Int?     @map("duracion_ms")
+  recibidoEn    DateTime @default(now()) @map("recibido_en")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+  encuesta      Encuesta @relation(fields: [encuestaId], references: [id], onDelete: Cascade)
+
+  @@unique([encuestaId, segmento])
+  @@index([sha256])
+  @@map("encuestas_audios")
 }
