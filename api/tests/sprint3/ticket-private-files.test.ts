@@ -211,7 +211,10 @@ describe('archivos privados de tickets', () => {
     ]);
 
     expect(indexSource).toContain("'/uploads/maintenance-tickets'");
-    expect(indexSource).toContain("if (uploadCategory === 'maintenance-tickets')");
+    // Sin el `if (`: el guard trata en la MISMA condición otras categorías
+    // igual de cerradas (encuestas-audio), así que anclar la línea entera
+    // rompería este test cada vez que se cierra una categoría nueva.
+    expect(indexSource).toContain("uploadCategory === 'maintenance-tickets'");
     expect(ticketSource).toContain("'/:id/attachments/:attachmentId/file'");
     expect(ticketSource).toContain("'/:id/attachments/:attachmentId/thumbnail'");
     expect(quoteSource).toContain("'/:id/pdf'");

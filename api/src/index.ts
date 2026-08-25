@@ -170,6 +170,18 @@ app.use(
   },
 );
 
+// Mismo criterio para los audios de encuesta: son voz de personas encuestadas y
+// su única puerta es GET /api/encuestas/:id/audios/:audioId, que exige
+// REVISOR_QA. Servidos por express.static, cualquier usuario autenticado podría
+// leerlos adivinando el sha256 del blob (el nombre del archivo ES el hash).
+app.use(
+  '/uploads/encuestas-audio',
+  authMiddleware,
+  (_req: Request, res: Response) => {
+    res.status(404).json({ error: 'Archivo no encontrado', code: 'NOT_FOUND' });
+  },
+);
+
 // Los demás archivos subidos contienen PII sensible (pólizas, tarjetas de
 // circulación, facturas), por lo que se
 // exigen credenciales: authMiddleware ANTES de express.static. El frontend
@@ -192,9 +204,9 @@ app.use(
       return;
     }
 
-    // Defensa adicional para variantes codificadas que no coincidan con el
-    // mount explícito anterior: jamás llegan a express.static.
-    if (uploadCategory === 'maintenance-tickets') {
+    // Defensa adicional para variantes codificadas que no coincidan con los
+    // mounts explícitos anteriores: jamás llegan a express.static.
+    if (uploadCategory === 'maintenance-tickets' || uploadCategory === 'encuestas-audio') {
       res.status(404).json({ error: 'Archivo no encontrado', code: 'NOT_FOUND' });
       return;
     }

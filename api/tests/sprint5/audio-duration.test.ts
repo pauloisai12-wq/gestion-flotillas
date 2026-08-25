@@ -9,6 +9,14 @@ import { describe, expect, it } from 'vitest';
 import { duracionMsIsoBmff } from '../../src/lib/audioDuration';
 import { AMR_CRUDO, audioM4aMinimo, mvhdV0, mvhdV1 } from './audioFixtures';
 
+/** Caja ISO-BMFF corriente (cabecera de 8 bytes). */
+function caja(tipo: string, payload: Buffer): Buffer {
+  const cabecera = Buffer.alloc(8);
+  cabecera.writeUInt32BE(8 + payload.length, 0);
+  cabecera.write(tipo, 4, 'latin1');
+  return Buffer.concat([cabecera, payload]);
+}
+
 /** Caja con `size == 1` (longitud de 64 bits): el parser debe saltarla entera. */
 function cajaGrande(tipo: string, payload: Buffer): Buffer {
   const cabecera = Buffer.alloc(16);
@@ -61,6 +69,22 @@ describe('duracionMsIsoBmff', () => {
   it('acepta el valor máximo exacto de INT4 (2_147_483_647 ms)', () => {
     // El tope es inclusivo: justo en el borde la duración sigue siendo válida.
     expect(duracionMsIsoBmff(audioM4aMinimo({ mvhd: mvhdV0(2_147_483_647) }))).toBe(2_147_483_647);
+  });
+
+  it('devuelve null si el moov existe pero no trae mvhd', () => {
+    // Pasa con archivos truncados justo después de la cabecera del moov: hay
+    // caja pero no cabecera de película. Sin el guard, buscarCaja devuelve null
+    // y el parser tendría que decidir qué hacer con un moov vacío.
+    const buf = audioM4aMinimo({ mvhd: caja('udta', Buffer.alloc(24, 0x00)) });
+    expect(duracionMsIsoBmff(buf)).toBeNull();
+  });
+
+  it('devuelve null ante un mvhd de versión desconocida (2): no se inventa el layout', () => {
+    // Solo existen las versiones 0 y 1; una 2 tendría otro layout de campos y
+    // leer timescale/duration en los offsets de v0 daría un número inventado.
+    const mvhd = mvhdV0(5_000);
+    mvhd[8] = 2; // cabecera(8) + primer byte del payload = `version`
+    expect(duracionMsIsoBmff(audioM4aMinimo({ mvhd }))).toBeNull();
   });
 
   it('devuelve null si la duración es 0xFFFFFFFF (mvhd fragmentado, duración desconocida)', () => {

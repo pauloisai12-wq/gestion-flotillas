@@ -57,8 +57,12 @@ router.get(
 );
 
 function csvFilename(q: EncuestasExportQueryInput): string {
-  // En v3 no hay filtro de estado: el nombre contiene solo el rango de fechas.
-  return `encuestas-${q.dateFrom}_${q.dateTo}.csv`;
+  // En v3 no hay filtro de estado: el nombre lleva el rango de fechas y, si el
+  // revisor exportó con el filtro de audio puesto, un sufijo que lo diga. Sin
+  // él, dos descargas del mismo rango con conjuntos distintos llegan a la
+  // carpeta con el mismo nombre y el navegador las apila como "(1)", "(2)".
+  const sufijo = q.conAudio === undefined ? '' : q.conAudio ? '-con-audio' : '-sin-audio';
+  return `encuestas-${q.dateFrom}_${q.dateTo}${sufijo}.csv`;
 }
 
 function setCsvHeaders(res: Response, filename: string): void {

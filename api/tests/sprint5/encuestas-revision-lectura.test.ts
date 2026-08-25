@@ -560,6 +560,11 @@ describe('GET|HEAD /api/encuestas/:id/audios/:audioId', () => {
     expect(response.status).toBe(200);
     expect(response.headers['content-disposition']).toContain('attachment');
     expect(response.headers['content-disposition']).toContain('e1-uuid-seg1.m4a');
+    // El tipo lo manda el servicio, no la extensión del nombre de descarga:
+    // `res.attachment` adivina por extensión y `.m4a` no está en la tabla mime
+    // de Express, así que sin el `res.type` posterior la descarga saldría como
+    // application/octet-stream.
+    expect(response.headers['content-type']).toMatch(/^audio\/mp4/);
   });
 
   it('HEAD publica las cabeceras sin mover el cuerpo', async () => {
@@ -740,5 +745,35 @@ describe('getAudioParaServir — el segmento se acota a su encuesta', () => {
     prismaFalso.encuestaAudio.findFirst.mockResolvedValue(null);
 
     expect(await servirReal(9, 3)).toBeNull();
+  });
+});
+
+// ─── El estático de /uploads no sirve audios ────────────────────────────────
+// Gemelo del test de `maintenance-tickets` (tests/sprint3/ticket-private-files.test.ts):
+// se comprueba sobre el FUENTE de index.ts porque montar la app entera aquí
+// arrastraría env.ts, Redis y los cron jobs. Lo que se está protegiendo es que
+// nadie reabra el estático: el nombre del blob ES el sha256, así que servido por
+// express.static cualquier usuario autenticado (no solo REVISOR_QA) podría leer
+// la voz de un encuestado adivinando —o filtrando— un hash.
+describe('/uploads/encuestas-audio queda cerrado al estático', () => {
+  it('index.ts monta el 404 explícito y trata la categoría en el guard', async () => {
+    const indexSource = await fs.promises.readFile(path.resolve('src/index.ts'), 'utf8');
+
+    expect(indexSource).toContain("'/uploads/encuestas-audio'");
+    expect(indexSource).toContain("uploadCategory === 'encuestas-audio'");
+  });
+
+  it('la única puerta al audio es la ruta con requireRole([REVISOR_QA])', async () => {
+    const routerSource = await fs.promises.readFile(
+      path.resolve('src/routes/encuestasRevisionRouter.ts'),
+      'utf8',
+    );
+
+    expect(routerSource).toContain("'/:id/audios/:audioId'");
+    expect(routerSource).toContain('sendPrivateFile');
+    // Las dos (GET y HEAD) van con el rol delante; no hay una tercera sin él.
+    expect(
+      routerSource.match(/\/:id\/audios\/:audioId', requireRole\(\[Roles\.REVISOR_QA\]\)/g),
+    ).toHaveLength(2);
   });
 });

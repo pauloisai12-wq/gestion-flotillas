@@ -25,8 +25,10 @@ info:
 
     **Se aceptan TRES versiones del cuestionario:** `versionCuestionario: 1` (el
     restaurado, con sus dos ramas por `estado`), `versionCuestionario: 3` (el
-    vigente) y `versionCuestionario: 4` (v3 extendida con opciones "otro" y
-    preguntas abiertas). El servidor despacha por ese entero **antes** de validar
+    vigente) y `versionCuestionario: 4` (v3 con **catálogo propio en P8**
+    —sale `paola_barrera`; entran `paco_nino` y `goyo_castaneda`— más las
+    opciones `otro` / `no_sabe_no_contesta` y sus preguntas abiertas; P9 sí
+    extiende el catálogo de v3). El servidor despacha por ese entero **antes** de validar
     y cada versión tiene su propio schema; cualquier otro entero recibe
     `422 UNSUPPORTED_VERSION`.
 
@@ -457,7 +459,10 @@ paths:
           multipart/form-data:
             schema:
               type: object
-              additionalProperties: false
+              # Sin `additionalProperties: false` a propósito: el servidor IGNORA
+              # las partes de TEXTO que no espera (solo una parte de ARCHIVO con
+              # otro nombre da 422), así que un cliente generado con ese candado
+              # rechazaría un formulario que el servidor acepta sin problema.
               required: [segmento, sha256, tamano_bytes, audio]
               properties:
                 segmento:
@@ -479,6 +484,11 @@ paths:
                     Tamaño del archivo en bytes. Viaja como **texto**: en multipart
                     todo es texto (a diferencia de la ingesta JSON, donde los
                     números son números).
+
+                    Entero **≤ 2147483647**: la columna `tamano_bytes` es INT4 en
+                    Postgres. El tope real lo impone antes
+                    `ENCUESTAS_AUDIO_MAX_FILE_SIZE_MB` (máximo admitido 100 MB),
+                    así que un valor legítimo nunca se acerca al límite.
                   examples:
                     - '1048576'
                 audio:

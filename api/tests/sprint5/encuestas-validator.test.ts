@@ -698,9 +698,16 @@ describe('encuestaV1Schema (cuestionario restaurado)', () => {
 // ---------------------------------------------------------------------------
 // Cuestionario v4 (nuevo)
 // ---------------------------------------------------------------------------
-// La v4 extiende el catálogo de v3 con dos valores nuevos ("otro" y "no_sabe_no_contesta")
-// en ambos campos de preferencia, y dos campos opcionales de texto libre para ellos.
-// Los catálogos de v3 siguen siendo válidos en v4. El resto del contrato es idéntico.
+// La v4 añade "otro" y "no_sabe_no_contesta" a los dos campos de preferencia,
+// más dos campos opcionales de texto libre para el valor "otro".
+//
+// OJO con los catálogos, que NO se comportan igual en las dos preguntas:
+//   · P8 (`preferenciaElectoral`) tiene catálogo PROPIO: sale `paola_barrera`
+//     (válida solo en v3) y entran `paco_nino` y `goyo_castaneda`. NO es una
+//     extensión de v3: un payload v3 válido puede ser inválido en v4.
+//   · P9 (`preferenciaPartido`) sí extiende v3: los 9 partidos de v3 siguen
+//     valiendo y solo se suman los dos códigos nuevos.
+// El resto del contrato es idéntico.
 
 describe('encuestaV4Schema — cuestionario v4', () => {
   function conRespuestasV4(cambios: Record<string, unknown>): PayloadEncuesta {
@@ -740,7 +747,23 @@ describe('encuestaV4Schema — cuestionario v4', () => {
     expect(encuestaV4Schema.safeParse(encuestaV4CompletaValida({ estado: 'borrador' })).success).toBe(false);
   });
 
-  describe('Compatibilidad: catálogos v3 siguen siendo válidos en v4', () => {
+  describe('Catálogos de v4 frente a los de v3', () => {
+    // Blindaje del catálogo EXACTO de P8, valores y orden: la app móvil ya
+    // manda estos códigos y el CSV del revisor los pivota por posición. Un
+    // renombre o un valor de más aquí es un cambio de contrato, no un detalle.
+    it('P8 tiene exactamente los 8 códigos del contrato v4, en ese orden', () => {
+      expect(PREFERENCIAS_ELECTORALES_V4).toEqual([
+        'irineo_molina',
+        'fernando_huerta',
+        'lalo_ximenez',
+        'paco_nino',
+        'ana_gabriela_delgado',
+        'goyo_castaneda',
+        'otro',
+        'no_sabe_no_contesta',
+      ]);
+    });
+
     it('rechaza candidatos fuera del catálogo v4 (enum inválido)', () => {
       const payload = conRespuestasV4({
         preferenciaElectoral: 'candidato_inexistente',
@@ -770,8 +793,9 @@ describe('encuestaV4Schema — cuestionario v4', () => {
       expect(PREFERENCIAS_ELECTORALES_V4).not.toContain('paola_barrera');
       expect(PREFERENCIAS_ELECTORALES_V3).toContain('paola_barrera');
       expect(acepta(conRespuestasV4({ preferenciaElectoral: 'paola_barrera', preferenciaElectoralOtro: undefined }))).toBe(false);
-      // v3: paola_barrera sigue siendo válida en v3
-      expect(aceptaV3(conRespuestasV3({ preferenciaElectoral: 'paola_barrera', preferenciaElectoralOtro: undefined }))).toBe(true);
+      // v3: paola_barrera sigue siendo válida en v3. El payload NO lleva
+      // `preferenciaElectoralOtro`: ese campo no existe en el contrato v3.
+      expect(aceptaV3(conRespuestasV3({ preferenciaElectoral: 'paola_barrera' }))).toBe(true);
     });
 
     it('acepta paco_nino y goyo_castaneda en v4 (añadidos por el cuestionario v4)', () => {

@@ -63,6 +63,12 @@ function BadgeAudio({ total }: { total: number }) {
  */
 function SegmentoAudio({ audio }: { audio: EncuestaAudio }) {
   const [duracionMedida, setDuracionMedida] = useState<number | null>(null);
+  // El <audio> falla en silencio: si la petición devuelve 401 (sesión vencida),
+  // 404 (blob ausente en disco) o el códec no se puede decodificar, el
+  // reproductor se queda inerte sin decir nada y el revisor concluye que la
+  // encuesta no tiene audio. El fallback de texto entre las etiquetas tampoco
+  // se pinta: solo aparece en navegadores sin <audio>.
+  const [fallo, setFallo] = useState(false);
   const src = `${API_BASE}${audio.url}`;
   const duracionMs = audio.duracionMs ?? duracionMedida;
   return (
@@ -93,20 +99,30 @@ function SegmentoAudio({ audio }: { audio: EncuestaAudio }) {
         onLoadedMetadata={(event) => {
           const d = event.currentTarget.duration;
           if (Number.isFinite(d)) setDuracionMedida(Math.round(d * 1000));
+          setFallo(false);
         }}
+        onError={() => setFallo(true)}
       >
         Tu navegador no puede reproducir este audio; descárgalo para escucharlo.
       </audio>
+      {fallo && (
+        <p className="text-xs text-destructive" role="alert">
+          No se pudo cargar el audio. Si tu sesión venció, vuelve a iniciar sesión; si el problema
+          sigue, intenta descargarlo.
+        </p>
+      )}
     </li>
   );
 }
 
 export default function RevisionEncuestaDetallePage({ params }: { params: Promise<{ id: string }> }) {
   const { id: idStr } = use(params);
-  const id = Number.parseInt(idStr, 10);
   // Un id no numérico jamás va a existir en la BD: se corta aquí en vez de
-  // gastar una petición que devolvería 404.
-  const validId = Number.isInteger(id) && id > 0 ? id : null;
+  // gastar una petición que devolvería 404. Se valida la cadena ENTERA con la
+  // expresión regular y no con `Number.parseInt`, que se queda con el prefijo:
+  // /revision/encuestas/12abc abriría la encuesta 12 y el revisor creería estar
+  // viendo lo que pidió.
+  const validId = /^[1-9]\d*$/.test(idStr) ? Number(idStr) : null;
   const router = useRouter();
   const { data: encuesta, isLoading, isError, error, refetch } = useEncuesta(validId);
 

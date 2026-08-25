@@ -33,10 +33,18 @@ function nombreArchivo(sha256: string): string {
  * Ruta absoluta de un blob a partir de la `ruta` guardada en BD. Solo se usa el
  * basename y se comprueba que quede bajo ENCUESTAS_AUDIO_DIR: la BD es de
  * confianza, pero la comprobación cuesta una línea.
+ *
+ * Además se exige que el basename tenga la forma content-addressed que este
+ * módulo escribe (`<sha256 hex minúsculas>.m4a`). Cualquier otra cosa —una
+ * `ruta` corrupta, migrada a mano o con `..`— es un error de programación, no
+ * una lectura legítima: mejor lanzar que abrir un archivo arbitrario del
+ * directorio (o, con `/` como entrada, el propio directorio).
  */
 export function rutaAbsolutaAudio(ruta: string): string {
+  const base = path.basename(ruta);
+  if (!/^[a-f0-9]{64}\.m4a$/.test(base)) throw new Error('Ruta de audio inválida');
   const baseDir = path.resolve(env.ENCUESTAS_AUDIO_DIR);
-  const absoluta = path.resolve(baseDir, path.basename(ruta)); // nosemgrep
+  const absoluta = path.resolve(baseDir, base); // nosemgrep
   if (!absoluta.startsWith(baseDir + path.sep)) throw new Error('Ruta de audio inválida');
   return absoluta;
 }

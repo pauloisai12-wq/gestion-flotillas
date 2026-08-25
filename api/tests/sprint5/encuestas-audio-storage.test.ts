@@ -73,6 +73,17 @@ describe('guardarAudio', () => {
     await guardarAudio(buf, sha256Of(buf));
     expect(fs.readdirSync(dir).filter((f) => f.endsWith('.tmp'))).toEqual([]);
   });
+
+  it('rechaza un sha que no sea hex de 64 minúsculas (el nombre del blob ES el hash)', async () => {
+    const buf = audioM4aMinimo({ relleno: 8 });
+    // Mayúsculas: el contrato fija hex en minúsculas y el nombre del archivo se
+    // deriva de él; admitirlas rompería la dedupe física en sistemas de
+    // archivos sensibles a mayúsculas (dos blobs del mismo contenido).
+    await expect(guardarAudio(buf, sha256Of(buf).toUpperCase())).rejects.toThrow(
+      /sha256 inválido/,
+    );
+    await expect(guardarAudio(buf, 'XYZ')).rejects.toThrow(/sha256 inválido/);
+  });
 });
 
 describe('rutaAbsolutaAudio', () => {
@@ -83,7 +94,25 @@ describe('rutaAbsolutaAudio', () => {
     );
   });
 
-  it('no escapa del directorio ante una ruta con ../ (se queda con el basename)', () => {
-    expect(rutaAbsolutaAudio('../../etc/passwd')).toBe(path.join(path.resolve(dir), 'passwd'));
+  // El basename debe tener la forma content-addressed que escribe este módulo.
+  // Cualquier otra cosa es una `ruta` corrupta en BD, no una lectura legítima:
+  // lanzar es mejor que abrir un archivo arbitrario del directorio (o el propio
+  // directorio, que es lo que devolvía `path.basename('/')`).
+  it('rechaza una ruta con ../ en vez de quedarse con el basename', () => {
+    expect(() => rutaAbsolutaAudio('../../etc/passwd')).toThrow(/Ruta de audio inválida/);
+    expect(() => rutaAbsolutaAudio('encuestas-audio/../x.m4a')).toThrow(/Ruta de audio inválida/);
+  });
+
+  it('rechaza "/" (su basename es el propio directorio, no un blob)', () => {
+    expect(() => rutaAbsolutaAudio('/')).toThrow(/Ruta de audio inválida/);
+  });
+
+  it('rechaza un basename que no sea <sha256 en minúsculas>.m4a', () => {
+    expect(() => rutaAbsolutaAudio(`encuestas-audio/${'A'.repeat(64)}.m4a`)).toThrow(
+      /Ruta de audio inválida/,
+    );
+    expect(() => rutaAbsolutaAudio(`encuestas-audio/${'a'.repeat(64)}.mp3`)).toThrow(
+      /Ruta de audio inválida/,
+    );
   });
 });

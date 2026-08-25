@@ -76,6 +76,10 @@ export async function sendPrivateFile(
     // respuesta no lleva cuerpo y su Content-Range describe el tamaño total.
     let status = 200;
     let tramo: { start: number; end: number } | undefined;
+    // `Vary: Cookie` va ANTES de la bifurcación del 416: la respuesta de rango
+    // insatisfacible también depende de la sesión (otro usuario recibiría un
+    // 403/404), y sin la cabecera una caché compartida podría reutilizarla.
+    if (options.varyCookie) res.vary('Cookie');
     if (options.acceptRanges) {
       res.setHeader('Accept-Ranges', 'bytes');
       const rango = rangoSolicitado(req.headers.range, stat.size);
@@ -94,9 +98,13 @@ export async function sendPrivateFile(
 
     res.setHeader('Cache-Control', options.cacheControl);
     res.setHeader('Content-Length', tramo ? tramo.end - tramo.start + 1 : stat.size);
-    if (options.varyCookie) res.vary('Cookie');
+    // `res.attachment` fija Content-Disposition y, de paso, deriva el
+    // Content-Type de la EXTENSIÓN del nombre. Por eso el `res.type` explícito
+    // va DESPUÉS: cuando el caller sabe el tipo real (el mime declarado del
+    // audio, p. ej.), ese gana sobre la adivinanza por extensión. Los callers
+    // que solo pasan `downloadName` (reportes, export de qa-externa) no cambian.
     if (options.downloadName) res.attachment(options.downloadName);
-    else if (options.contentType) res.type(options.contentType);
+    if (options.contentType) res.type(options.contentType);
 
     if (req.method === 'HEAD') {
       res.status(status).end();

@@ -53,15 +53,30 @@ function crearApp() {
       if (!enviado) res.status(404).end();
     }, next);
   });
+  // Igual que /con-rangos pero con varyCookie: el caller real (el audio del
+  // revisor) lo activa, y lo que se comprueba es que la cabecera salga también
+  // por el camino corto del 416.
+  app.all('/con-rangos-vary', (req: Request, res: Response, next: NextFunction) => {
+    sendPrivateFile(req, res, archivo, {
+      cacheControl: 'private, no-store',
+      contentType: 'audio/mp4',
+      acceptRanges: true,
+      varyCookie: true,
+    }).then((enviado) => {
+      if (!enviado) res.status(404).end();
+    }, next);
+  });
   return app;
 }
 
 // `responseType('blob')` obliga a superagent a bufferizar el cuerpo tal cual en
-// un Buffer: con audio/mp4 el parser por defecto no es de fiar para comparar bytes.
+// un Buffer: con audio/mp4 el parser por defecto no es de fiar para comparar
+// bytes. La aserción va DENTRO del helper a propósito: sin ella, un fallback a
+// `respuesta.text` dejaría pasar como verde una respuesta que llegó parseada
+// (es decir, con otro Content-Type del esperado).
 function cuerpo(respuesta: request.Response): string {
-  return Buffer.isBuffer(respuesta.body)
-    ? respuesta.body.toString('utf8')
-    : String(respuesta.text ?? '');
+  expect(Buffer.isBuffer(respuesta.body)).toBe(true);
+  return (respuesta.body as Buffer).toString('utf8');
 }
 
 beforeAll(async () => {
@@ -160,6 +175,42 @@ describe('sendPrivateFile con acceptRanges', () => {
     expect(respuesta.headers['content-range']).toBe('bytes */10');
   });
 
+  it('bytes=-0 (los "últimos cero bytes") es 416, no un 206 vacío', async () => {
+    const respuesta = await request(crearApp())
+      .get('/con-rangos')
+      .set('Range', 'bytes=-0')
+      .responseType('blob')
+      .expect(416);
+
+    expect(respuesta.headers['content-range']).toBe('bytes */10');
+    expect(cuerpo(respuesta)).toBe('');
+  });
+
+  it('una unidad que no sea bytes (items=0-5) se ignora y se responde 200 completo', async () => {
+    const respuesta = await request(crearApp())
+      .get('/con-rangos')
+      .set('Range', 'items=0-5')
+      .responseType('blob')
+      .expect(200);
+
+    expect(cuerpo(respuesta)).toBe(CONTENIDO);
+    expect(respuesta.headers['content-length']).toBe('10');
+    expect(respuesta.headers['content-range']).toBeUndefined();
+  });
+
+  it('el 416 también lleva Vary: Cookie cuando el caller lo pide', async () => {
+    // La respuesta a un rango insatisfacible depende igualmente de la sesión
+    // (otro usuario recibiría 403/404): sin la cabecera, una caché compartida
+    // podría reutilizarla entre sesiones.
+    const respuesta = await request(crearApp())
+      .get('/con-rangos-vary')
+      .set('Range', 'bytes=100-')
+      .responseType('blob')
+      .expect(416);
+
+    expect(respuesta.headers['vary']).toContain('Cookie');
+  });
+
   it('un Range multi-tramo se ignora y se responde 200 completo', async () => {
     const respuesta = await request(crearApp())
       .get('/con-rangos')
@@ -179,7 +230,10 @@ describe('sendPrivateFile con acceptRanges', () => {
       .responseType('blob')
       .expect(206);
 
-    expect(cuerpo(respuesta)).toBe('');
+    // Sin `cuerpo()`: en un HEAD no llega ni un byte, así que superagent nunca
+    // construye el Buffer que ese helper exige. Lo que se comprueba es
+    // justamente que no haya cuerpo pese al Content-Length de 4.
+    expect(respuesta.text ?? '').toBe('');
     expect(respuesta.headers['content-range']).toBe('bytes 2-5/10');
     expect(respuesta.headers['content-length']).toBe('4');
   });

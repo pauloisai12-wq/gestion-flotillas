@@ -412,7 +412,7 @@ del contrato; una parte de archivo con otro nombre es `422`):
 |---|---|---|
 | `segmento` | texto | Nombre lógico del tramo, tal como lo llama el teléfono: `seg1.m4a`. Letras, dígitos, `.`, `_` y `-`; máximo 64 caracteres. **Es la clave del segmento dentro de la encuesta** |
 | `sha256` | texto | SHA-256 del contenido, hexadecimal de 64 caracteres **en minúsculas** |
-| `tamano_bytes` | texto | Tamaño del archivo en bytes, entero positivo (viaja como texto: en multipart todo es texto) |
+| `tamano_bytes` | texto | Tamaño del archivo en bytes, entero positivo (viaja como texto: en multipart todo es texto). **Tope: 2147483647** — la columna es `integer` (INT4); en la práctica manda antes `ENCUESTAS_AUDIO_MAX_FILE_SIZE_MB` |
 | `audio` | binario | El archivo. Se guarda **tal cual**, sin transcodificar ni validar el formato |
 
 Header: `Authorization: Bearer <api key del dispositivo>` — la **misma** key con la que se envía la
@@ -963,9 +963,9 @@ el dispositivo se deriva de `encuestas.dispositivo_id`.
 | `sha256` | `char(64)` | **servidor** (recalculado) | SHA-256 del contenido recibido, ya contrastado con el declarado. **No es único**: dos segmentos con bytes idénticos son dos filas apuntando al mismo blob. Indexado |
 | `tamano_bytes` | `integer` | cliente (validado) | Bytes del archivo, verificados contra lo recibido |
 | `mime_declarado` | `varchar(120)` NULL | cliente | `Content-Type` de la parte multipart. **No se valida**: solo se usa para elegir con qué tipo servir el stream, y solo si es un `audio/*` (si no, `audio/mp4`) |
-| `ruta` | `text` | servidor | Relativa a `/app/uploads`: `encuestas-audio/<sha256>.m4a`. **Interna: nunca sale en el DTO** |
+| `ruta` | `text` | servidor | Relativa a `/app/uploads`: `encuestas-audio/<sha256>.m4a`. El prefijo `encuestas-audio/` está **fijo en código** (`api/src/lib/encuestasAudioStorage.ts`) y no depende de la configuración: el directorio real donde se escribe lo manda `ENCUESTAS_AUDIO_DIR`, y al leer solo se usa el **basename** (que debe ser `<sha256 hex minúsculas>.m4a`). **Interna: nunca sale en el DTO** |
 | `duracion_ms` | `integer` NULL | servidor (best-effort) | Duración leída del `mvhd` de ISO-BMFF. `NULL` = no se pudo calcular (p. ej. un 3GP/AMR con extensión `.m4a`); no es un error |
-| `recibido_en` | `timestamp` | **servidor** | Estampa de llegada. **Es el orden en que el detalle muestra los segmentos** (desempate por `id`) |
+| `recibido_en` | `timestamp` | **servidor** | Estampa de llegada. **Es el orden en que el detalle muestra los segmentos** (desempate por `id`). Un **reemplazo** (mismo segmento, otro `sha256`) la refresca, así que ese segmento pasa al final de la lista del detalle aunque se grabara primero |
 | `created_at` / `updated_at` | `timestamp` | servidor | Auditoría estándar |
 
 El archivo **no** vive en la base: la fila apunta a un blob en disco, almacenado por su hash
@@ -1038,6 +1038,14 @@ sobre tablas `encuestas*`):
 > **`docker-compose.yml` base NO persiste `/app/uploads`**: levantado a secas, los audios quedan
 > dentro del contenedor y se pierden al recrearlo. Respaldar audios = respaldar ese directorio,
 > además del dump.
+
+> ⚠️ **El directorio de blobs solo crece: no hay recolector de basura.** Un reemplazo (mismo
+> segmento, otro contenido) escribe el blob nuevo y deja el viejo huérfano en disco, y el
+> `ON DELETE CASCADE` de una encuesta borra las **filas** de `encuestas_audios` pero **no** los
+> archivos. Nada limpia esos huérfanos hoy. Con el tope por archivo en su default (50 MB) y cinco
+> revisores el crecimiento es lento, pero conviene vigilar el uso del disco de
+> `ENCUESTAS_AUDIO_DIR` y, si algún día molesta, barrer a mano los `.m4a` cuyo nombre (el sha256)
+> no aparezca en `SELECT sha256 FROM encuestas_audios`.
 
 > ⚠️ Si un despliegue todavía **no** aplicó `20260805120000_encuestas_v3` y tuviera filas v1 en la
 > base, respalda antes: esa migración es la que reestructura columnas, y va delante de la aditiva.

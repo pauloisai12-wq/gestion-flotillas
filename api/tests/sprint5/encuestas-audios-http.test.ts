@@ -203,6 +203,22 @@ describe('POST /:idLocal/audios — encuesta no resoluble', () => {
     expect(response.body).toEqual({ error: { code: 'ENCUESTA_NO_ENCONTRADA' } });
     expect(almacen.audios.size).toBe(0);
   });
+
+  it('el 404 gana al 413: la encuesta se resuelve ANTES de parsear el multipart', async () => {
+    // Un archivo por encima del tope (1 MB en este archivo) hacia un idLocal
+    // desconocido. Si multer corriera primero, el cliente vería un 413 —rechazo
+    // definitivo— y borraría un segmento que en realidad solo necesita que la
+    // encuesta se sincronice antes. Además, así un idLocal inventado no cuesta
+    // el tope entero de RAM por petición.
+    const enorme = Buffer.alloc(1024 * 1024 + 1, 0xab);
+
+    const response = await subir(crearApp(), 'no-existe-uuid', enorme, camposDe(enorme));
+
+    expect(response.status).toBe(404);
+    expect(response.body).toEqual({ error: { code: 'ENCUESTA_NO_ENCONTRADA' } });
+    expect(almacen.audios.size).toBe(0);
+    expect(blobsEnDisco()).toEqual([]);
+  });
 });
 
 describe('POST /:idLocal/audios — alta y dedupe', () => {
@@ -263,6 +279,27 @@ describe('POST /:idLocal/audios — alta y dedupe', () => {
       duracionMs: 3_000,
       ruta: `encuestas-audio/${sha256Of(otro)}.m4a`,
     });
+  });
+
+  it('un Content-Type de parte larguísimo se trunca a 120 y la subida sigue siendo 201', async () => {
+    // `mime_declarado` es varchar(120): sin el recorte, Prisma lanza P2000 y el
+    // errorHandler lo convierte en 400 — prohibido en esta ruta. El mime es
+    // informativo, así que truncar es preferible a rechazar el segmento.
+    const mimeLargo = `audio/${'a'.repeat(194)}`;
+    expect(mimeLargo).toHaveLength(200);
+
+    const campos = camposDe(AUDIO);
+    let r = request(crearApp()).post(`${RUTA}/e1-uuid/audios`);
+    for (const [k, v] of Object.entries(campos)) r = r.field(k, v);
+    const response = await r.attach('audio', AUDIO, {
+      filename: 'seg1.m4a',
+      contentType: mimeLargo,
+    });
+
+    expect(response.status).toBe(201);
+    const fila = [...almacen.audios.values()][0];
+    expect(fila.mimeDeclarado).toBe(mimeLargo.slice(0, 120));
+    expect(String(fila.mimeDeclarado)).toHaveLength(120);
   });
 
   it('dos segmentos con los MISMOS bytes son dos filas que comparten un solo blob', async () => {

@@ -312,7 +312,13 @@ router.post(
       segmento: campos.data.segmento,
       sha256,
       tamanoBytes: campos.data.tamano_bytes,
-      mimeDeclarado: archivo.mimetype || null,
+      // La columna es varchar(120): un Content-Type de parte más largo (un
+      // cliente exótico, una cabecera manipulada) haría que Prisma lanzara
+      // P2000 y el errorHandler lo mapearía a 400 — prohibido en esta ruta, que
+      // el móvil lee como transitoria y reintentaría para siempre. El mime es
+      // un dato informativo (solo elige el Content-Type al servir), así que
+      // truncarlo es preferible a fallar.
+      mimeDeclarado: archivo.mimetype?.slice(0, 120) || null,
       buffer: archivo.buffer,
     });
     res.status(created ? 201 : 200).json({ audio_id: String(audioId) });

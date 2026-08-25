@@ -253,6 +253,36 @@ describe('GET /api/encuestas/export.csv', () => {
     expect(iterateForExport.mock.calls[0][0]).toMatchObject({ conAudio: esperado });
   });
 
+  // Dos descargas del mismo rango con conjuntos distintos no pueden llamarse
+  // igual: en la carpeta de descargas el revisor no sabría cuál es cuál (el
+  // navegador solo añade "(1)").
+  it.each([
+    ['true', 'encuestas-2026-07-01_2026-07-31-con-audio.csv'],
+    ['false', 'encuestas-2026-07-01_2026-07-31-sin-audio.csv'],
+  ])('?conAudio=%s marca el nombre del archivo', async (crudo, esperado) => {
+    // eslint-disable-next-line require-yield
+    iterateForExport.mockImplementation(async function* () {});
+
+    const response = await request(crearApp())
+      .get(RUTA)
+      .query({ ...FILTRO, conAudio: crudo });
+
+    expect(response.status).toBe(200);
+    expect(response.headers['content-disposition']).toContain(esperado);
+  });
+
+  it('sin ?conAudio el nombre no lleva sufijo', async () => {
+    // eslint-disable-next-line require-yield
+    iterateForExport.mockImplementation(async function* () {});
+
+    const response = await request(crearApp()).get(RUTA).query(FILTRO);
+
+    expect(response.headers['content-disposition']).toContain(
+      'encuestas-2026-07-01_2026-07-31.csv',
+    );
+    expect(response.headers['content-disposition']).not.toContain('-audio');
+  });
+
   it('rechaza un ?conAudio que no sea true/false con 400', async () => {
     const response = await request(crearApp())
       .get(RUTA)
