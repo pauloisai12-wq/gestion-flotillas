@@ -18,6 +18,7 @@
 import prisma from '../lib/prisma';
 import { Prisma, EncuestaEstado, EncuestaElegibilidad } from '@prisma/client';
 import { GOBERNANTES_V3, PERSONAS_V1, MEDIOS_V1 } from '../validators/encuestasIngestValidator';
+import encuestasCsvHeaders from '../contracts/encuestasCsvHeaders.json';
 
 /** Tope duro de filas exportables en una sola petición. */
 export const MAX_ENCUESTAS_EXPORT = 50_000;
@@ -29,6 +30,7 @@ export interface EncuestasListQuery {
   page?: number;
   limit?: number;
   dispositivo?: string;
+  estado?: EncuestaEstado;
   /** true = solo con audio, false = solo sin audio, undefined = sin filtrar. */
   conAudio?: boolean;
   dateFrom?: string;
@@ -233,6 +235,7 @@ export function buildWhere(params: EncuestasListQuery): Prisma.EncuestaWhereInpu
       identificador: { contains: params.dispositivo, mode: 'insensitive' },
     };
   }
+  if (params.estado) where.estado = params.estado;
   if (params.conAudio !== undefined) {
     // `some`/`none` sobre la relación en vez de un conteo en memoria: Postgres
     // lo resuelve con un EXISTS y el filtro vale igual para el listado y para el
@@ -470,61 +473,7 @@ export async function* iterateForExport(
  * JSONB por orden de GOBERNANTES_V3 y PERSONAS_V1: una columna fija por persona
  * es lo que permite ordenar y graficar en Excel.
  */
-export const ENCUESTAS_CSV_HEADERS = [
-  'ID remoto',
-  'ID local',
-  'Folio',
-  'Encuestador',
-  'Recibido (UTC)',
-  'Inicio (UTC)',
-  'Finalización (UTC)',
-  'Duración (s)',
-  'Estado',
-  'Elegibilidad',
-  'Versión cuestionario',
-  'Credencial vigente',
-  'Sexo',
-  'Rango edad',
-  'Género',
-  'Partido preferido',
-  'Empresarios conocidos',
-  'Políticos conocidos',
-  'Conoce Lalo',
-  'Rol Lalo',
-  'Opinión Lalo',
-  'Preferencia electoral',
-  'Preferencia electoral (otro)',
-  'Preferencia partido',
-  'Preferencia partido (otro)',
-  'Aprobación sheinbaum',
-  'Aprobación jara',
-  'Aprobación huerta',
-  'Conoce lalo_ximenez',
-  'Conoce laura_estrada',
-  'Conoce paco_nino',
-  'Conoce gabriela_delgado',
-  'Conoce irineo_molina',
-  'Conoce goyo_castaneda',
-  'Conoce ernesto_montero',
-  'Medios (tipo)',
-  'Medios',
-  'Mayor personalidad',
-  'Candidato preferido',
-  'Ubicación disponible',
-  'Latitud',
-  'Longitud',
-  'Precisión (m)',
-  'Ubicación válida',
-  'Captura GPS (UTC)',
-  'Permiso ubicación',
-  'Servicio ubicación activo',
-  'Motivo no disponible',
-  'Plataforma',
-  'Modelo',
-  'Versión sistema',
-  'Versión app',
-  'Dispositivo',
-] as const;
+export const ENCUESTAS_CSV_HEADERS: readonly string[] = Object.freeze(encuestasCsvHeaders);
 
 /** Celdas que Excel/LibreOffice evalúan como fórmula al abrir el archivo. */
 const ARRANQUE_DE_FORMULA = /^[=+\-@\t\r]/;

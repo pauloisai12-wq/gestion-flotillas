@@ -1,10 +1,15 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   descargarEncuestasCsv,
+  createEncuestasExport,
+  downloadEncuestasZip,
+  getActiveEncuestasExport,
+  useActiveEncuestasExport,
   useEncuestas,
+  useEncuestasExportJob,
   type Encuesta,
 } from '@/hooks/useEncuestas';
 import { Input } from '@/components/ui/input';
@@ -12,6 +17,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import DataTable from '@/components/ui/data-table';
 import { toast } from '@/components/ui/toast';
+import { getApiError } from '@/lib/api';
 import { Download } from 'lucide-react';
 import { type ColumnDef } from '@tanstack/react-table';
 
@@ -25,6 +31,17 @@ const MAX_ENCUESTAS_CSV = 50_000;
 // Fuente de verdad: el superRefine de
 // api/src/validators/encuestasRevisionValidator.ts.
 const MAX_DIAS_EXPORT = 366;
+const PENDING_ENCUESTAS_EXPORT_STORAGE_KEY = 'flotillas.pendingEncuestasExport';
+
+type EstadoEncuesta = '' | 'completada' | 'noElegible';
+
+interface StoredEncuestasExport {
+  id: number;
+  dateFrom?: string;
+  dateTo?: string;
+  estado?: EstadoEncuesta;
+  conAudio?: boolean;
+}
 
 // Mismo cálculo que hace el validador del servidor (diferencia en UTC + 1), para
 // que el guard del cliente no discrepe por un día con el 400 de la API.
@@ -172,8 +189,14 @@ export default function RevisionEncuestasPage() {
   const [page, setPage] = useState(1);
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
+  const [estado, setEstado] = useState<EstadoEncuesta>('');
   const [descargando, setDescargando] = useState(false);
   const [filtroAudio, setFiltroAudio] = useState<FiltroAudio>('todas');
+  const [exportJobId, setExportJobId] = useState<number | null>(null);
+  const [exportContextKnown, setExportContextKnown] = useState(false);
+  const [localExportRestoreComplete, setLocalExportRestoreComplete] = useState(false);
+  const [creatingExport, setCreatingExport] = useState(false);
+  const [downloadingZip, setDownloadingZip] = useState(false);
   const router = useRouter();
 
   // 'todas' => `undefined` (el parámetro no viaja y la API no filtra). Se
@@ -186,14 +209,101 @@ export default function RevisionEncuestasPage() {
     limit: 20,
     dateFrom: dateFrom || undefined,
     dateTo: dateTo || undefined,
+    estado: estado || undefined,
     conAudio,
   });
+
+  const {
+    data: exportJob,
+    isError: exportJobQueryFailed,
+    refetch: refetchExportJob,
+  } = useEncuestasExportJob(exportJobId);
+  const activeExportQuery = useActiveEncuestasExport(
+    localExportRestoreComplete && exportJobId === null,
+  );
+
+  useEffect(() => {
+    const raw = window.sessionStorage.getItem(PENDING_ENCUESTAS_EXPORT_STORAGE_KEY);
+    let stored: StoredEncuestasExport | null = null;
+    if (raw) {
+      try {
+        const candidate = JSON.parse(raw) as Partial<StoredEncuestasExport>;
+        if (Number.isInteger(candidate.id) && Number(candidate.id) > 0) {
+          stored = { id: Number(candidate.id) };
+          if (typeof candidate.dateFrom === 'string' && typeof candidate.dateTo === 'string') {
+            stored = {
+              id: Number(candidate.id),
+              dateFrom: candidate.dateFrom,
+              dateTo: candidate.dateTo,
+              estado:
+                candidate.estado === 'completada' || candidate.estado === 'noElegible'
+                  ? candidate.estado
+                  : '',
+              ...(typeof candidate.conAudio === 'boolean'
+                ? { conAudio: candidate.conAudio }
+                : {}),
+            };
+          }
+        }
+      } catch {
+        // Un valor local corrupto no impide consultar la pantalla ni el job activo.
+      }
+      if (!stored) window.sessionStorage.removeItem(PENDING_ENCUESTAS_EXPORT_STORAGE_KEY);
+    }
+
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      if (stored) {
+        setExportJobId(stored.id);
+        if (stored.dateFrom && stored.dateTo) {
+          setDateFrom(stored.dateFrom);
+          setDateTo(stored.dateTo);
+          setEstado(stored.estado ?? '');
+          setFiltroAudio(
+            stored.conAudio === undefined ? 'todas' : stored.conAudio ? 'con' : 'sin',
+          );
+          setExportContextKnown(true);
+        }
+      }
+      setLocalExportRestoreComplete(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    const active = activeExportQuery.data;
+    if (activeExportQuery.isFetching || !active || exportJobId !== null) return;
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      setExportJobId(active.id);
+      setExportContextKnown(false);
+      window.sessionStorage.setItem(
+        PENDING_ENCUESTAS_EXPORT_STORAGE_KEY,
+        JSON.stringify({ id: active.id } satisfies StoredEncuestasExport),
+      );
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeExportQuery.data, activeExportQuery.isFetching, exportJobId]);
+
+  const clearExportJob = () => {
+    setExportJobId(null);
+    setExportContextKnown(false);
+    window.sessionStorage.removeItem(PENDING_ENCUESTAS_EXPORT_STORAGE_KEY);
+  };
 
   const limpiarFiltros = () => {
     setDateFrom('');
     setDateTo('');
+    setEstado('');
     setFiltroAudio('todas');
     setPage(1);
+    clearExportJob();
   };
 
   // Motivo por el que el rango no sirve para exportar, o null si está bien. Se
@@ -202,7 +312,7 @@ export default function RevisionEncuestasPage() {
   // 400 llega sin cuerpo: sin este guard el revisor solo vería un error genérico
   // y un botón que lo invita a reintentar algo que nunca va a funcionar.
   const motivoRangoInvalido = (() => {
-    if (!dateFrom || !dateTo) return 'Selecciona un rango de fechas para descargar el CSV';
+    if (!dateFrom || !dateTo) return 'Selecciona un rango de fechas para exportar';
     if (dateFrom > dateTo) return 'La fecha inicial no puede ser posterior a la fecha final';
     if (diasDelRango(dateFrom, dateTo) > MAX_DIAS_EXPORT) {
       return `El rango máximo de exportación es de ${MAX_DIAS_EXPORT} días: acorta el periodo y descarga por partes`;
@@ -221,6 +331,7 @@ export default function RevisionEncuestasPage() {
       await descargarEncuestasCsv({
         dateFrom,
         dateTo,
+        estado: estado || undefined,
         conAudio,
       });
     } finally {
@@ -228,7 +339,66 @@ export default function RevisionEncuestasPage() {
     }
   };
 
-  const hasFilters = Boolean(dateFrom || dateTo || filtroAudio !== 'todas');
+  const handleCreateExport = async () => {
+    if (motivoRangoInvalido) {
+      toast.error(`${motivoRangoInvalido}.`);
+      return;
+    }
+    setCreatingExport(true);
+    try {
+      const job = await createEncuestasExport({
+        dateFrom,
+        dateTo,
+        estado: estado || undefined,
+        conAudio,
+      });
+      setExportJobId(job.id);
+      setExportContextKnown(true);
+      window.sessionStorage.setItem(
+        PENDING_ENCUESTAS_EXPORT_STORAGE_KEY,
+        JSON.stringify({
+          id: job.id,
+          dateFrom,
+          dateTo,
+          estado,
+          ...(conAudio !== undefined ? { conAudio } : {}),
+        } satisfies StoredEncuestasExport),
+      );
+    } catch (err) {
+      if (getApiError(err).status === 409) {
+        try {
+          const active = await getActiveEncuestasExport();
+          if (active) {
+            setExportJobId(active.id);
+            setExportContextKnown(false);
+            window.sessionStorage.setItem(
+              PENDING_ENCUESTAS_EXPORT_STORAGE_KEY,
+              JSON.stringify({ id: active.id } satisfies StoredEncuestasExport),
+            );
+            toast.info('Se recuperó la exportación que ya estaba en proceso.');
+            return;
+          }
+        } catch {
+          // El mensaje general cubre también el fallo al recuperar el job activo.
+        }
+      }
+      toast.error('No se pudo iniciar la exportación. Intenta nuevamente.');
+    } finally {
+      setCreatingExport(false);
+    }
+  };
+
+  const handleDownloadZip = async () => {
+    if (!exportJob || exportJob.status !== 'COMPLETED') return;
+    setDownloadingZip(true);
+    try {
+      await downloadEncuestasZip(exportJob);
+    } finally {
+      setDownloadingZip(false);
+    }
+  };
+
+  const hasFilters = Boolean(dateFrom || dateTo || estado || filtroAudio !== 'todas');
   const totalEncuestas = data?.pagination?.total ?? 0;
 
   // Con el rango a medio llenar no se avisa nada: el título del botón ya dice
@@ -237,8 +407,11 @@ export default function RevisionEncuestasPage() {
   // El CSV se corta en seco al llegar al tope y responde 200: sin este aviso el
   // revisor daría el archivo por completo y contaría de menos.
   const avisoTope = !avisoRango && totalEncuestas > MAX_ENCUESTAS_CSV
-    ? `El CSV se corta en ${MAX_ENCUESTAS_CSV.toLocaleString('es-MX')} filas: de las ${totalEncuestas.toLocaleString('es-MX')} encuestas del filtro solo se exportarán las más antiguas. Acorta el rango de fechas para descargarlas todas.`
+    ? `El CSV se corta en ${MAX_ENCUESTAS_CSV.toLocaleString('es-MX')} filas y el ZIP rechazará el conjunto completo: el filtro contiene ${totalEncuestas.toLocaleString('es-MX')} encuestas. Acorta el rango de fechas para exportarlas todas.`
     : null;
+  const discoveringActiveExport =
+    exportJobId === null
+    && (!localExportRestoreComplete || activeExportQuery.isFetching);
 
   return (
     <div className="space-y-4">
@@ -257,7 +430,11 @@ export default function RevisionEncuestasPage() {
             id="encuestas-date-from"
             type="date"
             value={dateFrom}
-            onChange={(e) => { setDateFrom(e.target.value); setPage(1); }}
+            onChange={(e) => {
+              setDateFrom(e.target.value);
+              setPage(1);
+              clearExportJob();
+            }}
           />
         </div>
         <div>
@@ -266,8 +443,31 @@ export default function RevisionEncuestasPage() {
             id="encuestas-date-to"
             type="date"
             value={dateTo}
-            onChange={(e) => { setDateTo(e.target.value); setPage(1); }}
+            onChange={(e) => {
+              setDateTo(e.target.value);
+              setPage(1);
+              clearExportJob();
+            }}
           />
+        </div>
+        <div>
+          <label htmlFor="encuestas-estado" className="text-xs text-muted-foreground">
+            Estado
+          </label>
+          <select
+            id="encuestas-estado"
+            value={estado}
+            onChange={(e) => {
+              setEstado(e.target.value as EstadoEncuesta);
+              setPage(1);
+              clearExportJob();
+            }}
+            className="h-9 rounded-md border border-input bg-transparent px-3 py-1 text-sm outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40"
+          >
+            <option value="">Todos</option>
+            <option value="completada">Completada</option>
+            <option value="noElegible">No elegible</option>
+          </select>
         </div>
         {/* Tres botones en vez de un select: son pocas opciones y así el estado
             activo se ve sin abrir nada. No hay componente segmentado en ui/. */}
@@ -278,7 +478,11 @@ export default function RevisionEncuestasPage() {
               size="sm"
               variant={filtroAudio === opcion.valor ? 'default' : 'outline'}
               aria-pressed={filtroAudio === opcion.valor}
-              onClick={() => { setFiltroAudio(opcion.valor); setPage(1); }}
+              onClick={() => {
+                setFiltroAudio(opcion.valor);
+                setPage(1);
+                clearExportJob();
+              }}
             >
               {opcion.etiqueta}
             </Button>
@@ -328,6 +532,64 @@ export default function RevisionEncuestasPage() {
               <Download aria-hidden="true" className="h-4 w-4 mr-1" />
               {descargando ? 'Descargando…' : 'Descargar CSV'}
             </Button>
+            {exportJobQueryFailed ? (
+              <>
+                <span className="text-xs text-destructive" role="alert">
+                  No se pudo recuperar el estado del ZIP.
+                </span>
+                <Button type="button" size="sm" onClick={() => void refetchExportJob()}>
+                  Reintentar consulta
+                </Button>
+                <Button type="button" size="sm" variant="outline" onClick={clearExportJob}>
+                  Descartar trabajo
+                </Button>
+              </>
+            ) : (
+              <>
+                {discoveringActiveExport ? (
+                  <span className="text-xs text-muted-foreground" role="status">
+                    Buscando exportación activa…
+                  </span>
+                ) : null}
+                {exportJob ? (
+                  <span className="text-xs text-muted-foreground" role="status" aria-live="polite">
+                    {exportJob.status === 'QUEUED' && 'ZIP en cola'}
+                    {exportJob.status === 'PROCESSING' && `Generando ZIP… ${exportJob.progress}%`}
+                    {exportJob.status === 'COMPLETED' && 'ZIP listo'}
+                    {exportJob.status === 'FAILED'
+                      && (exportJob.errorMessage || 'Falló la exportación ZIP')}
+                  </span>
+                ) : null}
+                {exportJob?.status === 'COMPLETED' ? (
+                  <Button size="sm" onClick={handleDownloadZip} disabled={downloadingZip}>
+                    {downloadingZip
+                      ? 'Descargando…'
+                      : exportContextKnown
+                        ? 'Descargar todo (ZIP)'
+                        : 'Descargar exportación (ZIP)'}
+                  </Button>
+                ) : (
+                  <Button
+                    size="sm"
+                    onClick={handleCreateExport}
+                    disabled={
+                      discoveringActiveExport
+                      || Boolean(motivoRangoInvalido)
+                      || creatingExport
+                      || exportJob?.status === 'QUEUED'
+                      || exportJob?.status === 'PROCESSING'
+                    }
+                    title={motivoRangoInvalido ?? undefined}
+                  >
+                    {creatingExport
+                      ? 'Encolando…'
+                      : exportJob?.status === 'FAILED'
+                        ? 'Reintentar ZIP'
+                        : 'Descargar todo (ZIP)'}
+                  </Button>
+                )}
+              </>
+            )}
           </div>
         }
       />

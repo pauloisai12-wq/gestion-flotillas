@@ -47,6 +47,7 @@ vi.mock('../../src/lib/logger', () => ({
 
 import {
   cleanupExpiredDataJobs,
+  createEncuestasExportJob,
   createQaExportJob,
   createVehicleImportJob,
   getLatestOwnedActiveDataJob,
@@ -57,7 +58,7 @@ import {
   sanitizeImportResultForStorage,
 } from '../../src/services/dataJobService';
 
-function dataJob(type: 'QA_EXPORT' | 'VEHICLE_IMPORT', id: number) {
+function dataJob(type: 'QA_EXPORT' | 'ENCUESTAS_EXPORT' | 'VEHICLE_IMPORT', id: number) {
   const now = new Date('2026-07-15T12:00:00.000Z');
   return {
     id,
@@ -102,6 +103,35 @@ describe('contratos de DataJob Sprint 3', () => {
       'generate-qa-export',
       { dataJobId: 51 },
       expect.objectContaining({ jobId: 'data-job-51', attempts: 3 }),
+    );
+  });
+
+  it('publica export de encuestas separado con filtros tipados y tres reintentos', async () => {
+    mocks.dataJobCreate.mockResolvedValue(dataJob('ENCUESTAS_EXPORT', 54));
+    await createEncuestasExportJob({
+      requestedById: 7,
+      dateFrom: new Date('2026-08-01T00:00:00.000Z'),
+      dateToExclusive: new Date('2026-09-01T00:00:00.000Z'),
+      dateTo: '2026-08-31',
+      maxRecords: 50_000,
+      estado: 'noElegible',
+      conAudio: false,
+    });
+
+    expect(mocks.dataJobCreate).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        type: 'ENCUESTAS_EXPORT',
+        payload: expect.objectContaining({
+          estado: 'noElegible',
+          conAudio: false,
+          dateTo: '2026-08-31',
+        }),
+      }),
+    }));
+    expect(mocks.add).toHaveBeenCalledWith(
+      'generate-encuestas-export',
+      { dataJobId: 54 },
+      expect.objectContaining({ jobId: 'data-job-54', attempts: 3 }),
     );
   });
 
@@ -228,7 +258,7 @@ describe('contratos de DataJob Sprint 3', () => {
     expect(mocks.dataJobDelete).not.toHaveBeenCalled();
   });
 
-  it('solo reconoce artefactos QA inmutables y temporales con nombre estricto', () => {
+  it('solo reconoce artefactos de exportación inmutables y temporales con nombre estricto', () => {
     const token = 'a'.repeat(32);
     expect(isManagedDataJobArtifactName(`qa-externa-buffalo-81_a${token}.zip`)).toBe(true);
     expect(isManagedDataJobArtifactName(
@@ -239,6 +269,13 @@ describe('contratos de DataJob Sprint 3', () => {
     )).toBe(true);
     expect(isManagedDataJobArtifactName('../qa-externa-buffalo-81.zip')).toBe(false);
     expect(isManagedDataJobArtifactName('reporte_mensual_2026_07_r81.pdf')).toBe(false);
+    expect(isManagedDataJobArtifactName(`encuestas-export-82_a${token}.zip`)).toBe(true);
+    expect(isManagedDataJobArtifactName(
+      `.encuestas-export-82_a${token}.zip.${token}.tmp.zip`,
+    )).toBe(true);
+    expect(isManagedDataJobArtifactName(
+      `.encuestas-export-82_a${token}.zip.${token}.tmp.zip.${token}.manifest.csv`,
+    )).toBe(true);
   });
 
   it('persiste resultado de importación acotado y sin datos internos de la fila', () => {

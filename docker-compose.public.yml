@@ -150,9 +150,10 @@ services:
       WORKER_HEARTBEAT_FILE: /tmp/flotillas-worker/heartbeat.json
       WORKER_HEARTBEAT_SECONDS: ${WORKER_HEARTBEAT_SECONDS:-15}
       WORKER_HEARTBEAT_MAX_AGE_SECONDS: ${WORKER_HEARTBEAT_MAX_AGE_SECONDS:-60}
-      # Los jobs QA_EXPORT solo leen los archivos ya aceptados por la API. El
-      # montaje :ro impide que un parser comprometido altere evidencias fuente.
+      # Los jobs de exportación solo leen archivos aceptados por la API. El
+      # montaje :ro impide que el worker altere evidencias fuente.
       QA_EXTERNA_DIR: /app/uploads/qa-externa
+      ENCUESTAS_AUDIO_DIR: /app/uploads/encuestas-audio
     healthcheck:
       test: ["CMD", "python", "healthcheck.py"]
       interval: 30s
@@ -161,7 +162,7 @@ services:
       start_period: 45s
     volumes:
       - reports_data:/app/storage/reports         # mismo volumen compartido con la api (descargas)
-      - uploads_data:/app/uploads:ro              # insumos QA_EXPORT; nunca escritura desde el worker
+      - uploads_data:/app/uploads:ro              # fotos/audios fuente; nunca escritura desde el worker
     depends_on:
       postgres:
         condition: service_healthy

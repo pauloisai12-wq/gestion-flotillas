@@ -2,7 +2,6 @@ import ast
 import unittest
 from pathlib import Path
 
-
 SOURCE = Path(__file__).resolve().parents[1].joinpath("main.py").read_text(
     encoding="utf-8"
 )
@@ -20,9 +19,10 @@ def function_source(name):
 
 
 class DataJobProtocolTests(unittest.TestCase):
-    def test_claim_is_limited_to_qa_export_and_processing_states(self):
+    def test_claim_is_limited_to_export_types_and_processing_states(self):
         claim = function_source("claim_data_job")
         self.assertIn("'QA_EXPORT'", claim)
+        self.assertIn("'ENCUESTAS_EXPORT'", claim)
         self.assertIn("AND status = 'QUEUED'", claim)
         self.assertNotIn("AND status IN", claim)
         self.assertIn('RETURNING payload, "requestedById"', claim)
@@ -56,6 +56,7 @@ class DataJobProtocolTests(unittest.TestCase):
         report_failure = function_source("fail_report_history")
         process_data = function_source("process_data_job")
         self.assertIn("public_qa_export_error(error)", data_failure)
+        self.assertIn("public_encuestas_export_error(error)", data_failure)
         self.assertNotIn("str(error)", data_failure)
         self.assertIn("No se pudo generar el reporte", report_failure)
         self.assertNotIn("error_message", report_failure)

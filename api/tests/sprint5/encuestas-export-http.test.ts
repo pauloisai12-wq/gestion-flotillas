@@ -222,16 +222,17 @@ describe('GET /api/encuestas/export.csv', () => {
     expect(ENCUESTAS_CSV_HEADERS.some((h) => /payload|hash/i.test(h))).toBe(false);
   });
 
-  it('reenvía los filtros del revisor al servicio (sin estado en v3)', async () => {
+  it('reenvía los filtros del revisor al servicio', async () => {
     // eslint-disable-next-line require-yield
     iterateForExport.mockImplementation(async function* () {});
 
     await request(crearApp())
       .get(RUTA)
-      .query({ ...FILTRO, dispositivo: 'encuestador' });
+      .query({ ...FILTRO, dispositivo: 'encuestador', estado: 'noElegible' });
 
     expect(iterateForExport.mock.calls[0][0]).toEqual({
       dispositivo: 'encuestador',
+      estado: 'noElegible',
       dateFrom: '2026-07-01',
       dateTo: '2026-07-31',
     });

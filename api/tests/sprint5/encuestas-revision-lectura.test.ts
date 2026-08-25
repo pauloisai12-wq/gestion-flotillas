@@ -180,13 +180,14 @@ describe('GET /api/encuestas — listado', () => {
   // validateQuery REEMPLAZA req.query por el objeto parseado, así que si el
   // schema no declarara page/limit, zod los estriparía y parsePagination —que
   // corre después— serviría siempre la página 1 en silencio.
-  it('reenvía paginación y filtros al servicio (sin estado)', async () => {
+  it('reenvía paginación y filtros al servicio', async () => {
     list.mockResolvedValue(pagina());
 
     await request(crearApp(Roles.REVISOR_QA)).get(RUTA).query({
       page: '3',
       limit: '10',
       dispositivo: 'encuestador',
+      estado: 'noElegible',
       dateFrom: '2026-07-01',
       dateTo: '2026-07-31',
     });
@@ -195,6 +196,7 @@ describe('GET /api/encuestas — listado', () => {
       page: 3,
       limit: 10,
       dispositivo: 'encuestador',
+      estado: 'noElegible',
       dateFrom: '2026-07-01',
       dateTo: '2026-07-31',
     });
@@ -229,23 +231,29 @@ describe('GET /api/encuestas — listado', () => {
     expect(list).not.toHaveBeenCalled();
   });
 
-  it('zod estripa un parámetro `estado` sin error (enum de una sola opción)', async () => {
-    list.mockResolvedValue(pagina());
+  it.each(['completada', 'noElegible'] as const)(
+    'acepta y reenvía el estado %s',
+    async (estado) => {
+      list.mockResolvedValue(pagina());
 
-    const response = await request(crearApp(Roles.REVISOR_QA)).get(RUTA).query({
-      estado: 'completada',
-      dateFrom: '2026-07-01',
-      dateTo: '2026-07-31',
-    });
+      const response = await request(crearApp(Roles.REVISOR_QA)).get(RUTA).query({
+        estado,
+        dateFrom: '2026-07-01',
+        dateTo: '2026-07-31',
+      });
 
-    expect(response.status).toBe(200);
-    // El `estado` se estripa en la validación; no llega al servicio.
-    expect(list.mock.calls[0][0]).toEqual({
-      page: 1,
-      limit: 20,
-      dateFrom: '2026-07-01',
-      dateTo: '2026-07-31',
-    });
+      expect(response.status).toBe(200);
+      expect(list.mock.calls[0][0]).toMatchObject({ estado });
+    },
+  );
+
+  it('rechaza un estado fuera del catálogo', async () => {
+    const response = await request(crearApp(Roles.REVISOR_QA))
+      .get(RUTA)
+      .query({ estado: 'borrador' });
+
+    expect(response.status).toBe(400);
+    expect(list).not.toHaveBeenCalled();
   });
 });
 
@@ -323,6 +331,18 @@ describe('list — columnas que el servicio pide y devuelve', () => {
     await listReal({});
 
     expect(prismaFalso.encuesta.findMany.mock.calls[0][0].where.audios).toBeUndefined();
+  });
+
+  it('estado se traduce al enum de la consulta compartida', async () => {
+    const { list: listReal } = await vi.importActual<
+      typeof import('../../src/services/encuestasRevisionService')
+    >('../../src/services/encuestasRevisionService');
+    prismaFalso.encuesta.findMany.mockResolvedValue([]);
+    prismaFalso.encuesta.count.mockResolvedValue(0);
+
+    await listReal({ estado: 'noElegible' });
+
+    expect(prismaFalso.encuesta.findMany.mock.calls[0][0].where.estado).toBe('noElegible');
   });
 
   it('v4 con "otro" emite los campos de texto en el DTO', async () => {

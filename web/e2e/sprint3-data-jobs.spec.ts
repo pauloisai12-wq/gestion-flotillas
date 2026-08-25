@@ -190,6 +190,108 @@ test('exportación QA se recupera del servidor sin sessionStorage', async ({ pag
   expect(postAttempts).toBe(0);
 });
 
+test('exportación ZIP de encuestas conserva filtros, progresa y se reanuda', async ({ page }) => {
+  const user = await authenticate(page, 'REVISOR_QA');
+  let statusReads = 0;
+  let downloadHeadRequested = false;
+  let downloadGetRequested = false;
+  let postedFilters = '';
+
+  await page.route('**/api/**', async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    const pathname = url.pathname;
+    if (pathname === '/api/auth/me') return json(route, { data: user });
+    if (pathname === '/api/encuestas' && request.method() === 'GET') {
+      return json(route, {
+        data: [],
+        pagination: { page: 1, limit: 20, total: 0, totalPages: 0 },
+      });
+    }
+    if (pathname === '/api/encuestas/exports/active' && request.method() === 'GET') {
+      return json(route, { data: null });
+    }
+    if (pathname === '/api/encuestas/exports' && request.method() === 'POST') {
+      postedFilters = url.searchParams.toString();
+      return json(route, {
+        data: {
+          id: 81,
+          type: 'ENCUESTAS_EXPORT',
+          status: 'QUEUED',
+          progress: 0,
+          artifactName: null,
+          artifactSize: null,
+          result: null,
+          errorMessage: null,
+          completedAt: null,
+          expiresAt: '2026-08-26T12:00:00.000Z',
+        },
+      }, 202);
+    }
+    if (pathname === '/api/encuestas/exports/81/download') {
+      if (request.method() === 'HEAD') downloadHeadRequested = true;
+      if (request.method() === 'GET') downloadGetRequested = true;
+      return route.fulfill({
+        status: 200,
+        headers: {
+          'content-type': 'application/zip',
+          'content-disposition':
+            'attachment; filename="encuestas-2026-08-01_2026-08-15-sin-audio.zip"',
+        },
+        body: request.method() === 'HEAD' ? undefined : 'ZIP-ENCUESTAS-E2E',
+      });
+    }
+    if (pathname === '/api/encuestas/exports/81') {
+      statusReads += 1;
+      const completed = statusReads >= 2;
+      return json(route, {
+        data: {
+          id: 81,
+          type: 'ENCUESTAS_EXPORT',
+          status: completed ? 'COMPLETED' : 'PROCESSING',
+          progress: completed ? 100 : 60,
+          artifactName: completed
+            ? 'encuestas-2026-08-01_2026-08-15-sin-audio.zip'
+            : null,
+          artifactSize: completed ? 4096 : null,
+          result: completed ? { records: 4, audios: 0 } : null,
+          errorMessage: null,
+          completedAt: completed ? '2026-08-25T12:00:00.000Z' : null,
+          expiresAt: '2026-08-26T12:00:00.000Z',
+        },
+      });
+    }
+    return json(route, { data: [] });
+  });
+
+  await page.goto('/revision/encuestas');
+  await page.getByLabel('Desde').fill('2026-08-01');
+  await page.getByLabel('Hasta').fill('2026-08-15');
+  await page.getByLabel('Estado').selectOption('noElegible');
+  await page.getByRole('button', { name: 'Sin audio' }).click();
+  await page.getByRole('button', { name: 'Descargar todo (ZIP)' }).click();
+
+  expect(postedFilters).toContain('estado=noElegible');
+  expect(postedFilters).toContain('conAudio=false');
+  await expect.poll(() => page.evaluate(
+    () => sessionStorage.getItem('flotillas.pendingEncuestasExport'),
+  )).toContain('81');
+  await page.reload();
+  await expect(page.getByLabel('Desde')).toHaveValue('2026-08-01');
+  await expect(page.getByLabel('Hasta')).toHaveValue('2026-08-15');
+  await expect(page.getByLabel('Estado')).toHaveValue('noElegible');
+  await expect(page.getByRole('button', { name: 'Sin audio' })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+  await expect(page.getByText('ZIP listo')).toBeVisible({ timeout: 10_000 });
+
+  await observeNativeDownload(page);
+  await page.getByRole('button', { name: 'Descargar todo (ZIP)' }).click();
+  await expect.poll(() => downloadHeadRequested).toBe(true);
+  await expect.poll(() => downloadGetRequested).toBe(true);
+});
+
 test('la descarga de reportes valida y transmite sin construir un Blob', async ({ page }) => {
   const user = await authenticate(page, 'ADMIN');
   let downloadHeadRequested = false;
