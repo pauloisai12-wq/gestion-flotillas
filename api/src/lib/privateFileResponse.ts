@@ -8,6 +8,8 @@ type PrivateFileOptions = {
   contentType?: string;
   downloadName?: string;
   varyCookie?: boolean;
+  /** Anuncia Accept-Ranges y atiende un Range de UN solo tramo (206/416). Para media que el navegador busca (seek). */
+  acceptRanges?: boolean;
 };
 
 function isUnavailableFileError(err: unknown): boolean {
@@ -15,10 +17,39 @@ function isUnavailableFileError(err: unknown): boolean {
   return code === 'ENOENT' || code === 'ENOTDIR' || code === 'ELOOP';
 }
 
+type Rango = { start: number; end: number } | 'insatisfacible' | null;
+
+/**
+ * Un solo tramo `bytes=a-b`, `bytes=a-` o `bytes=-n` (RFC 7233). Cualquier otra
+ * sintaxis (multi-rango, otra unidad) se IGNORA y se sirve el archivo completo:
+ * es lo que el estándar permite y lo que el <audio> del navegador espera; un
+ * tramo fuera del archivo es 416.
+ */
+function rangoSolicitado(header: string | undefined, size: number): Rango {
+  if (!header) return null;
+  const m = /^bytes=(\d*)-(\d*)$/.exec(header.trim());
+  if (!m || (m[1] === '' && m[2] === '')) return null;
+  if (size === 0) return 'insatisfacible';
+  if (m[1] === '') {
+    const n = Number(m[2]);
+    if (n === 0) return 'insatisfacible';
+    return { start: Math.max(0, size - n), end: size - 1 };
+  }
+  const start = Number(m[1]);
+  const end = m[2] === '' ? size - 1 : Math.min(Number(m[2]), size - 1);
+  if (start >= size || start > end) return 'insatisfacible';
+  return { start, end };
+}
+
 /**
  * Abre una sola vez el archivo y transmite desde ese descriptor. Evita la
  * carrera exists/stat -> open, no sigue symlinks en Linux y HEAD solo publica
  * metadatos: nunca materializa ni recorre el contenido.
+ *
+ * Con `acceptRanges` atiende además peticiones parciales (206) leyendo solo el
+ * tramo pedido desde el mismo descriptor; sin el flag el comportamiento es
+ * exactamente el anterior (200 completo, ninguna cabecera nueva) para no
+ * alterar a los callers que ya existían.
  */
 export async function sendPrivateFile(
   req: Request,
@@ -41,18 +72,39 @@ export async function sendPrivateFile(
     const stat = await handle.stat();
     if (!stat.isFile()) return false;
 
+    // El 416 se resuelve aquí, antes de fijar Content-Length/Content-Type: la
+    // respuesta no lleva cuerpo y su Content-Range describe el tamaño total.
+    let status = 200;
+    let tramo: { start: number; end: number } | undefined;
+    if (options.acceptRanges) {
+      res.setHeader('Accept-Ranges', 'bytes');
+      const rango = rangoSolicitado(req.headers.range, stat.size);
+      if (rango === 'insatisfacible') {
+        res.setHeader('Content-Range', `bytes */${stat.size}`);
+        res.setHeader('Cache-Control', options.cacheControl);
+        res.status(416).end();
+        return true;
+      }
+      if (rango) {
+        tramo = rango;
+        status = 206;
+        res.setHeader('Content-Range', `bytes ${rango.start}-${rango.end}/${stat.size}`);
+      }
+    }
+
     res.setHeader('Cache-Control', options.cacheControl);
-    res.setHeader('Content-Length', stat.size);
+    res.setHeader('Content-Length', tramo ? tramo.end - tramo.start + 1 : stat.size);
     if (options.varyCookie) res.vary('Cookie');
     if (options.downloadName) res.attachment(options.downloadName);
     else if (options.contentType) res.type(options.contentType);
 
     if (req.method === 'HEAD') {
-      res.status(200).end();
+      res.status(status).end();
       return true;
     }
 
-    const stream = handle.createReadStream({ autoClose: false });
+    const stream = handle.createReadStream({ autoClose: false, ...(tramo ?? {}) });
+    res.status(status);
     try {
       await pipeline(stream, res);
     } catch (err) {
