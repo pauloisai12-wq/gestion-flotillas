@@ -61,6 +61,8 @@ esperaba JSON, casi siempre falta el `/api`.
 |---|---|---|---|
 | POST | `/api/v1/encuestas` | `Authorization: Bearer <api key>` | `201 {"idRemoto":"<uuid>"}` (alta) · `200 {"idRemoto":"<uuid>"}` (reenvío idempotente) |
 | GET | `/api/v1/encuestas/ping` | Bearer | `200 {"ok":true}` (sin key o key mala → `401`) |
+| POST | `/api/v1/encuestas/{idLocal}/audios` | `Authorization: Bearer <api key>` | `multipart/form-data`, **un archivo por petición**. `201 {"audio_id":"<id>"}` (segmento nuevo) · `200 {"audio_id":"<id>"}` (el segmento ya estaba). Ver [Audios de la encuesta](#audios-de-la-encuesta) |
+| GET | `/api/v1/encuestas/{idLocal}/audios` | Bearer | `405` **tras autenticar** — misma red de seguridad que la fila de abajo |
 | GET | `/api/v1/encuestas` | Bearer | `405` **tras autenticar** — red de seguridad para una app que equivoque el método |
 
 > El `405` de `GET /api/v1/encuestas` existe por el mismo motivo que en GeoCampo
@@ -78,6 +80,8 @@ Vive **fuera** de `/api/v1/*`, que es el montaje por API key:
 |---|---|---|
 | GET | `/api/encuestas` | `200 { "data": [ <EncuestaDto> ], "pagination": { "page","limit","total","totalPages" } }` |
 | GET / HEAD | `/api/encuestas/export.csv` | `200 text/csv; charset=utf-8` como adjunto. `HEAD` solo valida filtros y cabeceras (no toca la base de datos) |
+| GET | `/api/encuestas/:id` | `200 <EncuestaDetalleDto>` (el `EncuestaDto` del listado **más** `idLocal` y `audios[]`). `404` si el id no existe |
+| GET / HEAD | `/api/encuestas/:id/audios/:audioId` | `200` con el audio (`206` si el navegador manda `Range`; `416` si el tramo cae fuera). `?download=1` lo sirve como adjunto `<idLocal>-<segmento>`. `404` si ese audio no es de esa encuesta o el blob no está en disco |
 
 Parámetros de consulta:
 
@@ -85,12 +89,23 @@ Parámetros de consulta:
 |---|---|---|---|
 | `page` / `limit` | opcional | — | Default 20, tope 100 |
 | `dispositivo` | opcional | opcional | Texto: coincide contra el `identificador` del dispositivo registrado |
+| `conAudio` | opcional | opcional | `true` = solo encuestas con **al menos un** segmento; `false` = solo las que no tienen ninguno. Ausente = sin filtrar. Cualquier otro texto (`1`, `si`, …) → `400` |
 | `dateFrom` / `dateTo` | opcional | **obligatorios** | `AAAA-MM-DD` sobre `fechaHoraFinalizacion`. Día civil completo en **UTC** con **tope superior exclusivo** (`dateTo` + 1 día). En exportación: `dateTo ≥ dateFrom` y rango máximo **366 días** |
 
-Cada elemento de `data` (`EncuestaDto`, 17 claves): `id`, `idRemoto`, `folioLocal`, `encuestador`,
+Cada elemento de `data` (`EncuestaDto`, 18 claves): `id`, `idRemoto`, `folioLocal`, `encuestador`,
 `versionCuestionario`, `preferenciaElectoral`, `preferenciaElectoralOtro`, `preferenciaPartido`,
 `preferenciaPartidoOtro`, `conoceLalo`, `partidoPreferido`, `candidatoPreferido`, `duracionSegundos`,
-`fechaHoraFinalizacion`, `recibidoEn`, `ubicacionDisponible` y `dispositivo: { id, identificador }`.
+`fechaHoraFinalizacion`, `recibidoEn`, `ubicacionDisponible`, `audiosCount` y
+`dispositivo: { id, identificador }`.
+
+`audiosCount` es **solo el conteo** de segmentos recibidos (`0` = sin audio): el listado es un
+índice y traer las filas de audio de cada encuesta multiplicaría lo que Prisma mueve por página. La
+lista va en el detalle, `GET /api/encuestas/:id`, que añade al DTO de arriba el `idLocal` (el UUID
+con que la app nombra la encuesta) y `audios: [{ id, segmento, sha256, tamanoBytes, mimeDeclarado,
+duracionMs, recibidoEn, url }]`, ordenados por `recibidoEn` (orden de llegada = orden de grabación;
+ordenar por nombre pondría `seg10` antes que `seg2`). `url` es la ruta same-origin del stream
+(`/api/encuestas/:id/audios/:audioId`): se arma en el servidor para que el contrato de la ruta viva
+en un solo sitio. La `ruta` del blob en el disco del servidor **nunca** sale en el DTO.
 
 `partidoPreferido` y `candidatoPreferido` son los **equivalentes v1** (P4 y P8) de
 `preferenciaPartido` y `preferenciaElectoral`: cada fila llena el par de SU versión y deja el otro
@@ -377,6 +392,115 @@ El body crudo se conserva íntegro en `payload_raw` para auditoría.
 
 ---
 
+## Audios de la encuesta
+
+La app graba la entrevista en **segmentos**: cada pausa/reanudación cierra un archivo y abre el
+siguiente (`seg1.m4a`, `seg2.m4a`, …). Los segmentos son **inmutables**: nunca se regraba uno ya
+cerrado, siempre nace `segN+1`. Se suben **después** de que la encuesta fue aceptada, uno por
+petición, por `POST /api/v1/encuestas/{idLocal}/audios`.
+
+> El `{idLocal}` es el **mismo UUID** que la encuesta llevaba en su JSON, no el `idRemoto`. Si la
+> encuesta todavía no se sincronizó, esta ruta responde `404` (ver abajo): primero la encuesta,
+> después sus audios.
+
+### Partes del multipart
+
+`Content-Type: multipart/form-data` con **exactamente** estas cuatro partes (los nombres son parte
+del contrato; una parte de archivo con otro nombre es `422`):
+
+| Parte | Tipo | Contenido |
+|---|---|---|
+| `segmento` | texto | Nombre lógico del tramo, tal como lo llama el teléfono: `seg1.m4a`. Letras, dígitos, `.`, `_` y `-`; máximo 64 caracteres. **Es la clave del segmento dentro de la encuesta** |
+| `sha256` | texto | SHA-256 del contenido, hexadecimal de 64 caracteres **en minúsculas** |
+| `tamano_bytes` | texto | Tamaño del archivo en bytes, entero positivo (viaja como texto: en multipart todo es texto) |
+| `audio` | binario | El archivo. Se guarda **tal cual**, sin transcodificar ni validar el formato |
+
+Header: `Authorization: Bearer <api key del dispositivo>` — la **misma** key con la que se envía la
+encuesta.
+
+### Reglas
+
+- **La encuesta se resuelve DENTRO del dispositivo autenticado.** Un `idLocal` que exista pero
+  pertenezca a otro teléfono es, para esta ruta, inexistente: `404`. Así la ruta no sirve para
+  descubrir qué encuestas hay en el servidor.
+- **Integridad comprobada en el servidor.** Se recalcula el SHA-256 de lo recibido y se compara con
+  el `sha256` y el `tamano_bytes` declarados: si no cuadran, la subida iba truncada o corrupta y la
+  respuesta es `422` (el cliente reencola el archivo y reintenta).
+- **Dedup por `(encuesta, segmento, sha256)`.** Un reenvío idéntico devuelve `200` con el **mismo**
+  `audio_id` y no reescribe el archivo. El mismo `(encuesta, segmento)` con otro `sha256` reemplaza
+  el contenido y devuelve `200` con el **mismo** `audio_id` (el contrato dice que los segmentos son
+  inmutables; si aun así llega otro contenido, gana el último). Dos segmentos **distintos** con
+  bytes idénticos son **dos filas** que comparten un solo blob en disco (el almacenamiento es
+  content-addressed: el archivo se llama por su hash).
+- **Nunca hay `2xx` antes de persistir.** El blob se escribe primero (con `fsync` + `rename`
+  atómico) y la fila después: nunca existe un `audio_id` sin archivo detrás.
+- **Tope por archivo:** `ENCUESTAS_AUDIO_MAX_FILE_SIZE_MB` (**50 MB** por defecto, ~3.5 h de AAC a
+  32 kbps). Por encima, `413`.
+- **Un archivo por petición.** Mandar dos partes `audio` en el mismo POST es `422`.
+
+### Códigos de respuesta de la subida
+
+| Código | Cuerpo | Cuándo | ¿Reintentar? |
+|---|---|---|---|
+| `201` | `{"audio_id":"<id>"}` | Segmento nuevo, ya escrito en disco | — |
+| `200` | `{"audio_id":"<id>"}` | El segmento ya existía. **Mismo `audio_id` que el `201` original** | — |
+| `401` | `{"error":…,"code":"UNAUTHORIZED"}` | Sin `Authorization`, key desconocida o dispositivo revocado | No: reconfigurar la key |
+| `404` | `{"error":{"code":"ENCUESTA_NO_ENCONTRADA"}}` | Ese `idLocal` no existe **para este dispositivo** (típicamente: la encuesta aún no se sincronizó) | Sí, cuando la encuesta esté sincronizada |
+| `405` | `{"error":"Method Not Allowed","code":"METHOD_NOT_ALLOWED"}` | `GET` sobre esta ruta (red de seguridad: la key sirve, el método no) | No: corregir el método |
+| `413` | `{"error":…,"code":"PAYLOAD_TOO_LARGE","requestId":…}` | El archivo supera `ENCUESTAS_AUDIO_MAX_FILE_SIZE_MB` | No, sin recortar el archivo |
+| `422` | `{"error":"Datos inválidos","code":"VALIDATION_ERROR","issues":[{"field","message"}],"requestId":…}` | Falta una parte, un campo no valida, o el `sha256`/`tamano_bytes` no coinciden con lo recibido | Solo si fue una subida truncada (reencolar el archivo); un campo mal formado es terminal |
+| `429` | `{"error":…,"code":"RATE_LIMITED"}` + `Retry-After` | Cuota agotada (por dispositivo o por IP) | Sí, con backoff |
+| `5xx` | `{"error":…,"code":"INTERNAL_ERROR",…}` | Error del servidor | Sí, con el mismo `segmento` (es idempotente) |
+
+**Esta ruta no emite `409`.** Que el `(encuesta, segmento)` ya exista es idempotencia, no conflicto:
+se responde `200` con el `audio_id` de siempre. El `409` del módulo es solo de la ingesta de
+encuestas (mismo `idLocal`, contenido distinto).
+
+### Ejemplo
+
+```bash
+curl -sS -X POST https://qa.aztechcomposites.com/api/v1/encuestas/<ID LOCAL>/audios \
+  -H 'Authorization: Bearer <API KEY>' \
+  -F segmento=seg1.m4a \
+  -F sha256=$(sha256sum seg1.m4a | cut -c1-64) \
+  -F tamano_bytes=$(stat -c%s seg1.m4a) \
+  -F audio=@seg1.m4a
+# {"audio_id":"12"}   201 la primera vez, 200 el reenvío idéntico (mismo audio_id)
+```
+
+### Tres divergencias deliberadas del resto del API
+
+> **1. El `404` va ANIDADO.** El cuerpo es exactamente `{"error":{"code":"ENCUESTA_NO_ENCONTRADA"}}`
+> —sin `message`, sin `requestId`—, y es la **única** envolvente anidada de todo el API (el resto es
+> `{error, code, requestId}` plano). El cliente móvil ya está escrito contra esa forma: la usa para
+> distinguir "la encuesta todavía no está en el servidor, reintento luego" de "la ruta no existe,
+> corto la pasada". No se "arregla" para uniformar.
+
+> **2. El `413` en vez del `400` del resto del repo.** En los demás uploads, el error de tamaño de
+> multer sale como `400`; aquí se traduce a `413` porque para el cliente es un rechazo **definitivo**
+> del segmento (no reencolar) y `PAYLOAD_TOO_LARGE` lo dice sin ambigüedad.
+
+> **3. Todo lo demás es `422`, NUNCA `400`.** Ni el multipart malformado, ni la parte que falta, ni
+> el hash que no cuadra: siempre `422` con `issues[]`. El cliente trata el `400` como error
+> transitorio y reintentaría el archivo **para siempre**; el `422` lo deja resolver el caso.
+
+### Nota para el equipo móvil — audios
+
+- **Ruta definitiva:** `POST https://qa.aztechcomposites.com/api/v1/encuestas/{idLocal}/audios`. El
+  prefijo `/api` no es opcional, por el mismo motivo que en la ingesta (Caddy → Next → API).
+- **La API key de QA que ya tienen sirve tal cual.** Es el mismo guard
+  (`encuestasDeviceAuthMiddleware`) sobre la misma tabla `encuestas_dispositivos`: no hay key nueva,
+  ni alta nueva de dispositivo, ni header adicional.
+- **La cuota de 60 peticiones/minuto por dispositivo (`rl:enc:dev:<id>`) es COMPARTIDA** con
+  `POST /api/v1/encuestas`. Vaciar a la vez la cola de encuestas y la de audios consume el mismo
+  cubo, así que conviene intercalarlas y respetar el `Retry-After` del `429`.
+- **Catálogo P8 (`preferenciaElectoral`) de v4:** quedó en estos 8 códigos — `irineo_molina`,
+  `fernando_huerta`, `lalo_ximenez`, `paco_nino`, `ana_gabriela_delgado`, `goyo_castaneda`, `otro`,
+  `no_sabe_no_contesta`. **Confirmen por favor que `paola_barrera` ya no viaja en v4** (en v3 sigue
+  siendo válida y las filas v3 ya guardadas no se tocan).
+
+---
+
 ## Códigos de respuesta
 
 | Código | Cuerpo | Cuándo | ¿Reintentar? |
@@ -479,7 +603,7 @@ tras un timeout o un `5xx` es seguro y no duplica.
 | Cubo | Clave en Redis | Alcance | Cuota | Qué protege |
 |---|---|---|---|---|
 | Por IP (pre-auth) | `rl:enc:ip:<ip>` | Todo `/api/v1/encuestas*` | `ENCUESTAS_IP_RATE_MAX` (**120**) | Sondeo de API keys |
-| Por dispositivo | `rl:enc:dev:<dispositivo_id>` | Solo `POST /api/v1/encuestas` | `ENCUESTAS_RATE_MAX` (**60**) | Cuota de captura |
+| Por dispositivo | `rl:enc:dev:<dispositivo_id>` | `POST /api/v1/encuestas` **y** `POST /api/v1/encuestas/{idLocal}/audios` | `ENCUESTAS_RATE_MAX` (**60**) | Cuota de captura |
 
 Los dos comparten ventana: `ENCUESTAS_RATE_WINDOW_SEC` (**60 s**). El de IP corre **antes** de
 autenticar —no puede saber de qué dispositivo se trata— y por eso lleva el doble de cuota: un solo
@@ -489,6 +613,11 @@ Su clave lleva prefijo propio (`enc:ip:`) en vez del `ip:` genérico: ese cubo p
 `publicRouter` con cuota 10, y sin prefijo el tráfico de la app consumiría el del portal público
 (y viceversa). Por el mismo motivo no comparte prefijo con GeoCampo (`qae:ip:`): **las cuotas de los
 dos módulos son independientes**.
+
+El cubo por dispositivo es **uno solo para los dos POST**: encuestas y audios consumen el mismo
+presupuesto de 60 por ventana. Es a propósito —mide "cuánto empuja este teléfono", no "por qué
+ruta"—, pero el equipo móvil debe contarlo al vaciar las dos colas a la vez. El `ping` y el `405`
+no consumen cuota de dispositivo (sí la de IP, que corre antes de autenticar).
 
 Todo `429` llega con cabecera `Retry-After` en segundos (`api/src/middlewares/rateLimit.ts:54`).
 
@@ -820,6 +949,29 @@ v1 se acepta de nuevo.
 | `last_used_at` | `timestamp` NULL | servidor | Última autenticación correcta (best-effort, no bloquea la petición) |
 | `created_at` / `updated_at` | `timestamp` | servidor | Auditoría estándar |
 
+### Tabla `encuestas_audios`
+
+Tabla **hija** de `encuestas` (una fila por segmento). No tiene `dispositivo_id`: quien sube es por
+contrato el dueño de la encuesta —la ruta la resuelve dentro del dispositivo autenticado—, así que
+el dispositivo se deriva de `encuestas.dispositivo_id`.
+
+| Columna | Tipo | Origen | Semántica |
+|---|---|---|---|
+| `id` | `integer` PK | servidor | Es el `audio_id` que devuelve la subida y el `:audioId` de la URL del revisor |
+| `encuesta_id` | `integer` FK → `encuestas` | **servidor** | Resuelto desde el `{idLocal}` de la URL, dentro del dispositivo autenticado. **`ON DELETE CASCADE`**: borrar una encuesta se lleva sus audios (las filas; el blob queda en disco) |
+| `segmento` | `varchar(64)` | cliente (validado) | Nombre lógico del tramo (`seg1.m4a`). **UNIQUE junto con `encuesta_id`**: es la clave de idempotencia de la subida |
+| `sha256` | `char(64)` | **servidor** (recalculado) | SHA-256 del contenido recibido, ya contrastado con el declarado. **No es único**: dos segmentos con bytes idénticos son dos filas apuntando al mismo blob. Indexado |
+| `tamano_bytes` | `integer` | cliente (validado) | Bytes del archivo, verificados contra lo recibido |
+| `mime_declarado` | `varchar(120)` NULL | cliente | `Content-Type` de la parte multipart. **No se valida**: solo se usa para elegir con qué tipo servir el stream, y solo si es un `audio/*` (si no, `audio/mp4`) |
+| `ruta` | `text` | servidor | Relativa a `/app/uploads`: `encuestas-audio/<sha256>.m4a`. **Interna: nunca sale en el DTO** |
+| `duracion_ms` | `integer` NULL | servidor (best-effort) | Duración leída del `mvhd` de ISO-BMFF. `NULL` = no se pudo calcular (p. ej. un 3GP/AMR con extensión `.m4a`); no es un error |
+| `recibido_en` | `timestamp` | **servidor** | Estampa de llegada. **Es el orden en que el detalle muestra los segmentos** (desempate por `id`) |
+| `created_at` / `updated_at` | `timestamp` | servidor | Auditoría estándar |
+
+El archivo **no** vive en la base: la fila apunta a un blob en disco, almacenado por su hash
+(content-addressed), de modo que el mismo contenido ocupa una sola vez el disco. Consecuencia
+operativa: un `pg_dump` **no** respalda los audios (ver *Operación*).
+
 ---
 
 ## Variables de entorno (todas opcionales, con default)
@@ -830,6 +982,8 @@ v1 se acepta de nuevo.
 | `ENCUESTAS_RATE_WINDOW_SEC` | `60` | Ventana de los dos cubos, en segundos (mínimo 10) |
 | `ENCUESTAS_IP_RATE_MAX` | `120` | Cuota por IP y ventana (`rl:enc:ip:`), pre-auth. Es `2 × ENCUESTAS_RATE_MAX`: si cambias esa, ajusta esta a mano |
 | `ENCUESTAS_KEY_PEPPER` | — | Pepper opcional: pasa el hash de las API keys de SHA-256 a HMAC-SHA256 |
+| `ENCUESTAS_AUDIO_DIR` | `/app/uploads/encuestas-audio` | Dónde se guardan los blobs de audio. Subdirectorio de `/app/uploads` a propósito: así lo cubren el mismo volumen (público) o bind mount de LUKS (staging) que las fotos de GeoCampo |
+| `ENCUESTAS_AUDIO_MAX_FILE_SIZE_MB` | `50` | Tope por archivo del `POST …/audios` (admitido 1–100). Por encima, `413`. Bajarlo no exige tocar código |
 
 **Ninguna hace falta** en el `.env` del servidor ni en las plantillas (`env.staging.plantilla.txt`,
 `.env.example`, `.env.public.example`): todas traen default en `api/src/config/env.ts` y ninguna es
@@ -872,6 +1026,18 @@ sobre tablas `encuestas*`):
   `noElegible` al enum `EncuestaEstado` y crea el enum `EncuestaElegibilidad`. No toca ni una sola
   fila existente: las v3 ya guardadas quedan con el bloque v1 en `NULL`.
 - `20260814120000_encuestas_v4` es **puramente aditiva**: añade dos columnas TEXT (`preferencia_electoral_otro` y `preferencia_partido_otro`) que albergan el texto libre de "otro" en v4. Todas las filas existentes (v1 y v3) quedan con estas columnas en `NULL`.
+- `20260824120000_add_encuestas_audios` es **puramente aditiva**: crea la tabla hija
+  `encuestas_audios` con su `UNIQUE (encuesta_id, segmento)`, su índice por `sha256` y su FK
+  `ON DELETE CASCADE`. No toca ni una columna ni una fila de `encuestas`: las encuestas ya
+  recibidas siguen igual, simplemente sin audios.
+
+> ⚠️ **Los audios no están en la base: `pg_dump` no los respalda.** Los blobs viven en
+> `ENCUESTAS_AUDIO_DIR` (`/app/uploads/encuestas-audio`), dentro del mismo `uploads` que las fotos
+> de GeoCampo: volumen `uploads_data` en el perfil público (`docker-compose.public.yml:54,120`) y
+> bind de LUKS `/srv/datos/flotillas/uploads` en staging (`docker-compose.staging.yml:85`). El
+> **`docker-compose.yml` base NO persiste `/app/uploads`**: levantado a secas, los audios quedan
+> dentro del contenedor y se pierden al recrearlo. Respaldar audios = respaldar ese directorio,
+> además del dump.
 
 > ⚠️ Si un despliegue todavía **no** aplicó `20260805120000_encuestas_v3` y tuviera filas v1 en la
 > base, respalda antes: esa migración es la que reestructura columnas, y va delante de la aditiva.
@@ -901,6 +1067,15 @@ curl -sS https://qa.aztechcomposites.com/api/v1/encuestas/ping -H 'Authorization
 curl -sS -o /dev/null -w '%{http_code}\n' -X POST https://qa.aztechcomposites.com/api/v1/encuestas \
   -H 'Authorization: Bearer <API KEY>' -H 'Content-Type: application/json' -d @encuesta.json
 # 201 la primera vez, 200 la segunda (mismo idRemoto)
+
+# Subida de un segmento de audio de esa encuesta (idLocal, NO idRemoto)
+curl -sS -X POST https://qa.aztechcomposites.com/api/v1/encuestas/<ID LOCAL>/audios \
+  -H 'Authorization: Bearer <API KEY>' \
+  -F segmento=seg1.m4a \
+  -F sha256=$(sha256sum seg1.m4a | cut -c1-64) \
+  -F tamano_bytes=$(stat -c%s seg1.m4a) \
+  -F audio=@seg1.m4a
+# {"audio_id":"…"} — 201 la primera vez, 200 el reenvío idéntico (mismo audio_id)
 ```
 
 ### Portal de revisión
@@ -912,7 +1087,14 @@ Pestaña **Encuestas** en `/revision/encuestas`, junto a las dos de GeoCampo
 |---|---|---|
 | Evidencias de campo | `/revision/evidencias` | GeoCampo: fotos + exportación ZIP |
 | Registro de personas | `/revision/personas` | GeoCampo: listado + CSV |
-| **Encuestas** | `/revision/encuestas` | **Encuestas Okrean: listado + CSV** |
+| **Encuestas** | `/revision/encuestas` | **Encuestas Okrean: listado + CSV + detalle con audios** |
+
+En el listado hay una columna **Audio** con el número de segmentos (o "Sin audio") y un filtro
+**Todas / Con audio / Sin audio**, que viaja como `conAudio` y recorta **igual** el CSV que se
+descarga con los filtros puestos. Cada fila abre el detalle `/revision/encuestas/<id>`: los datos
+que no caben en columnas más los segmentos, cada uno con reproductor `<audio>` nativo —el stream
+atiende `Range`, así que el revisor puede buscar dentro del tramo— y botón de descarga
+(`?download=1`). Todo eso es código de Next: tras el deploy **exige rebuild de `web`**.
 
 Se entra con la **misma cuenta `REVISOR_QA`** que ya usan los revisores de GeoCampo: no hay que
 crear usuarios nuevos ni un rol aparte. Lo que sí está separado son **los datos**: la pestaña de
