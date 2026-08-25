@@ -33,6 +33,9 @@ export interface Encuesta {
   // NULL ≠ false: null es "el teléfono no mandó el bloque de ubicación"
   // (registro antiguo), false es "lo mandó y no había ubicación disponible".
   ubicacionDisponible: boolean | null;
+  // Segmentos de audio recibidos para esta encuesta; 0 = sin audio. Es solo el
+  // conteo: la lista con sus URLs vive en el detalle.
+  audiosCount: number;
   dispositivo: { id: number; identificador: string };
 }
 
@@ -46,6 +49,10 @@ interface EncuestaQuery {
   limit?: number;
   dateFrom?: string;
   dateTo?: string;
+  // true = solo encuestas con al menos un audio, false = solo las que no tienen
+  // ninguno. `undefined` (no se manda el parámetro) = todas: es un tri-estado,
+  // no un booleano, así que nunca se serializa por truthiness.
+  conAudio?: boolean;
 }
 
 function buildParams(query: EncuestaQuery): URLSearchParams {
@@ -54,6 +61,7 @@ function buildParams(query: EncuestaQuery): URLSearchParams {
   if (query.limit) params.set('limit', query.limit.toString());
   if (query.dateFrom) params.set('dateFrom', query.dateFrom);
   if (query.dateTo) params.set('dateTo', query.dateTo);
+  if (query.conAudio !== undefined) params.set('conAudio', String(query.conAudio));
   return params;
 }
 
@@ -73,6 +81,9 @@ export function useEncuestas(query: EncuestaQuery = {}) {
 export interface EncuestasCsvParams {
   dateFrom: string;
   dateTo: string;
+  // Mismo tri-estado que en el listado: el CSV exporta lo que el revisor tiene
+  // filtrado en pantalla, no siempre el universo completo del rango.
+  conAudio?: boolean;
 }
 
 /**
@@ -125,4 +136,44 @@ export async function descargarEncuestasCsv(params: EncuestasCsvParams) {
   } catch (err) {
     toast.error(mensajeDeFalloCsv(err));
   }
+}
+
+/**
+ * Un segmento de audio de la encuesta tal como lo publica el detalle. No trae
+ * la ruta en disco: dónde vive el blob en el servidor es interno y el navegador
+ * solo necesita `url`. `sha256` sí viaja porque es la prueba de integridad
+ * contra lo que reportó el teléfono.
+ */
+export interface EncuestaAudio {
+  id: number;
+  segmento: string;
+  sha256: string;
+  tamanoBytes: number;
+  mimeDeclarado: string | null;
+  // null = el servidor no pudo leer la duración del contenedor (p. ej. AMR);
+  // el navegador la mide al cargar los metadatos.
+  duracionMs: number | null;
+  recibidoEn: string;
+  // Ruta relativa same-origin (/api/encuestas/:id/audios/:audioId); la cookie
+  // httpOnly viaja sola. `?download=1` la sirve como adjunto.
+  url: string;
+}
+
+/** Detalle: lo mismo del listado + el UUID local del teléfono y sus segmentos. */
+export interface EncuestaDetalle extends Encuesta {
+  idLocal: string;
+  audios: EncuestaAudio[];
+}
+
+// `null` cuando la URL trae un id que no es entero: la pantalla avisa en vez de
+// quedarse en spinner (la query no se dispara).
+export function useEncuesta(id: number | null) {
+  return useQuery<EncuestaDetalle>({
+    queryKey: ['encuesta', id],
+    queryFn: async () => {
+      const res = await api.get(`/encuestas/${id}`);
+      return res.data;
+    },
+    enabled: id !== null,
+  });
 }

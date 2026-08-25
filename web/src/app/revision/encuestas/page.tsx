@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { useRouter } from 'next/navigation';
 import {
   descargarEncuestasCsv,
   useEncuestas,
@@ -8,6 +9,7 @@ import {
 } from '@/hooks/useEncuestas';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
 import DataTable from '@/components/ui/data-table';
 import { toast } from '@/components/ui/toast';
 import { Download } from 'lucide-react';
@@ -41,6 +43,16 @@ function duracionMmSs(segundos: number): string {
   const seg = total % 60;
   return `${min.toString().padStart(2, '0')}:${seg.toString().padStart(2, '0')}`;
 }
+
+// Tri-estado del filtro de audio. No es un booleano porque "todas" no es ni
+// true ni false: solo con 'con'/'sin' se manda `conAudio` a la API.
+type FiltroAudio = 'todas' | 'con' | 'sin';
+
+const OPCIONES_AUDIO: { valor: FiltroAudio; etiqueta: string }[] = [
+  { valor: 'todas', etiqueta: 'Todas' },
+  { valor: 'con', etiqueta: 'Con audio' },
+  { valor: 'sin', etiqueta: 'Sin audio' },
+];
 
 const columns: ColumnDef<Encuesta, unknown>[] = [
   {
@@ -134,6 +146,21 @@ const columns: ColumnDef<Encuesta, unknown>[] = [
     },
   },
   {
+    accessorKey: 'audiosCount',
+    header: 'Audio',
+    // Solo el conteo: los segmentos y su reproductor viven en el detalle. Se
+    // distingue "3 segmentos" de "Sin audio" con dos variantes de Badge porque
+    // un 0 suelto en la columna se lee como dato faltante, no como ausencia.
+    cell: ({ row }) =>
+      row.original.audiosCount > 0 ? (
+        <Badge variant="info">
+          {row.original.audiosCount} {row.original.audiosCount === 1 ? 'segmento' : 'segmentos'}
+        </Badge>
+      ) : (
+        <Badge variant="inactive">Sin audio</Badge>
+      ),
+  },
+  {
     id: 'dispositivo',
     header: 'Dispositivo',
     accessorFn: (row) => row.dispositivo?.identificador ?? '',
@@ -146,17 +173,26 @@ export default function RevisionEncuestasPage() {
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
   const [descargando, setDescargando] = useState(false);
+  const [filtroAudio, setFiltroAudio] = useState<FiltroAudio>('todas');
+  const router = useRouter();
+
+  // 'todas' => `undefined` (el parámetro no viaja y la API no filtra). Se
+  // calcula una sola vez para que el listado y el CSV exporten exactamente el
+  // mismo recorte.
+  const conAudio = filtroAudio === 'todas' ? undefined : filtroAudio === 'con';
 
   const { data, isLoading, isError, refetch } = useEncuestas({
     page,
     limit: 20,
     dateFrom: dateFrom || undefined,
     dateTo: dateTo || undefined,
+    conAudio,
   });
 
   const limpiarFiltros = () => {
     setDateFrom('');
     setDateTo('');
+    setFiltroAudio('todas');
     setPage(1);
   };
 
@@ -185,13 +221,14 @@ export default function RevisionEncuestasPage() {
       await descargarEncuestasCsv({
         dateFrom,
         dateTo,
+        conAudio,
       });
     } finally {
       setDescargando(false);
     }
   };
 
-  const hasFilters = Boolean(dateFrom || dateTo);
+  const hasFilters = Boolean(dateFrom || dateTo || filtroAudio !== 'todas');
   const totalEncuestas = data?.pagination?.total ?? 0;
 
   // Con el rango a medio llenar no se avisa nada: el título del botón ya dice
@@ -232,6 +269,21 @@ export default function RevisionEncuestasPage() {
             onChange={(e) => { setDateTo(e.target.value); setPage(1); }}
           />
         </div>
+        {/* Tres botones en vez de un select: son pocas opciones y así el estado
+            activo se ve sin abrir nada. No hay componente segmentado en ui/. */}
+        <div role="group" aria-label="Filtrar por audio" className="flex gap-1">
+          {OPCIONES_AUDIO.map((opcion) => (
+            <Button
+              key={opcion.valor}
+              size="sm"
+              variant={filtroAudio === opcion.valor ? 'default' : 'outline'}
+              aria-pressed={filtroAudio === opcion.valor}
+              onClick={() => { setFiltroAudio(opcion.valor); setPage(1); }}
+            >
+              {opcion.etiqueta}
+            </Button>
+          ))}
+        </div>
         {hasFilters && (
           <Button variant="outline" size="sm" onClick={limpiarFiltros}>
             Limpiar
@@ -248,6 +300,10 @@ export default function RevisionEncuestasPage() {
         isLoading={isLoading}
         error={isError ? 'No fue posible consultar las encuestas.' : null}
         onRetry={() => refetch()}
+        onRowClick={(row) => router.push(`/revision/encuestas/${row.id}`)}
+        // El folio lo escribe el encuestador y puede faltar; el id de la fila es
+        // el único identificador siempre presente para nombrar la acción.
+        rowActionLabel={(row) => `Ver encuesta ${row.folioLocal ?? row.id}`}
         emptyTitle="No hay encuestas para estos filtros"
         emptyDescription="Cambia el rango de fechas e intenta nuevamente."
         headerActions={
