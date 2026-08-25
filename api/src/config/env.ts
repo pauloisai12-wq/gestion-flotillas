@@ -82,6 +82,14 @@ const envSchema = z.object({
   // Independiente de QA_EXTERNA_KEY_PEPPER: rotar uno no invalida al otro.
   ENCUESTAS_KEY_PEPPER: z.string().optional(),
 
+  // Audios de encuesta (POST /api/v1/encuestas/:idLocal/audios). Bajo
+  // /app/uploads para que lo cubran los mismos volúmenes/bind mounts que las
+  // fotos de qa_externa. 50 MB es el "sugerido" del contrato móvil (~3.5 h de
+  // AAC a 32 kbps); el operador puede bajarlo sin tocar código. NO van en las
+  // plantillas .env: opcionales con default, como el resto de ENCUESTAS_*.
+  ENCUESTAS_AUDIO_DIR: z.string().default('/app/uploads/encuestas-audio'),
+  ENCUESTAS_AUDIO_MAX_FILE_SIZE_MB: z.coerce.number().int().min(1).max(100).default(50),
+
   // Captcha del portal público (opcional en dev, obligatorio en prod si está habilitado)
   TURNSTILE_SECRET: z.string().optional(),
 

@@ -18,7 +18,10 @@ import { ah } from '../lib/asyncHandler';
 import { logger } from '../lib/logger';
 import { requireRole, Roles } from '../middlewares/roleMiddleware';
 import { validateQuery } from '../middlewares/validate';
-import { parsePagination } from '../lib/http';
+import { ensureFound, parseId, parsePagination } from '../lib/http';
+import { NotFound } from '../middlewares/errorHandler';
+import { sendPrivateFile } from '../lib/privateFileResponse';
+import { rutaAbsolutaAudio } from '../lib/encuestasAudioStorage';
 import {
   encuestasQuerySchema,
   EncuestasQueryInput,
@@ -40,6 +43,7 @@ router.get(
       page,
       limit,
       dispositivo: q.dispositivo,
+      conAudio: q.conAudio,
       dateFrom: q.dateFrom,
       dateTo: q.dateTo,
     });
@@ -53,8 +57,12 @@ router.get(
 );
 
 function csvFilename(q: EncuestasExportQueryInput): string {
-  // En v3 no hay filtro de estado: el nombre contiene solo el rango de fechas.
-  return `encuestas-${q.dateFrom}_${q.dateTo}.csv`;
+  // En v3 no hay filtro de estado: el nombre lleva el rango de fechas y, si el
+  // revisor exportó con el filtro de audio puesto, un sufijo que lo diga. Sin
+  // él, dos descargas del mismo rango con conjuntos distintos llegan a la
+  // carpeta con el mismo nombre y el navegador las apila como "(1)", "(2)".
+  const sufijo = q.conAudio === undefined ? '' : q.conAudio ? '-con-audio' : '-sin-audio';
+  return `encuestas-${q.dateFrom}_${q.dateTo}${sufijo}.csv`;
 }
 
 function setCsvHeaders(res: Response, filename: string): void {
@@ -132,6 +140,7 @@ router.get(
     try {
       for await (const lote of service.iterateForExport({
         dispositivo: q.dispositivo,
+        conAudio: q.conAudio,
         dateFrom: q.dateFrom,
         dateTo: q.dateTo,
       })) {
@@ -158,5 +167,48 @@ router.get(
     res.end();
   }),
 );
+
+// ─── Detalle y audios ────────────────────────────────────────────────────────
+// Van al final a propósito: `/:id` registrado antes de `/export.csv` se comería
+// esa ruta (parseId('export.csv') → 400) y mataría la exportación.
+
+router.get(
+  '/:id',
+  requireRole([Roles.REVISOR_QA]),
+  ah(async (req: Request, res: Response) => {
+    const encuesta = ensureFound(await service.getById(parseId(req)), 'Encuesta');
+    // Mismo motivo que en el listado: el detalle lleva las respuestas políticas
+    // del encuestado y no puede quedar en el disco del navegador.
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json(encuesta);
+  }),
+);
+
+/**
+ * Stream del segmento (voz de personas encuestadas: dato personal, mismo rol que
+ * el resto). `Range` para que el <audio> del navegador pueda buscar;
+ * `no-transform` para que ningún intermediario recomprima un tramo.
+ * `?download=1` añade Content-Disposition con un nombre útil.
+ */
+const servirAudio = ah(async (req: Request, res: Response) => {
+  const encuestaId = parseId(req);
+  const audioId = parseId(req, 'audioId');
+  const audio = ensureFound(await service.getAudioParaServir(encuestaId, audioId), 'Audio');
+  const descargar = req.query.download === '1';
+  const sent = await sendPrivateFile(req, res, rutaAbsolutaAudio(audio.ruta), {
+    contentType: service.contentTypeDeAudio(audio.mimeDeclarado),
+    cacheControl: 'private, max-age=3600, must-revalidate, no-transform',
+    varyCookie: true,
+    acceptRanges: true,
+    downloadName: descargar ? `${audio.idLocal}-${audio.segmento}` : undefined,
+  });
+  // La fila existe pero el blob no está en disco: para el revisor es un 404, no
+  // un 500 — y no se filtra la ruta del archivo en la respuesta.
+  if (!sent) throw NotFound('Audio');
+});
+// HEAD antes que GET solo por orden de lectura: son la misma función y
+// sendPrivateFile ya distingue el método (HEAD no mueve el cuerpo).
+router.head('/:id/audios/:audioId', requireRole([Roles.REVISOR_QA]), servirAudio);
+router.get('/:id/audios/:audioId', requireRole([Roles.REVISOR_QA]), servirAudio);
 
 export default router;

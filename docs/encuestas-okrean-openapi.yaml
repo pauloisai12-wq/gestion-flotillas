@@ -6,7 +6,8 @@
 # no publicar el mapa completo de endpoints en internet—, así que el contrato que
 # consume el equipo móvil no puede depender de él.
 #
-# Alcance: solo la ingesta `/api/v1/encuestas`. La cara del revisor (`/api/encuestas`,
+# Alcance: la cara de dispositivo — la ingesta `/api/v1/encuestas` y la subida de
+# audios `/api/v1/encuestas/{idLocal}/audios`. La cara del revisor (`/api/encuestas`,
 # `/api/encuestas/export.csv`, JWT + rol REVISOR_QA) vive en `docs/encuestas-okrean.md`
 # y no se publica aquí: es interna del portal, no del contrato con la app.
 #
@@ -17,15 +18,17 @@ openapi: 3.1.0
 
 info:
   title: Encuestas Okrean — API de ingesta (v1, v3 y v4)
-  version: '4.0.0'
+  version: '4.1.0'
   summary: Recepción de encuestas de campo desde la app móvil Encuestas Okrean.
   description: |
     Contrato entre la app móvil **Encuestas Okrean** y el backend de flotillas.
 
     **Se aceptan TRES versiones del cuestionario:** `versionCuestionario: 1` (el
     restaurado, con sus dos ramas por `estado`), `versionCuestionario: 3` (el
-    vigente) y `versionCuestionario: 4` (v3 extendida con opciones "otro" y
-    preguntas abiertas). El servidor despacha por ese entero **antes** de validar
+    vigente) y `versionCuestionario: 4` (v3 con **catálogo propio en P8**
+    —sale `paola_barrera`; entran `paco_nino` y `goyo_castaneda`— más las
+    opciones `otro` / `no_sabe_no_contesta` y sus preguntas abiertas; P9 sí
+    extiende el catálogo de v3). El servidor despacha por ese entero **antes** de validar
     y cada versión tiene su propio schema; cualquier otro entero recibe
     `422 UNSUPPORTED_VERSION`.
 
@@ -47,6 +50,15 @@ info:
       y un `idRemoto` enviado por el cliente se **descartan**: ni se validan, ni
       entran al hash, ni ocupan columna. Mandarlos es inofensivo.
     - El cuerpo va en `application/json` y tiene un tope de **256 KB**.
+
+    **Audios (`POST /api/v1/encuestas/{idLocal}/audios`):** la app sube los
+    segmentos grabados **después** de que la encuesta fue aceptada, uno por
+    petición y en `multipart/form-data`. Tres reglas divergen a propósito del
+    resto del API y no se "arreglan": el `404` de encuesta desconocida va con
+    envolvente **anidada** (`{"error":{"code":"ENCUESTA_NO_ENCONTRADA"}}`), el
+    exceso de tamaño es **`413`** (y no el `400` con que el repo mapea multer), y
+    **cualquier otra validación es `422`, nunca `400`** (el cliente trata el 400
+    como transitorio y reintentaría el archivo para siempre).
   contact:
     name: Equipo backend flotillas
   license:
@@ -404,6 +416,222 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorRespuesta'
 
+  /api/v1/encuestas/{idLocal}/audios:
+    parameters:
+      - name: idLocal
+        in: path
+        required: true
+        description: |
+          El **mismo UUID** que la encuesta llevaba en su JSON (`idLocal`), no el
+          `idRemoto` que devolvió el servidor. Se resuelve DENTRO del dispositivo
+          autenticado: una encuesta de otro teléfono es, para esta ruta,
+          inexistente.
+        schema:
+          type: string
+          format: uuid
+
+    post:
+      tags: [ingesta]
+      operationId: subirAudioEncuesta
+      summary: Sube un segmento de audio de una encuesta ya sincronizada.
+      description: |
+        La app graba la entrevista en segmentos (`seg1.m4a`, `seg2.m4a`, …), uno
+        por pausa/reanudación, y los sube **uno por petición** cuando la encuesta
+        ya está en el servidor. Los segmentos son **inmutables**: nunca se regraba
+        uno ya cerrado, siempre nace `segN+1`.
+
+        **Idempotente por `(encuesta, segmento, sha256)`:** un reenvío idéntico
+        devuelve `200` con el **mismo** `audio_id` y no reescribe el archivo. El
+        mismo `(encuesta, segmento)` con otro contenido reemplaza el archivo y
+        devuelve también `200` con el mismo `audio_id`. **Esta ruta no emite
+        `409`.**
+
+        El servidor **recalcula** el SHA-256 de lo recibido y lo contrasta con
+        `sha256` y `tamano_bytes`: si no cuadran, la subida iba truncada y la
+        respuesta es `422` (reencolar el archivo y reintentar). Nunca hay `2xx`
+        antes de que el archivo esté persistido en disco.
+
+        Consume el **mismo** cubo de rate-limit por dispositivo que
+        `POST /api/v1/encuestas` (60 por ventana).
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              # Sin `additionalProperties: false` a propósito: el servidor IGNORA
+              # las partes de TEXTO que no espera (solo una parte de ARCHIVO con
+              # otro nombre da 422), así que un cliente generado con ese candado
+              # rechazaría un formulario que el servidor acepta sin problema.
+              required: [segmento, sha256, tamano_bytes, audio]
+              properties:
+                segmento:
+                  type: string
+                  pattern: '^[A-Za-z0-9._-]{1,64}$'
+                  description: |
+                    Nombre lógico del tramo tal como lo llama el teléfono
+                    (`seg1.m4a`). Es la clave del segmento dentro de la encuesta.
+                  examples:
+                    - seg1.m4a
+                sha256:
+                  type: string
+                  pattern: '^[a-f0-9]{64}$'
+                  description: SHA-256 del contenido, hexadecimal de 64 caracteres en **minúsculas**.
+                tamano_bytes:
+                  type: string
+                  pattern: '^[1-9][0-9]{0,9}$'
+                  description: |
+                    Tamaño del archivo en bytes. Viaja como **texto**: en multipart
+                    todo es texto (a diferencia de la ingesta JSON, donde los
+                    números son números).
+
+                    Entero **≤ 2147483647**: la columna `tamano_bytes` es INT4 en
+                    Postgres. El tope real lo impone antes
+                    `ENCUESTAS_AUDIO_MAX_FILE_SIZE_MB` (máximo admitido 100 MB),
+                    así que un valor legítimo nunca se acerca al límite.
+                  examples:
+                    - '1048576'
+                audio:
+                  type: string
+                  format: binary
+                  description: |
+                    El archivo. Se guarda **tal cual**: el servidor no
+                    transcodifica ni valida el formato (archivos antiguos pueden
+                    ser 3GP/AMR con extensión `.m4a`).
+            encoding:
+              audio:
+                contentType: audio/mp4, audio/3gpp, application/octet-stream
+      responses:
+        '201':
+          description: Segmento nuevo, ya escrito en disco.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AudioRespuesta'
+              example:
+                audio_id: '12'
+        '200':
+          description: |
+            El segmento ya existía: reenvío idempotente. Trae el **mismo**
+            `audio_id` que el `201` original.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AudioRespuesta'
+              example:
+                audio_id: '12'
+        '401':
+          description: Sin `Authorization`, key desconocida o dispositivo revocado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorRespuesta'
+              example:
+                error: 'API key inválida o revocada'
+                code: UNAUTHORIZED
+        '404':
+          description: |
+            El `idLocal` no existe **para este dispositivo** — típicamente porque
+            la encuesta todavía no se sincronizó. Reintentable: primero la
+            encuesta, después sus audios.
+
+            **Divergencia deliberada:** es la única respuesta del API con
+            envolvente **anidada**, sin `message` ni `requestId`. El cliente móvil
+            ya está escrito contra esa forma.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EncuestaNoEncontrada'
+              example:
+                error:
+                  code: ENCUESTA_NO_ENCONTRADA
+        '413':
+          description: |
+            El archivo supera `ENCUESTAS_AUDIO_MAX_FILE_SIZE_MB` (**50 MB** por
+            defecto). Rechazo definitivo del segmento: no sirve reintentarlo sin
+            recortarlo.
+
+            **Divergencia deliberada:** el resto del repo mapea el límite de
+            multer a `400`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorRespuesta'
+              example:
+                error: 'El audio supera el máximo de 50 MB'
+                code: PAYLOAD_TOO_LARGE
+                requestId: '0f0c1a7e-…'
+        '422':
+          description: |
+            Falta una parte, un campo no valida, o el `sha256`/`tamano_bytes` no
+            coinciden con lo recibido. **Toda** la validación de esta ruta sale
+            así: **nunca `400`**.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorValidacion'
+              examples:
+                integridad:
+                  summary: La subida llegó truncada (reencolar el archivo)
+                  value:
+                    error: 'Datos inválidos'
+                    code: VALIDATION_ERROR
+                    issues:
+                      - field: sha256
+                        message: 'El SHA-256 del contenido recibido no coincide con el declarado'
+                    requestId: '0f0c1a7e-…'
+                parteFaltante:
+                  summary: El multipart no traía el archivo
+                  value:
+                    error: 'Datos inválidos'
+                    code: VALIDATION_ERROR
+                    issues:
+                      - field: audio
+                        message: 'Falta la parte "audio" con el archivo'
+                    requestId: '0f0c1a7e-…'
+        '429':
+          description: |
+            Cuota agotada. El cubo por dispositivo es el **mismo** que el de
+            `POST /api/v1/encuestas`. Reintentable con backoff.
+          headers:
+            Retry-After:
+              description: Segundos hasta que la ventana se reabre.
+              schema:
+                type: integer
+                minimum: 1
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorRespuesta'
+              example:
+                error: 'Demasiados envíos desde este dispositivo. Intenta más tarde.'
+                code: RATE_LIMITED
+
+    get:
+      tags: [diagnóstico]
+      operationId: audiosMetodoNoPermitido
+      summary: No permitido — responde 405 con credencial válida.
+      description: |
+        Misma red de seguridad que el `405` de `GET /api/v1/encuestas`: sin él la
+        petición saldría de este router y la atraparían los montajes comodín con
+        JWT, que responden **401**, y el móvil lo leería como "API key inválida".
+      responses:
+        '405':
+          description: Método no permitido (la API key sí es válida).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorRespuesta'
+              example:
+                error: 'Method Not Allowed'
+                code: METHOD_NOT_ALLOWED
+        '401':
+          description: Sin credencial válida (el guard corre antes que el 405).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorRespuesta'
+
   /api/v1/encuestas/ping:
     get:
       tags: [diagnóstico]
@@ -495,13 +723,14 @@ components:
     PreferenciaElectoralV4:
       type: string
       description: |
-        Preferencia electoral declarada (v4). Extiende la v3 con opciones de texto libre.
+        Preferencia electoral declarada (v4). NO es un superconjunto de v3: `paola_barrera` se retiró, y se añadieron `paco_nino` y `goyo_castaneda`.
       enum:
-        - lalo_ximenez
         - irineo_molina
         - fernando_huerta
-        - paola_barrera
+        - lalo_ximenez
+        - paco_nino
         - ana_gabriela_delgado
+        - goyo_castaneda
         - otro
         - no_sabe_no_contesta
 
@@ -1210,6 +1439,43 @@ components:
           format: uuid
           description: Identificador asignado por el servidor. Estable para un mismo `idLocal`.
 
+    AudioRespuesta:
+      type: object
+      additionalProperties: false
+      required: [audio_id]
+      description: |
+        Único cuerpo de éxito de la subida de audio, idéntico en 201 y en 200.
+        Nunca hay un 2xx sin `audio_id`, ni antes de que el archivo esté en disco.
+      properties:
+        audio_id:
+          type: string
+          minLength: 1
+          description: |
+            Identificador del segmento en el servidor. **Cadena, no número**: para
+            el cliente es opaco. Estable para un mismo `(encuesta, segmento)`,
+            incluso si el contenido se reemplaza.
+          examples:
+            - '12'
+
+    EncuestaNoEncontrada:
+      type: object
+      additionalProperties: false
+      required: [error]
+      description: |
+        Cuerpo EXACTO del `404` de la subida de audio. Es la **única** envolvente
+        anidada del API (el resto es `{error, code, requestId}` plano) y va sin
+        `message` ni `requestId`: divergencia deliberada, el cliente móvil ya está
+        escrito contra esta forma.
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [code]
+          properties:
+            code:
+              type: string
+              const: ENCUESTA_NO_ENCONTRADA
+
     ErrorRespuesta:
       type: object
       required: [error, code]
@@ -1243,7 +1509,9 @@ components:
     ErrorValidacion:
       type: object
       required: [error, code, issues]
-      description: Error 422 del cuestionario (v1 o v3), con el detalle campo a campo.
+      description: |
+        Error 422 con el detalle campo a campo: el del cuestionario (v1, v3 o v4) y
+        el de la subida de audio (partes del multipart e integridad del archivo).
       properties:
         error:
           type: string

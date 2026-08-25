@@ -1,7 +1,8 @@
-// Ingesta de la app "Encuestas Okrean" (v1, v3 y v4). El guard de dispositivo
-// (encuestasDeviceAuthMiddleware), el cubo de rate-limit por IP y el
-// express.json de 256 KB se aplican en el MONTAJE (index.ts), de modo que el
-// auth precede a TODA ruta/método de aquí — incluido el 405 de GET /.
+// Ingesta de la app "Encuestas Okrean" (v1, v3 y v4) y de los AUDIOS de cada
+// encuesta. El guard de dispositivo (encuestasDeviceAuthMiddleware), el cubo de
+// rate-limit por IP y el express.json de 256 KB se aplican en el MONTAJE
+// (index.ts), de modo que el auth precede a TODA ruta/método de aquí — incluido
+// el 405 de GET /.
 //
 // Contrato con el teléfono, en tres reglas que no se negocian:
 //   · la respuesta SIEMPRE es {"idRemoto":"..."} con 201 (alta) o 200 (reenvío
@@ -11,12 +12,20 @@
 //     malformado y el body que no es un objeto);
 //   · NO se loguea nada del contenido: ni body, ni respuestas políticas, ni
 //     coordenadas, ni la API key. Solo el requestId que estampa pino-http.
+//
+// La subida de audios (POST /:idLocal/audios) añade una cuarta regla propia: el
+// 404 con envolvente ANIDADA. Ver el bloque de audios más abajo.
 
-import { Router, Request, Response } from 'express';
+import { Router, Request, RequestHandler, Response } from 'express';
+import multer from 'multer';
 import type { ZodType } from 'zod';
 import { rateLimit } from '../middlewares/rateLimit';
 import { ah } from '../lib/asyncHandler';
+import prisma from '../lib/prisma';
 import { BadRequest } from '../middlewares/errorHandler';
+import { sha256Of } from '../lib/encuestasAudioStorage';
+import { audioCamposSchema } from '../validators/encuestasAudioValidator';
+import { guardarAudioEncuesta } from '../services/encuestasAudioService';
 import {
   encuestaV1Schema,
   encuestaV3Schema,
@@ -178,6 +187,141 @@ router.post(
     });
 
     res.status(created ? 201 : 200).json({ idRemoto });
+  }),
+);
+
+// ─── Audios de la encuesta ───────────────────────────────────────────────────
+//
+// POST /:idLocal/audios (multipart). Cuatro reglas del contrato que difieren del
+// resto del repo y NO se "arreglan":
+//   1. Encuesta desconocida (o de otro dispositivo) → 404 con cuerpo EXACTO
+//      {"error":{"code":"ENCUESTA_NO_ENCONTRADA"}}. Es la única envolvente
+//      anidada del API: el cliente distingue por ese código "encuesta
+//      desconocida, reintentar luego" de "la ruta no existe, cortar la pasada".
+//      Sin requestId ni message: el cliente no los espera.
+//   2. Archivo demasiado grande → 413 (rechazo definitivo del segmento), aunque
+//      el errorHandler global mapea multer a 400.
+//   3. Toda validación → 422 con issues[]. NUNCA 400: el cliente lo trata como
+//      transitorio y reencolaría el archivo para siempre.
+//   4. Se resuelve la encuesta ANTES de parsear el multipart: un idLocal
+//      desconocido no debe costar 50 MB de RAM. Node drena el cuerpo no leído al
+//      responder (req._dump), así que el cliente recibe el 404 limpio.
+
+const uploadAudio = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: env.ENCUESTAS_AUDIO_MAX_FILE_SIZE_MB * 1024 * 1024,
+    files: 1,
+    fields: 10,
+    fieldSize: 1024,
+    parts: 12,
+  },
+}).single('audio');
+
+const MULTER_ISSUES: Record<string, { field: string; message: string }> = {
+  LIMIT_FILE_COUNT: { field: 'audio', message: 'Solo se admite un archivo por petición' },
+  LIMIT_UNEXPECTED_FILE: { field: 'audio', message: 'La parte de archivo debe llamarse "audio"' },
+  LIMIT_FIELD_COUNT: { field: 'segmento', message: 'Demasiados campos en el formulario' },
+  LIMIT_FIELD_KEY: { field: 'segmento', message: 'Nombre de campo demasiado largo' },
+  LIMIT_FIELD_VALUE: { field: 'segmento', message: 'Un campo del formulario excede el tamaño permitido' },
+  LIMIT_PART_COUNT: { field: 'audio', message: 'Demasiadas partes en el formulario' },
+};
+
+function responder422(res: Response, issues: { field: string; message: string }[]): void {
+  res.status(422).json({
+    error: 'Datos inválidos',
+    code: 'VALIDATION_ERROR',
+    issues,
+    requestId: requestIdDe(res),
+  });
+}
+
+/** multer con los errores traducidos al contrato (413 tamaño, 422 el resto). */
+const uploadAudioConContrato: RequestHandler = (req, res, next) => {
+  uploadAudio(req, res, (err: unknown) => {
+    if (!err) return next();
+    const m = err as { name?: string; code?: string; field?: string };
+    if (m.name !== 'MulterError') return next(err);
+    if (m.code === 'LIMIT_FILE_SIZE') {
+      res.status(413).json({
+        error: `El audio supera el máximo de ${env.ENCUESTAS_AUDIO_MAX_FILE_SIZE_MB} MB`,
+        code: 'PAYLOAD_TOO_LARGE',
+        requestId: requestIdDe(res),
+      });
+      return;
+    }
+    const conocido = MULTER_ISSUES[m.code ?? ''] ?? { field: 'audio', message: 'Formulario multipart inválido' };
+    responder422(res, [{ field: m.field ?? conocido.field, message: conocido.message }]);
+  });
+};
+
+/** Resuelve la encuesta por idLocal DENTRO del dispositivo autenticado; deja el id en res.locals. */
+const resolverEncuestaDelDispositivo = ah(async (req: Request, res: Response, next) => {
+  const encuesta = await prisma.encuesta.findFirst({
+    where: { idLocal: req.params.idLocal, dispositivoId: req.encuestaDevice!.id },
+    select: { id: true },
+  });
+  if (!encuesta) {
+    res.status(404).json({ error: { code: 'ENCUESTA_NO_ENCONTRADA' } });
+    return;
+  }
+  res.locals.encuestaId = encuesta.id;
+  next();
+});
+
+// Misma red de seguridad que el 405 de GET /: si la app equivoca el método, un
+// 401 del comodín de /api se leería en el móvil como "API key inválida".
+router.get('/:idLocal/audios', (_req: Request, res: Response) => {
+  res.status(405).json({ error: 'Method Not Allowed', code: 'METHOD_NOT_ALLOWED' });
+});
+
+router.post(
+  '/:idLocal/audios',
+  perDeviceLimit,
+  resolverEncuestaDelDispositivo,
+  uploadAudioConContrato,
+  ah(async (req: Request, res: Response) => {
+    const campos = audioCamposSchema.safeParse(req.body ?? {});
+    const issues = campos.success
+      ? []
+      : campos.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message }));
+    const archivo = req.file;
+    if (!archivo) issues.push({ field: 'audio', message: 'Falta la parte "audio" con el archivo' });
+    if (!campos.success || !archivo) {
+      responder422(res, issues);
+      return;
+    }
+
+    // Integridad de la subida: hash y tamaño declarados contra lo recibido. Un
+    // fallo aquí es una subida truncada/corrupta; el cliente reencola y reintenta.
+    const sha256 = sha256Of(archivo.buffer);
+    const integridad: { field: string; message: string }[] = [];
+    if (sha256 !== campos.data.sha256) {
+      integridad.push({ field: 'sha256', message: 'El SHA-256 del contenido recibido no coincide con el declarado' });
+    }
+    if (archivo.buffer.length !== campos.data.tamano_bytes) {
+      integridad.push({ field: 'tamano_bytes', message: `Se recibieron ${archivo.buffer.length} bytes y se declararon ${campos.data.tamano_bytes}` });
+    }
+    if (integridad.length) {
+      responder422(res, integridad);
+      return;
+    }
+
+    const { audioId, created } = await guardarAudioEncuesta({
+      encuestaId: res.locals.encuestaId as number,
+      segmento: campos.data.segmento,
+      sha256,
+      tamanoBytes: campos.data.tamano_bytes,
+      // La columna es varchar(120): un Content-Type de parte más largo (un
+      // cliente exótico, una cabecera manipulada) haría que Prisma lanzara
+      // P2000 y el errorHandler lo mapearía a 400 — prohibido en esta ruta, que
+      // el móvil lee como transitoria y reintentaría para siempre. El mime es
+      // un dato informativo (solo elige el Content-Type al servir), así que
+      // truncarlo es preferible a fallar.
+      mimeDeclarado: archivo.mimetype?.slice(0, 120) || null,
+      buffer: archivo.buffer,
+    });
+    res.status(created ? 201 : 200).json({ audio_id: String(audioId) });
   }),
 );
 

@@ -53,6 +53,7 @@ import { encuestasDeviceAuthMiddleware } from './middlewares/encuestasDeviceAuth
 import { getClientIp, rateLimit } from './middlewares/rateLimit';
 import { RoleGroups } from './middlewares/roleMiddleware';
 import { ensureQaExternaDir } from './lib/qaExternaStorage';
+import { ensureEncuestasAudioDir } from './lib/encuestasAudioStorage';
 import { errorHandler } from './middlewares/errorHandler';
 import { logger, httpLoggerMiddleware } from './lib/logger';
 import { healthHandler } from './lib/health';
@@ -169,6 +170,18 @@ app.use(
   },
 );
 
+// Mismo criterio para los audios de encuesta: son voz de personas encuestadas y
+// su única puerta es GET /api/encuestas/:id/audios/:audioId, que exige
+// REVISOR_QA. Servidos por express.static, cualquier usuario autenticado podría
+// leerlos adivinando el sha256 del blob (el nombre del archivo ES el hash).
+app.use(
+  '/uploads/encuestas-audio',
+  authMiddleware,
+  (_req: Request, res: Response) => {
+    res.status(404).json({ error: 'Archivo no encontrado', code: 'NOT_FOUND' });
+  },
+);
+
 // Los demás archivos subidos contienen PII sensible (pólizas, tarjetas de
 // circulación, facturas), por lo que se
 // exigen credenciales: authMiddleware ANTES de express.static. El frontend
@@ -191,9 +204,9 @@ app.use(
       return;
     }
 
-    // Defensa adicional para variantes codificadas que no coincidan con el
-    // mount explícito anterior: jamás llegan a express.static.
-    if (uploadCategory === 'maintenance-tickets') {
+    // Defensa adicional para variantes codificadas que no coincidan con los
+    // mounts explícitos anteriores: jamás llegan a express.static.
+    if (uploadCategory === 'maintenance-tickets' || uploadCategory === 'encuestas-audio') {
       res.status(404).json({ error: 'Archivo no encontrado', code: 'NOT_FOUND' });
       return;
     }
@@ -351,13 +364,14 @@ try {
 
 const server = app.listen(env.PORT, async () => {
   logger.info({ port: env.PORT, env: env.NODE_ENV }, 'API arriba');
-  // Best-effort: que el directorio de qa_externa no se pueda crear (p. ej. el
-  // volumen de uploads aún sin permisos de escritura) NO debe tumbar el API.
-  // Se reintenta perezosamente en processImage al primer upload.
+  // Best-effort: que los directorios de ingesta móvil no se puedan crear (p. ej.
+  // el volumen de uploads aún sin permisos de escritura) NO debe tumbar el API.
+  // Se reintentan perezosamente al primer upload (processImage / guardarAudio).
   try {
     await ensureQaExternaDir();
+    await ensureEncuestasAudioDir();
   } catch (err) {
-    logger.error({ err }, 'No se pudo crear el directorio de qa_externa al arranque; se reintentará en el primer upload');
+    logger.error({ err }, 'No se pudo crear un directorio de ingesta móvil al arranque; se reintentará en el primer upload');
   }
   await initializeJobs();
 });
