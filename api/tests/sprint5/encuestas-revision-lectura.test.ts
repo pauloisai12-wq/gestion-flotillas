@@ -26,12 +26,14 @@ const dirAudios = await vi.hoisted(async () => {
   return d;
 });
 
-// Doble de Prisma con los dos métodos que usa `list`. Casi todo el archivo
-// mockea el servicio, pero el último describe corre el `list` REAL contra este
-// doble: con `list` mockeado, afirmar que el DTO trae una columna sería
-// tautológico (la traería porque la puso la fixture, no el servicio).
+// Doble de Prisma con los métodos que usan `list`, `getById` y
+// `getAudioParaServir`. Casi todo el archivo mockea el servicio, pero dos
+// describes corren esas funciones REALES contra este doble: con el servicio
+// mockeado, afirmar que el DTO trae una columna o que el audio se busca acotado
+// a su encuesta sería tautológico (lo traería la fixture, no el servicio).
 const prismaFalso = vi.hoisted(() => ({
-  encuesta: { findMany: vi.fn(), count: vi.fn() },
+  encuesta: { findMany: vi.fn(), count: vi.fn(), findUnique: vi.fn() },
+  encuestaAudio: { findFirst: vi.fn() },
 }));
 vi.mock('../../src/lib/prisma', () => ({ default: prismaFalso }));
 
@@ -570,9 +572,11 @@ describe('GET|HEAD /api/encuestas/:id/audios/:audioId', () => {
     expect(response.headers['accept-ranges']).toBe('bytes');
   });
 
-  // El segmento se busca EXIGIENDO la encuesta de la URL: uno de otra encuesta
-  // es indistinguible de uno inexistente.
-  it('un segmento que no es de esa encuesta es 404', async () => {
+  // Solo el contrato del router: cuando el servicio no devuelve nada (segmento
+  // inexistente O de otra encuesta), la respuesta es 404 y no un 500. Que el
+  // segmento de otra encuesta NO se encuentre lo prueba el where del servicio,
+  // en el describe `getAudioParaServir` del final: aquí el servicio va mockeado.
+  it('si el servicio no devuelve el segmento, responde 404', async () => {
     getAudioParaServir.mockResolvedValue(null);
 
     const response = await request(crearApp(Roles.REVISOR_QA)).get(`${RUTA}/9/audios/3`);
@@ -604,5 +608,137 @@ describe('GET|HEAD /api/encuestas/:id/audios/:audioId', () => {
 
     expect(response.status).toBe(403);
     expect(getAudioParaServir).not.toHaveBeenCalled();
+  });
+});
+
+// ─── Lo que el detalle y el stream le piden REALMENTE a la BD ────────────────
+//
+// Todo lo de arriba corre con `getById`/`getAudioParaServir` mockeados: sirve
+// para fijar el contrato HTTP, pero no puede ver el `where` ni el `select` que
+// se mandan a Postgres. Y ahí viven las dos garantías que importan: que el
+// segmento se busca acotado a SU encuesta (sin eso, /encuestas/1/audios/7
+// serviría el audio de la 7 a quien pida la 1) y que la ruta del blob en disco
+// nunca se selecciona. Estas dos las prueba el servicio real contra el doble.
+
+const CLAVES_AUDIO_DTO = [
+  'id',
+  'segmento',
+  'sha256',
+  'tamanoBytes',
+  'mimeDeclarado',
+  'duracionMs',
+  'recibidoEn',
+  'url',
+];
+
+/** Un audio tal como lo devuelve Prisma con el select de `getById`. */
+function filaDeAudio(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: 3,
+    segmento: 'seg1.m4a',
+    sha256: SHA,
+    tamanoBytes: CONTENIDO.length,
+    mimeDeclarado: 'audio/mp4',
+    duracionMs: 12_000,
+    recibidoEn: new Date('2026-07-30T10:07:05.000Z'),
+    ...overrides,
+  };
+}
+
+async function servicioReal() {
+  return vi.importActual<typeof import('../../src/services/encuestasRevisionService')>(
+    '../../src/services/encuestasRevisionService',
+  );
+}
+
+describe('getById — columnas y orden que el servicio pide', () => {
+  it('pide el detalle por id con idLocal y los audios ordenados por llegada', async () => {
+    const { getById: getByIdReal } = await servicioReal();
+
+    prismaFalso.encuesta.findUnique.mockResolvedValue({
+      ...filaDeListado({}, 2),
+      idLocal: 'e1-uuid',
+      audios: [filaDeAudio(), filaDeAudio({ id: 4, segmento: 'seg2.m4a' })],
+    });
+
+    const detalle = await getByIdReal(9);
+
+    const { where, select } = prismaFalso.encuesta.findUnique.mock.calls[0][0];
+    expect(where).toEqual({ id: 9 });
+    expect(select.idLocal).toBe(true);
+    // seg10 llega después de seg2 pero ordena antes por nombre: el orden es el
+    // de llegada, con `id` de desempate para que sea estable al milisegundo.
+    expect(select.audios.orderBy).toEqual([{ recibidoEn: 'asc' }, { id: 'asc' }]);
+    // La ruta del blob en disco NO se selecciona: `audios.map` hace spread de la
+    // fila, así que pedirla aquí la publicaría tal cual en el JSON del detalle.
+    expect(select.audios.select.ruta).toBeUndefined();
+    expect(select.audios.select.sha256).toBe(true);
+    // El body crudo del teléfono y su hash tampoco, igual que en el listado.
+    expect(select.payloadRaw).toBeUndefined();
+    expect(select.payloadHash).toBeUndefined();
+
+    expect(detalle).not.toBeNull();
+    expect(Object.keys(detalle!).sort()).toEqual([...CLAVES_DTO, 'idLocal', 'audios'].sort());
+    expect(detalle!.idLocal).toBe('e1-uuid');
+    expect(detalle!.audiosCount).toBe(2);
+    expect(detalle).not.toHaveProperty('_count');
+    // Cada segmento sale con su URL armada por el servidor y sin una clave más.
+    expect(Object.keys(detalle!.audios[0]).sort()).toEqual([...CLAVES_AUDIO_DTO].sort());
+    expect(detalle!.audios.map((a) => a.url)).toEqual([
+      '/api/encuestas/9/audios/3',
+      '/api/encuestas/9/audios/4',
+    ]);
+  });
+
+  it('una encuesta inexistente devuelve null, no una fila a medias', async () => {
+    const { getById: getByIdReal } = await servicioReal();
+
+    prismaFalso.encuesta.findUnique.mockResolvedValue(null);
+
+    expect(await getByIdReal(9)).toBeNull();
+  });
+});
+
+describe('getAudioParaServir — el segmento se acota a su encuesta', () => {
+  it('busca por id Y encuestaId (la ruta es comprobable, no un id suelto)', async () => {
+    const { getAudioParaServir: servirReal } = await servicioReal();
+
+    prismaFalso.encuestaAudio.findFirst.mockResolvedValue({
+      ruta: RUTA_BLOB,
+      mimeDeclarado: 'audio/mp4',
+      segmento: 'seg1.m4a',
+      encuesta: { idLocal: 'e1-uuid' },
+    });
+
+    const audio = await servirReal(9, 3);
+
+    const { where, select } = prismaFalso.encuestaAudio.findFirst.mock.calls[0][0];
+    // ESTA es la protección contra IDOR: con `{ id: 3 }` a secas,
+    // GET /api/encuestas/9/audios/3 serviría el segmento aunque fuera de la
+    // encuesta 41, y el revisor escucharía a alguien que no está mirando.
+    expect(where).toEqual({ id: 3, encuestaId: 9 });
+    // Lo mínimo para servir el blob; nada del cuestionario ni del payload.
+    expect(select).toEqual({
+      ruta: true,
+      mimeDeclarado: true,
+      segmento: true,
+      encuesta: { select: { idLocal: true } },
+    });
+
+    // El idLocal se aplana: quien sirve el archivo no recibe la relación entera.
+    expect(audio).toEqual({
+      ruta: RUTA_BLOB,
+      mimeDeclarado: 'audio/mp4',
+      segmento: 'seg1.m4a',
+      idLocal: 'e1-uuid',
+    });
+  });
+
+  it('sin fila (inexistente o de otra encuesta) devuelve null', async () => {
+    const { getAudioParaServir: servirReal } = await servicioReal();
+
+    prismaFalso.encuestaAudio.findFirst.mockResolvedValue(null);
+
+    expect(await servirReal(9, 3)).toBeNull();
   });
 });
