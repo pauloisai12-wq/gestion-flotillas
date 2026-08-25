@@ -67,8 +67,11 @@ export const PREFERENCIAS_ELECTORALES_V3 = [
 export const PARTIDOS_V3 = [
   'pri', 'morena', 'pan', 'panal_oaxaca', 'pt', 'prd_oaxaca', 'pvem', 'pto', 'mc',
 ] as const;
+// P8 de la v4 NO es un superconjunto de v3: el cuestionario v4 retiró a
+// paola_barrera (sigue válida en registros v3) y añadió a paco_nino y
+// goyo_castaneda. Lista EXACTA al contrato del equipo móvil (24 ago 2026).
 export const PREFERENCIAS_ELECTORALES_V4 = [
-  'lalo_ximenez', 'irineo_molina', 'fernando_huerta', 'paola_barrera', 'ana_gabriela_delgado', 'otro', 'no_sabe_no_contesta',
+  'irineo_molina', 'fernando_huerta', 'lalo_ximenez', 'paco_nino', 'ana_gabriela_delgado', 'goyo_castaneda', 'otro', 'no_sabe_no_contesta',
 ] as const;
 export const PARTIDOS_V4 = [
   'pri', 'morena', 'pan', 'panal_oaxaca', 'pt', 'prd_oaxaca', 'pvem', 'pto', 'mc', 'otro', 'no_sabe_no_contesta',

@@ -213,8 +213,8 @@ Son **texto validado en la aplicación**, no enums de PostgreSQL: un valor fuera
 
 Igual que v3, con dos cambios:
 
-1. Los catálogos `preferenciaElectoral` y `preferenciaPartido` se extienden:
-   - `preferenciaElectoral`: los 5 candidatos de v3 **más** `otro` y `no_sabe_no_contesta`.
+1. Los catálogos `preferenciaElectoral` y `preferenciaPartido` cambian (NO es v3 + dos códigos):
+   - `preferenciaElectoral`: `irineo_molina`, `fernando_huerta`, `lalo_ximenez`, `paco_nino`, `ana_gabriela_delgado`, `goyo_castaneda`, `otro`, `no_sabe_no_contesta`. `paola_barrera` ya no se envía en v4 (sigue siendo válida en registros v3).
    - `preferenciaPartido`: los 9 partidos de v3 **más** `otro` y `no_sabe_no_contesta`.
 
 2. Dos campos **opcionales** nuevos en `respuestas`:
@@ -233,11 +233,13 @@ Son **texto validado en la aplicación**, no enums de PostgreSQL: un valor fuera
 | **Rango de edad** | `18_30`, `31_45`, `46_mas` |
 | **Rol de Lalo** | `politico_lider_social`, `empresario`, `funcionario_publico`, `no_sabe_no_contesta` |
 | **Opinión de Lalo** | `muy_buena`, `buena`, `regular`, `mala`, `muy_mala`, `no_lo_conozco` |
-| **Preferencia electoral** | `lalo_ximenez`, `irineo_molina`, `fernando_huerta`, `paola_barrera`, `ana_gabriela_delgado`, **`otro`**, **`no_sabe_no_contesta`** |
+| **Preferencia electoral** | `irineo_molina`, `fernando_huerta`, `lalo_ximenez`, `paco_nino`, `ana_gabriela_delgado`, `goyo_castaneda`, **`otro`**, **`no_sabe_no_contesta`** |
 | **Partido** | `pri`, `morena`, `pan`, `panal_oaxaca`, `pt`, `prd_oaxaca`, `pvem`, `pto`, `mc`, **`otro`**, **`no_sabe_no_contesta`** |
 | **Gobernantes (aprobación)** | `sheinbaum`, `jara`, `huerta` (orden canónico para pivoteo del CSV) |
 | **Calificación de gobernantes** | `muy_buena`, `buena`, `regular`, `mala`, `muy_mala` |
 | **Estado del registro** | `completada` (único valor aceptado en v3 y v4) |
+
+Filas v4 ya guardadas con `paola_barrera` (si las hubiera) siguen leyéndose y exportándose; solo un reenvío idéntico devolvería 422.
 
 ### Contrato v1 (cuestionario restaurado)
 

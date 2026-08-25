@@ -495,13 +495,14 @@ components:
     PreferenciaElectoralV4:
       type: string
       description: |
-        Preferencia electoral declarada (v4). Extiende la v3 con opciones de texto libre.
+        Preferencia electoral declarada (v4). NO es un superconjunto de v3: `paola_barrera` se retiró, y se añadieron `paco_nino` y `goyo_castaneda`.
       enum:
-        - lalo_ximenez
         - irineo_molina
         - fernando_huerta
-        - paola_barrera
+        - lalo_ximenez
+        - paco_nino
         - ana_gabriela_delgado
+        - goyo_castaneda
         - otro
         - no_sabe_no_contesta
 

@@ -5,6 +5,8 @@ import {
   encuestaV4Schema,
   GOBERNANTES_V3,
   TOLERANCIA_DURACION_SEG,
+  PREFERENCIAS_ELECTORALES_V3,
+  PREFERENCIAS_ELECTORALES_V4,
 } from '../../src/validators/encuestasIngestValidator';
 import {
   encuestaCompletaValida,
@@ -706,6 +708,11 @@ describe('encuestaV4Schema — cuestionario v4', () => {
     return { ...base, respuestas: { ...(base.respuestas as Record<string, unknown>), ...cambios } };
   }
 
+  function conRespuestasV3(cambios: Record<string, unknown>): PayloadEncuesta {
+    const base = encuestaCompletaValida();
+    return { ...base, respuestas: { ...(base.respuestas as Record<string, unknown>), ...cambios } };
+  }
+
   function issuesDe(payload: PayloadEncuesta): string[] {
     const r = encuestaV4Schema.safeParse(payload);
     return r.success ? [] : r.error.issues.map((i) => i.path.join('.'));
@@ -713,6 +720,10 @@ describe('encuestaV4Schema — cuestionario v4', () => {
 
   function acepta(payload: PayloadEncuesta): boolean {
     return encuestaV4Schema.safeParse(payload).success;
+  }
+
+  function aceptaV3(payload: PayloadEncuesta): boolean {
+    return encuestaV3Schema.safeParse(payload).success;
   }
 
   it('acepta el payload v4 completo y estripa los campos de la cola del teléfono', () => {
@@ -744,14 +755,28 @@ describe('encuestaV4Schema — cuestionario v4', () => {
       expect(acepta(payload)).toBe(false);
     });
 
-    it('acepta todos los candidatos de v3 en v4 SIN campo de texto', () => {
-      const candidatos = ['lalo_ximenez', 'irineo_molina', 'fernando_huerta', 'paola_barrera', 'ana_gabriela_delgado'];
-      for (const candidato of candidatos) {
+    it('acepta todos los candidatos del catálogo v4 (salvo "otro", que exige texto) SIN campo de texto', () => {
+      for (const candidato of PREFERENCIAS_ELECTORALES_V4) {
+        if (candidato === 'otro') continue;
         const payload = conRespuestasV4({
           preferenciaElectoral: candidato,
           preferenciaElectoralOtro: undefined,
         });
         expect(acepta(payload), `falla con candidato ${candidato}`).toBe(true);
+      }
+    });
+
+    it('paola_barrera queda fuera de v4 pero sigue válida en v3', () => {
+      expect(PREFERENCIAS_ELECTORALES_V4).not.toContain('paola_barrera');
+      expect(PREFERENCIAS_ELECTORALES_V3).toContain('paola_barrera');
+      expect(acepta(conRespuestasV4({ preferenciaElectoral: 'paola_barrera', preferenciaElectoralOtro: undefined }))).toBe(false);
+      // v3: paola_barrera sigue siendo válida en v3
+      expect(aceptaV3(conRespuestasV3({ preferenciaElectoral: 'paola_barrera', preferenciaElectoralOtro: undefined }))).toBe(true);
+    });
+
+    it('acepta paco_nino y goyo_castaneda en v4 (añadidos por el cuestionario v4)', () => {
+      for (const candidato of ['paco_nino', 'goyo_castaneda']) {
+        expect(acepta(conRespuestasV4({ preferenciaElectoral: candidato, preferenciaElectoralOtro: undefined }))).toBe(true);
       }
     });
 
